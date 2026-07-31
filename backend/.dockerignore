@@ -1,0 +1,18 @@
+# 部署到 Linux 容器时不需要的文件（避免把 Windows 第三方库/打包产物打进镜像）
+libs/
+dist/
+build/
+build_temp/
+__pycache__/
+*.pyc
+*.pyo
+*.spec
+*.bak
+p2p_tunnel/
+vigil/
+engine/native/
+engine/native_guard/
+安盾.spec
+安盾_onedir.spec.bak
+.git/
+.gitignore

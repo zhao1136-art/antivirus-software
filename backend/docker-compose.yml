@@ -1,0 +1,18 @@
+services:
+  andun:
+    build: .
+    image: andun-backend:latest
+    container_name: andun-backend
+    ports:
+      - "8899:8899"
+    restart: unless-stopped
+    environment:
+      - ANDUN_HOST=0.0.0.0
+      - ANDUN_PORT=8899
+    # 隔离测试沙箱：只读挂载 theZoo 样本，结果写入独立卷
+    volumes:
+      - /opt/thezoo:/samples:ro
+      - andun-results:/app/results
+
+volumes:
+  andun-results:

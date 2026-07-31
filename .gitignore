@@ -1,0 +1,72 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ===== 构建产物 =====
+build/
+dist/
+*.spec
+backend/build/
+backend/build_temp/
+backend/dist/
+
+# ===== 打包产物 =====
+release/
+安盾/
+_internal/
+*.exe
+*.msi
+
+# ===== 病毒样本 / 样本库 =====
+*.zip
+*.etl
+theZoo-0.60.zip
+TestTP.etl
+
+# ===== 第三方开源项目（已在 Gitee/公开仓库，避免重复上传）=====
+clamav-1.5.3.win.x64/
+clamav-1.5.3.win.arm64/
+clamav-main/
+C2IntelFeeds-master/
+capa-master/
+ember-master/
+maltrail-master/
+pe-sieve-master/
+libpeconv-master/
+yarGen-master/
+Yara-rules-master/
+vigil-main/
+deploy-config/
+deploy-staging/
+内网/
+
+# ===== 数据库 / 数据文件 =====
+*.db
+*.sqlite3
+backend/database/
+
+# ===== 第三方 pip 依赖包（用 requirements.txt 代替）=====
+backend/libs/
+
+# ===== 第三方二进制 DLL（保留 native 源码，DLL 由构建脚本生成）=====
+*.dll
+*.lib
+*.pdb
+*.obj
+*.o
+
+# ===== 截图 / 杂项 =====
+error.png
+error_screenshot.png
+
+# ===== AI 学习记录（不对外公开）=====
+ai_learning_results/
+
+# ===== 系统 / IDE =====
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

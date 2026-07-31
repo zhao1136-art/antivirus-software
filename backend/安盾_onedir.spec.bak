@@ -1,0 +1,89 @@
+# -*- mode: python ; coding: utf-8 -*-
+
+a = Analysis(
+    ['app.py'],
+    pathex=['libs', 'F:\\Python314\\Lib\\site-packages'],
+    binaries=[('engine/native/native_engine.exe', 'engine/native')],  # 原生引擎 EXE
+    datas=[('frontend', 'frontend'), ('engine', 'engine'), ('config.py', '.'),
+           ('database', 'database'), ('p2p_tunnel', 'p2p_tunnel'),
+           ('vigil', 'vigil')],
+    hiddenimports=[
+        'webview', 'webview.platforms.win32', 'webview.platforms.cef',
+        'webview.js', 'webview.dom', 'webview.guilib',
+        'clr_loader', 'pythonnet', 'clr', 'bottle', 'cffi',
+        'proxy_tools', 'pycparser',
+        # lzma 解压（漏洞库 .json.xz 格式）
+        'lzma',
+        # P2P 内网穿透
+        'p2p_tunnel', 'p2p_tunnel.gui_server', 'p2p_tunnel.config',
+        'p2p_tunnel.nat_detect', 'p2p_tunnel.signaling', 'p2p_tunnel.tcp_punch',
+        'p2p_tunnel.tunnel', 'p2p_tunnel.exceptions', 'p2p_tunnel.stun_client',
+        'p2p_tunnel.reconnect',
+        # capa 深度分析
+        'capa', 'capa.main', 'capa.engine', 'capa.loader', 'capa.rules',
+        'capa.render', 'capa.render.json', 'capa.features',
+        'capa.capabilities', 'capa.helpers', 'capa.exceptions',
+        # Vigil 完整模块
+        'vigil', 'vigil.src', 'vigil.src.router', 'vigil.src.scan_api',
+        'vigil.src.extractor', 'vigil.src.features_ember', 'vigil.src.vectorize',
+        'vigil.src.quarantine', 'vigil.src.behavior_alert', 'vigil.src.behavior_rules',
+        'vigil.src.office_scanner', 'vigil.src.pdf_scanner', 'vigil.src.virustotal',
+        'vigil.src.ps1_extractor', 'vigil.src.ps1_corpus', 'vigil.src.train',
+        'vigil.src.ps1_train', 'vigil.src.retrain', 'vigil.src.update_models',
+        'vigil.src.feedback', 'vigil.src.watcher', 'vigil.src.monitor',
+        'vigil.src.process_monitor',
+        # Vigil ML 依赖
+        'numpy', 'pandas', 'sklearn', 'lightgbm', 'lief',
+        'oletools', 'pdfminer', 'psutil', 'tqdm', 'pefile',
+        # sklearn 子模块
+        'sklearn.ensemble', 'sklearn.metrics', 'sklearn.utils',
+        'sklearn.tree', 'sklearn.linear_model',
+        # 标准库隐式依赖（Python 3.14 可能需要显式声明）
+        'asyncio', 'concurrent.futures', 'multiprocessing',
+        'json', 'hashlib', 'base64', 'sqlite3',
+        'email.mime.text', 'email.mime.multipart',
+        # 新增功能模块
+        'engine.startup_scanner', 'engine.network_monitor',
+        'engine.policy_manager', 'engine.integrity',
+        'engine.file_guard_client',
+        # 原生引擎 Python 绑定
+        'engine.native_bridge',
+    ],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=['pythoncom', 'pywintypes', 'win32api', 'win32com', 'win32ui',
+              'win32event', 'win32file', 'win32pipe', 'win32process',
+              'win32security', 'win32service', 'win32clipboard'],
+    noarchive=False,
+    optimize=0,
+)
+pyz = PYZ(a.pure)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    [],
+    exclude_binaries=True,
+    name='安盾',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    console=False,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    icon='f:\\杀毒\\安盾图标.ico',
+)
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='安盾',
+)

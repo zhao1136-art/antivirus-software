@@ -1,0 +1,1094 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>安盾 P2P 内网穿透</title>
+<style>
+  /* ============================================================
+     FONTS & RESET
+     ============================================================ */
+  @import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@300;400;500;600&family=Noto+Sans+SC:wght@300;400;500;700&display=swap');
+
+  *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+
+  :root {
+    --bg-deep:    #060b14;
+    --bg-panel:   #0c1322;
+    --bg-card:    #111b2e;
+    --bg-input:   #0a101e;
+    --border:     #1a2840;
+    --border-hl:  #1e3a5f;
+    --cyan:       #00e5ff;
+    --cyan-dim:   rgba(0,229,255,0.15);
+    --green:      #00ff88;
+    --green-dim:  rgba(0,255,136,0.15);
+    --amber:      #ffb800;
+    --amber-dim:  rgba(255,184,0,0.15);
+    --red:        #ff3d4f;
+    --red-dim:    rgba(255,61,79,0.15);
+    --text:       #c8d6e5;
+    --text-dim:   #6b7d95;
+    --text-bright:#ffffff;
+    --font-mono:  'Fira Code', 'Consolas', monospace;
+    --font-ui:    'Noto Sans SC', system-ui, sans-serif;
+  }
+
+  body {
+    background: var(--bg-deep);
+    color: var(--text);
+    font-family: var(--font-ui);
+    min-height: 100vh;
+    overflow-x: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Scanline overlay */
+  body::after {
+    content: '';
+    position: fixed;
+    top:0; left:0; right:0; bottom:0;
+    background: repeating-linear-gradient(
+      0deg, transparent, transparent 2px,
+      rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px
+    );
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  /* ============================================================
+     HEADER
+     ============================================================ */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 28px;
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+
+  .logo-area {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .logo-icon {
+    width: 38px; height: 38px;
+    border: 2px solid var(--cyan);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    background: var(--cyan-dim);
+  }
+
+  .logo-icon::before {
+    content: '';
+    width: 14px; height: 14px;
+    border: 2px solid var(--cyan);
+    border-radius: 3px;
+    animation: logo-pulse 2s ease-in-out infinite;
+  }
+
+  .logo-icon::after {
+    content: '';
+    position: absolute;
+    width: 6px; height: 6px;
+    background: var(--cyan);
+    border-radius: 50%;
+    animation: logo-dot 2s ease-in-out infinite;
+  }
+
+  @keyframes logo-pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.25); }
+  }
+  @keyframes logo-dot {
+    0%, 100% { opacity: 1; transform: translate(0,0); }
+    50% { opacity: 0.3; transform: translate(0,-6px); }
+  }
+
+  .logo-text { font-size: 20px; font-weight: 700; letter-spacing: 2px; color: var(--text-bright); }
+  .logo-text span { color: var(--cyan); }
+
+  .status-bar {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 6px;
+  }
+  .status-dot.offline { background: var(--red); box-shadow: 0 0 6px var(--red); }
+  .status-dot.detecting { background: var(--amber); box-shadow: 0 0 6px var(--amber); animation: blink 0.8s infinite; }
+  .status-dot.online { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .status-dot.connecting { background: var(--cyan); box-shadow: 0 0 6px var(--cyan); animation: blink 0.7s infinite; }
+
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+
+  /* ============================================================
+     MAIN LAYOUT
+     ============================================================ */
+  main {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1fr 420px 1fr;
+    gap: 24px;
+    padding: 24px 28px;
+    max-width: 1400px;
+    margin: 0 auto;
+    width: 100%;
+  }
+
+  .panel { background: var(--bg-panel); border: 1px solid var(--border); border-radius: 12px; padding: 24px; position: relative; overflow: hidden; }
+
+  .panel::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--border-hl), transparent);
+  }
+
+  .panel-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 20px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .panel-header .icon {
+    width: 32px; height: 32px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+  }
+  .icon.cyan { background: var(--cyan-dim); color: var(--cyan); }
+  .icon.green { background: var(--green-dim); color: var(--green); }
+  .icon.amber { background: var(--amber-dim); color: var(--amber); }
+
+  .panel-title { font-size: 14px; font-weight: 600; color: var(--text-bright); letter-spacing: 0.5px; text-transform: uppercase; }
+  .panel-subtitle { font-size: 11px; color: var(--text-dim); font-family: var(--font-mono); }
+
+  /* ============================================================
+     FORM ELEMENTS
+     ============================================================ */
+  .form-group { margin-bottom: 16px; }
+  .form-label { display: block; font-size: 11px; font-weight: 500; color: var(--text-dim); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1px; font-family: var(--font-mono); }
+  .form-label .req { color: var(--red); }
+
+  input[type="number"], input[type="text"], textarea {
+    width: 100%;
+    padding: 10px 14px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text-bright);
+    font-family: var(--font-mono);
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+
+  input:focus, textarea:focus {
+    border-color: var(--cyan);
+    box-shadow: 0 0 0 3px var(--cyan-dim);
+  }
+
+  input::placeholder { color: var(--text-dim); opacity: 0.5; }
+
+  /* ============================================================
+     ROLE SELECTOR
+     ============================================================ */
+  .role-selector {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 20px;
+  }
+
+  .role-card {
+    padding: 16px 14px;
+    background: var(--bg-card);
+    border: 2px solid var(--border);
+    border-radius: 10px;
+    cursor: pointer;
+    text-align: center;
+    transition: all 0.25s;
+    position: relative;
+  }
+
+  .role-card:hover {
+    border-color: var(--border-hl);
+    transform: translateY(-1px);
+  }
+
+  .role-card.active {
+    border-color: var(--cyan);
+    background: var(--cyan-dim);
+    box-shadow: 0 0 20px var(--cyan-dim);
+  }
+
+  .role-card .role-icon {
+    font-size: 28px;
+    margin-bottom: 8px;
+    display: block;
+  }
+
+  .role-card .role-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-bright);
+    display: block;
+    margin-bottom: 2px;
+  }
+
+  .role-card .role-desc {
+    font-size: 10px;
+    color: var(--text-dim);
+    display: block;
+    font-family: var(--font-mono);
+  }
+
+  .role-card .check {
+    position: absolute;
+    top: 8px; right: 10px;
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: var(--cyan);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    color: var(--bg-deep);
+  }
+
+  .role-card.active .check { display: flex; }
+
+  /* ============================================================
+     BUTTONS
+     ============================================================ */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    padding: 12px 20px;
+    border: none;
+    border-radius: 8px;
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    letter-spacing: 0.5px;
+    transition: all 0.2s;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    pointer-events: none;
+  }
+
+  .btn-primary {
+    background: linear-gradient(135deg, #006680, #0099cc);
+    color: #fff;
+    border: 1px solid rgba(0,229,255,0.4);
+  }
+
+  .btn-primary:hover:not(:disabled) {
+    background: linear-gradient(135deg, #0080a0, #00b3e6);
+    box-shadow: 0 0 24px var(--cyan-dim);
+    transform: translateY(-1px);
+  }
+
+  .btn-primary:active:not(:disabled) { transform: translateY(0); }
+
+  .btn-secondary {
+    background: var(--bg-card);
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+
+  .btn-secondary:hover:not(:disabled) {
+    border-color: var(--border-hl);
+    background: var(--bg-input);
+  }
+
+  .btn-sm {
+    width: auto;
+    padding: 6px 14px;
+    font-size: 11px;
+    border-radius: 6px;
+  }
+
+  .btn .spinner {
+    width: 14px; height: 14px;
+    border: 2px solid rgba(255,255,255,0.2);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    display: none;
+  }
+
+  .btn.loading .spinner { display: block; }
+  .btn.loading .btn-text { opacity: 0.7; }
+
+  @keyframes spin { 100% { transform: rotate(360deg); } }
+
+  /* ============================================================
+     CODE DISPLAY
+     ============================================================ */
+  .code-block {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--cyan);
+    word-break: break-all;
+    line-height: 1.6;
+    position: relative;
+    min-height: 44px;
+  }
+
+  .code-block .copy-btn {
+    position: absolute;
+    top: 8px; right: 10px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 10px;
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .code-block .copy-btn:hover { border-color: var(--cyan); color: var(--cyan); }
+  .code-block .copy-btn.copied { color: var(--green); border-color: var(--green); }
+
+  /* ============================================================
+     CONNECTION FLOW (middle panel)
+     ============================================================ */
+  .flow-diagram {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0px;
+    padding: 20px 0;
+  }
+
+  .flow-node {
+    width: 100%;
+    padding: 14px 16px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    text-align: center;
+    position: relative;
+    transition: all 0.3s;
+  }
+
+  .flow-node.active {
+    border-color: var(--cyan);
+    box-shadow: 0 0 16px var(--cyan-dim);
+  }
+
+  .flow-node.done {
+    border-color: var(--green);
+  }
+
+  .flow-node.error {
+    border-color: var(--red);
+    box-shadow: 0 0 16px var(--red-dim);
+  }
+
+  .flow-node .node-label {
+    font-size: 11px;
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 4px;
+  }
+
+  .flow-node .node-value {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-bright);
+    font-family: var(--font-mono);
+  }
+
+  .flow-node .node-value.cyan { color: var(--cyan); }
+  .flow-node .node-value.green { color: var(--green); }
+
+  .flow-arrow {
+    width: 40px; height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-dim);
+    font-size: 20px;
+    position: relative;
+  }
+
+  .flow-arrow::before {
+    content: '';
+    position: absolute;
+    top: 0; bottom: 0;
+    left: 50%;
+    width: 1px;
+    background: var(--border);
+  }
+
+  .flow-arrow.active::before { background: var(--cyan); }
+  .flow-arrow .arrow-icon { position: relative; z-index: 1; }
+
+  .p2p-bridge {
+    width: 100%;
+    padding: 16px;
+    border: 2px dashed var(--border);
+    border-radius: 10px;
+    text-align: center;
+    margin: 10px 0;
+    transition: all 0.4s;
+  }
+
+  .p2p-bridge.connected {
+    border-color: var(--green);
+    border-style: solid;
+    background: var(--green-dim);
+    animation: bridge-glow 2s ease-in-out infinite;
+  }
+
+  @keyframes bridge-glow {
+    0%, 100% { box-shadow: 0 0 8px var(--green-dim); }
+    50% { box-shadow: 0 0 24px var(--green-dim); }
+  }
+
+  .p2p-bridge .bridge-label {
+    font-size: 11px;
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  .p2p-bridge .bridge-status {
+    font-size: 14px;
+    font-weight: 600;
+    margin-top: 4px;
+  }
+
+  /* ============================================================
+     NAT RESULT TABLE
+     ============================================================ */
+  .info-table {
+    width: 100%;
+    font-family: var(--font-mono);
+    font-size: 12px;
+  }
+
+  .info-table tr { border-bottom: 1px solid rgba(26,40,64,0.5); }
+  .info-table tr:last-child { border-bottom: none; }
+
+  .info-table td {
+    padding: 8px 4px;
+    vertical-align: top;
+  }
+
+  .info-table td:first-child {
+    color: var(--text-dim);
+    white-space: nowrap;
+    padding-right: 12px;
+    width: 90px;
+  }
+
+  .info-table td:last-child {
+    color: var(--text-bright);
+    word-break: break-all;
+  }
+
+  .tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+  }
+  .tag.ok { background: var(--green-dim); color: var(--green); }
+  .tag.warn { background: var(--amber-dim); color: var(--amber); }
+  .tag.err { background: var(--red-dim); color: var(--red); }
+  .tag.info { background: var(--cyan-dim); color: var(--cyan); }
+
+  /* ============================================================
+     ACTIVITY LOG
+     ============================================================ */
+  .log-area {
+    grid-column: 1 / -1;
+  }
+
+  .log-container {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;
+    max-height: 160px;
+    overflow-y: auto;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.7;
+  }
+
+  .log-entry { padding: 2px 0; display: flex; gap: 10px; }
+  .log-time { color: var(--text-dim); flex-shrink: 0; }
+  .log-msg { color: var(--text); }
+  .log-msg.info { color: var(--cyan); }
+  .log-msg.success { color: var(--green); }
+  .log-msg.warning { color: var(--amber); }
+  .log-msg.error { color: var(--red); }
+
+  .log-container::-webkit-scrollbar { width: 4px; }
+  .log-container::-webkit-scrollbar-track { background: transparent; }
+  .log-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  /* ============================================================
+     RESPONSIVE
+     ============================================================ */
+  @media (max-width: 1100px) {
+    main {
+      grid-template-columns: 1fr;
+      max-width: 600px;
+      gap: 16px;
+      padding: 16px;
+    }
+    header { padding: 12px 16px; }
+    .status-bar { display: none; }
+  }
+
+  /* ============================================================
+     NOTIFICATION TOAST
+     ============================================================ */
+  .toast {
+    position: fixed;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 12px 24px;
+    border-radius: 8px;
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 500;
+    z-index: 10000;
+    animation: toast-in 0.3s ease-out;
+    pointer-events: none;
+  }
+
+  .toast.success { background: var(--green-dim); color: var(--green); border: 1px solid rgba(0,255,136,0.3); }
+  .toast.error { background: var(--red-dim); color: var(--red); border: 1px solid rgba(255,61,79,0.3); }
+
+  @keyframes toast-in {
+    from { opacity: 0; transform: translateX(-50%) translateY(-10px); }
+    to { opacity: 1; transform: translateX(-50%) translateY(0); }
+  }
+
+  @keyframes toast-out {
+    from { opacity: 1; }
+    to { opacity: 0; }
+  }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<header>
+  <div class="logo-area">
+    <div class="logo-icon"></div>
+    <div class="logo-text">安盾 <span>P2P</span> 穿透</div>
+  </div>
+  <div class="status-bar">
+    <div>
+      <span class="status-dot offline" id="statusDot"></span>
+      <span id="statusText">离线</span>
+    </div>
+    <span id="clock">--:--:--</span>
+  </div>
+</header>
+
+<!-- MAIN -->
+<main>
+  <!-- LEFT: LOCAL PANEL -->
+  <section class="panel" id="localPanel">
+    <div class="panel-header">
+      <div class="icon cyan">&#9673;</div>
+      <div>
+        <div class="panel-title">本机配置</div>
+        <div class="panel-subtitle">LOCAL CONFIGURATION</div>
+      </div>
+    </div>
+
+    <!-- Role Selector -->
+    <div class="form-label">运行角色 <span class="req">*</span></div>
+    <div class="role-selector">
+      <div class="role-card active" data-role="exposer" onclick="selectRole('exposer')">
+        <span class="check">&#10003;</span>
+        <span class="role-icon">&#8593;</span>
+        <span class="role-name">暴露端</span>
+        <span class="role-desc">暴露本地服务</span>
+      </div>
+      <div class="role-card" data-role="visitor" onclick="selectRole('visitor')">
+        <span class="check">&#10003;</span>
+        <span class="role-icon">&#8595;</span>
+        <span class="role-name">访问端</span>
+        <span class="role-desc">访问远端服务</span>
+      </div>
+    </div>
+
+    <div class="form-group" id="targetPortGroup">
+      <label class="form-label">暴露的本地端口 <span class="req">*</span></label>
+      <input type="number" id="targetPort" placeholder="例如: 8080" min="1" max="65535" value="8080">
+    </div>
+
+    <div class="form-group" id="listenPortGroup" style="display:none">
+      <label class="form-label">本地监听端口 <span class="req">*</span></label>
+      <input type="number" id="listenPort" placeholder="例如: 9090" min="1" max="65535" value="9090">
+    </div>
+
+    <button class="btn btn-primary" id="btnDetect" onclick="startDetection()">
+      <span class="spinner"></span>
+      <span class="btn-text">开始 NAT 检测</span>
+    </button>
+
+    <!-- NAT Result -->
+    <div id="natResult" style="margin-top:16px; display:none;">
+      <div class="form-label">NAT 检测结果</div>
+      <table class="info-table"></table>
+    </div>
+  </section>
+
+  <!-- MIDDLE: CONNECTION FLOW -->
+  <section class="panel" id="middlePanel">
+    <div class="panel-header">
+      <div class="icon amber">&#8661;</div>
+      <div>
+        <div class="panel-title">连接状态</div>
+        <div class="panel-subtitle">CONNECTION STATUS</div>
+      </div>
+    </div>
+
+    <div class="flow-diagram">
+      <!-- Local Node -->
+      <div class="flow-node" id="flowLocal">
+        <div class="node-label">&#9673; 本机</div>
+        <div class="node-value" id="flowLocalAddr">--</div>
+      </div>
+
+      <div class="flow-arrow" id="arrowDown">
+        <span class="arrow-icon">&#8595;</span>
+      </div>
+
+      <!-- P2P Bridge -->
+      <div class="p2p-bridge" id="flowBridge">
+        <div class="bridge-label">P2P 直连隧道</div>
+        <div class="bridge-status" style="color:var(--text-dim)">等待建立...</div>
+      </div>
+
+      <div class="flow-arrow" id="arrowUp">
+        <span class="arrow-icon">&#8593;</span>
+      </div>
+
+      <!-- Remote Node -->
+      <div class="flow-node" id="flowRemote">
+        <div class="node-label">&#9673; 远端</div>
+        <div class="node-value" id="flowRemoteAddr">--</div>
+      </div>
+    </div>
+
+    <!-- Connection Code Exchange -->
+    <div style="margin-top:20px;">
+      <div class="form-label">本机连接码</div>
+      <div class="code-block" id="myCodeBlock">
+        <span id="myCode">检测完成后显示...</span>
+        <button class="copy-btn" id="copyMyBtn" onclick="copyCode('myCode','copyMyBtn')" style="display:none">复制</button>
+      </div>
+
+      <div class="form-label" style="margin-top:14px;">对方连接码</div>
+      <textarea id="remoteCode" placeholder="将对方的连接码粘贴到此处..." rows="2" style="resize:vertical; min-height:50px;"></textarea>
+
+      <button class="btn btn-primary" id="btnConnect" onclick="startConnect()" disabled style="margin-top:12px;">
+        <span class="spinner"></span>
+        <span class="btn-text">建立 P2P 连接</span>
+      </button>
+
+      <button class="btn btn-secondary btn-sm" id="btnDisconnect" onclick="disconnect()" style="display:none; margin-top:8px;">
+        断开连接
+      </button>
+    </div>
+  </section>
+
+  <!-- RIGHT: TUNNEL INFO -->
+  <section class="panel" id="remotePanel">
+    <div class="panel-header">
+      <div class="icon green">&#9889;</div>
+      <div>
+        <div class="panel-title">隧道信息</div>
+        <div class="panel-subtitle">TUNNEL INFORMATION</div>
+      </div>
+    </div>
+
+    <div id="tunnelInfo" style="color:var(--text-dim); text-align:center; padding:40px 20px;">
+      <div style="font-size:32px; margin-bottom:12px; opacity:0.3;">&#128274;</div>
+      <div style="font-size:13px;">等待隧道建立...</div>
+      <div style="font-size:11px; margin-top:4px;">完成 NAT 检测与打洞后将显示隧道信息</div>
+    </div>
+
+    <div id="tunnelActive" style="display:none;">
+      <table class="info-table">
+        <tr><td>角色</td><td id="tunRole">--</td></tr>
+        <tr><td>隧道状态</td><td><span class="tag ok" id="tunStatus">已连接</span></td></tr>
+        <tr><td>本地地址</td><td id="tunLocal">--</td></tr>
+        <tr><td>远端地址</td><td id="tunRemote">--</td></tr>
+        <tr><td>数据方向</td><td id="tunDirection">--</td></tr>
+      </table>
+
+      <div style="margin-top:16px; padding:12px; background:var(--green-dim); border-radius:8px; border:1px solid rgba(0,255,136,0.2);">
+        <div style="font-size:11px; color:var(--text-dim); font-family:var(--font-mono); margin-bottom:4px;">访问入口</div>
+        <div style="font-size:18px; font-weight:700; color:var(--green); font-family:var(--font-mono);" id="tunEntryUrl">--</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- LOG AREA -->
+  <section class="panel log-area">
+    <div class="panel-header">
+      <div class="icon amber">&#9776;</div>
+      <div>
+        <div class="panel-title">活动日志</div>
+        <div class="panel-subtitle">ACTIVITY LOG</div>
+      </div>
+      <button class="btn btn-secondary btn-sm" onclick="clearLogs()" style="margin-left:auto;">清空</button>
+    </div>
+    <div class="log-container" id="logContainer">
+      <div class="log-entry"><span class="log-time">--:--:--</span><span class="log-msg info">系统就绪，等待操作...</span></div>
+    </div>
+  </section>
+</main>
+
+<script>
+// ============================================================
+// STATE
+// ============================================================
+const state = {
+  role: 'exposer',
+  natDetected: false,
+  myPeerInfo: null,
+  connected: false,
+  detecting: false,
+  connecting: false,
+};
+
+// ============================================================
+// HELPERS
+// ============================================================
+function $(id) { return document.getElementById(id); }
+
+function now() {
+  const d = new Date();
+  return d.toTimeString().slice(0,8);
+}
+
+function updateClock() {
+  $('clock').textContent = new Date().toLocaleString('zh-CN', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+function setStatus(state, text) {
+  const dot = $('statusDot');
+  dot.className = 'status-dot ' + state;
+  $('statusText').textContent = text;
+}
+
+function addLog(msg, cls = '') {
+  const container = $('logContainer');
+  const entry = document.createElement('div');
+  entry.className = 'log-entry';
+  entry.innerHTML = `<span class="log-time">${now()}</span><span class="log-msg ${cls}">${msg}</span>`;
+  container.appendChild(entry);
+  container.scrollTop = container.scrollHeight;
+}
+
+function clearLogs() {
+  $('logContainer').innerHTML = '';
+  addLog('日志已清空', 'info');
+}
+
+function showToast(msg, cls) {
+  const toast = document.createElement('div');
+  toast.className = 'toast ' + cls;
+  toast.textContent = msg;
+  document.body.appendChild(toast);
+  setTimeout(() => {
+    toast.style.animation = 'toast-out 0.3s ease-out';
+    setTimeout(() => toast.remove(), 300);
+  }, 2500);
+}
+
+async function apiCall(endpoint, data = null) {
+  const opts = {
+    method: data ? 'POST' : 'GET',
+    headers: { 'Content-Type': 'application/json' },
+  };
+  if (data) opts.body = JSON.stringify(data);
+  const resp = await fetch('/api' + endpoint, opts);
+  const json = await resp.json();
+  if (!json.ok) throw new Error(json.error || '请求失败');
+  return json;
+}
+
+// ============================================================
+// ROLE SELECTION
+// ============================================================
+function selectRole(role) {
+  state.role = role;
+  document.querySelectorAll('.role-card').forEach(c => c.classList.remove('active'));
+  document.querySelector(`.role-card[data-role="${role}"]`).classList.add('active');
+
+  $('targetPortGroup').style.display = role === 'exposer' ? '' : 'none';
+  $('listenPortGroup').style.display = role === 'visitor' ? '' : 'none';
+
+  addLog(`角色切换为: ${role === 'exposer' ? '暴露端' : '访问端'}`, 'info');
+}
+
+// ============================================================
+// NAT DETECTION
+// ============================================================
+async function startDetection() {
+  if (state.detecting) return;
+  state.detecting = true;
+
+  const btn = $('btnDetect');
+  btn.classList.add('loading');
+  btn.disabled = true;
+  $('natResult').style.display = 'none';
+  setStatus('detecting', 'NAT检测中...');
+  addLog('正在检测 NAT 类型...', 'info');
+
+  const targetPort = parseInt($('targetPort').value) || 8080;
+  const listenPort = parseInt($('listenPort').value) || 9090;
+
+  try {
+    const result = await apiCall('/detect', {
+      role: state.role,
+      target_port: targetPort,
+      listen_port: listenPort,
+    });
+
+    state.natDetected = true;
+    state.myPeerInfo = result.peer_info;
+
+    // Show NAT results
+    const tbl = $('natResult').querySelector('table');
+    tbl.innerHTML = `
+      <tr><td>NAT 类型</td><td><span class="tag ${result.can_punch ? 'ok' : 'err'}">${result.nat_type_name}</span></td></tr>
+      <tr><td>公网 IP</td><td>${result.public_ip}</td></tr>
+      <tr><td>打洞端口</td><td>${result.punch_port}</td></tr>
+      <tr><td>可打洞</td><td><span class="tag ${result.can_punch ? 'ok' : 'err'}">${result.can_punch ? '是 ✓' : '否 ✗'}</span></td></tr>
+    `;
+    $('natResult').style.display = '';
+
+    // Show my code
+    const code = result.connection_code;
+    $('myCode').textContent = code;
+    $('copyMyBtn').style.display = '';
+    addLog(`NAT 检测完成: ${result.nat_type_name}`, 'success');
+
+    // Update flow
+    const addr = `${result.public_ip}:${result.punch_port}`;
+    $('flowLocalAddr').textContent = addr;
+    $('flowLocalAddr').className = 'node-value cyan';
+    $('flowLocal').classList.add('done');
+
+    // Enable connect button
+    $('btnConnect').disabled = false;
+    setStatus('online', '就绪');
+
+    if (!result.can_punch) {
+      addLog('警告: 当前 NAT 不支持 P2P 打洞！', 'warning');
+      showToast('当前网络环境不支持 P2P 直连', 'error');
+      $('flowLocal').classList.add('error');
+    }
+
+  } catch (e) {
+    addLog('NAT 检测失败: ' + e.message, 'error');
+    showToast('NAT 检测失败: ' + e.message, 'error');
+    setStatus('offline', '检测失败');
+    $('flowLocal').classList.add('error');
+  } finally {
+    btn.classList.remove('loading');
+    btn.disabled = false;
+    state.detecting = false;
+  }
+}
+
+// ============================================================
+// COPY CODE
+// ============================================================
+function copyCode(codeId, btnId) {
+  const text = $(codeId).textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = $(btnId);
+    btn.textContent = '已复制';
+    btn.classList.add('copied');
+    setTimeout(() => {
+      btn.textContent = '复制';
+      btn.classList.remove('copied');
+    }, 2000);
+    addLog('连接码已复制到剪贴板', 'success');
+  }).catch(() => {
+    showToast('复制失败，请手动选择文本', 'error');
+  });
+}
+
+// ============================================================
+// P2P CONNECT
+// ============================================================
+async function startConnect() {
+  if (state.connecting || state.connected) return;
+
+  const remoteCode = $('remoteCode').value.trim();
+  if (!remoteCode) {
+    showToast('请先粘贴对方的连接码', 'error');
+    return;
+  }
+
+  state.connecting = true;
+  const btn = $('btnConnect');
+  btn.classList.add('loading');
+  btn.disabled = true;
+  setStatus('connecting', '打洞中...');
+  addLog('开始 P2P 打洞连接...', 'info');
+  $('flowBridge').querySelector('.bridge-status').textContent = '打洞中...';
+  $('flowBridge').querySelector('.bridge-status').style.color = 'var(--cyan)';
+
+  try {
+    const result = await apiCall('/connect', {
+      role: state.role,
+      remote_code: remoteCode,
+      my_info: state.myPeerInfo,
+      target_port: parseInt($('targetPort').value) || 8080,
+      listen_port: parseInt($('listenPort').value) || 9090,
+    });
+
+    state.connected = true;
+    setStatus('online', '已连接');
+    addLog('P2P 直连隧道已建立!', 'success');
+    showToast('P2P 连接成功!', 'success');
+
+    // Update flow
+    $('flowBridge').classList.add('connected');
+    $('flowBridge').querySelector('.bridge-status').textContent = '&#10003; 已连接';
+    $('flowBridge').querySelector('.bridge-status').style.color = 'var(--green)';
+    $('arrowDown').classList.add('active');
+    $('arrowUp').classList.add('active');
+    $('flowRemoteAddr').textContent = result.remote_addr || '已连接';
+    $('flowRemoteAddr').className = 'node-value green';
+    $('flowRemote').classList.add('done');
+
+    // Update tunnel info
+    $('tunnelInfo').style.display = 'none';
+    $('tunnelActive').style.display = '';
+    $('tunRole').textContent = state.role === 'exposer' ? '暴露端' : '访问端';
+    $('tunLocal').textContent = result.local_addr || '--';
+    $('tunRemote').textContent = result.remote_addr || '--';
+    $('tunDirection').textContent = state.role === 'exposer'
+      ? `本地服务 → P2P → 远端`
+      : `远端服务 → P2P → 本地`;
+
+    if (result.entry_url) {
+      $('tunEntryUrl').textContent = result.entry_url;
+    }
+
+    // Toggle buttons
+    $('btnConnect').style.display = 'none';
+    $('btnDisconnect').style.display = '';
+
+  } catch (e) {
+    addLog('打洞失败: ' + e.message, 'error');
+    showToast('打洞失败，当前网络环境无法P2P直连', 'error');
+    setStatus('offline', '打洞失败');
+    $('flowBridge').querySelector('.bridge-status').textContent = '失败';
+    $('flowBridge').querySelector('.bridge-status').style.color = 'var(--red)';
+    $('flowRemote').classList.add('error');
+  } finally {
+    btn.classList.remove('loading');
+    btn.disabled = false;
+    state.connecting = false;
+  }
+}
+
+// ============================================================
+// DISCONNECT
+// ============================================================
+async function disconnect() {
+  try {
+    await apiCall('/disconnect');
+    addLog('已断开连接', 'warning');
+    showToast('连接已断开', 'success');
+  } catch (e) {
+    addLog('断开失败: ' + e.message, 'error');
+  }
+
+  state.connected = false;
+  setStatus('offline', '离线');
+  $('flowBridge').classList.remove('connected');
+  $('flowBridge').querySelector('.bridge-status').textContent = '等待建立...';
+  $('flowBridge').querySelector('.bridge-status').style.color = 'var(--text-dim)';
+  $('arrowDown').classList.remove('active');
+  $('arrowUp').classList.remove('active');
+  $('flowRemoteAddr').textContent = '--';
+  $('flowRemoteAddr').className = 'node-value';
+  $('flowRemote').classList.remove('done');
+  $('tunnelInfo').style.display = '';
+  $('tunnelActive').style.display = 'none';
+  $('btnConnect').style.display = '';
+  $('btnDisconnect').style.display = 'none';
+  $('btnConnect').disabled = false;
+}
+
+// ============================================================
+// INIT
+// ============================================================
+addLog('安盾 P2P 内网穿透系统就绪', 'info');
+addLog('当前角色: 暴露端 | 请配置参数后开始 NAT 检测', 'info');
+</script>
+</body>
+</html>

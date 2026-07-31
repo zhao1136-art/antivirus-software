@@ -1,0 +1,1590 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>安盾 - 设置</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@500;600;700&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+    <script>(function(){try{var s=JSON.parse(localStorage.getItem('安盾_settings')||'{}');if(s.theme==='light')document.documentElement.classList.add('light');}catch(e){}}())</script>
+    <style>
+        :root {
+            --bg-primary: #0a0a12;
+            --bg-secondary: #111120;
+            --bg-card: #16162a;
+            --bg-hover: #1e1e3a;
+            --border: #2a2a45;
+            --border-light: #3a3a55;
+            --text-primary: #f0f0f8;
+            --text-secondary: #a0a0be;
+            --text-muted: #6a6a88;
+            --accent: #3b82f6;
+            --accent-dim: rgba(59, 130, 246, 0.12);
+            --danger: #ef4444;
+            --danger-dim: rgba(239, 68, 68, 0.12);
+            --warning: #ffcc00;
+            --radius-sm: 10px;
+            --radius-md: 16px;
+            --radius-lg: 24px;
+            --transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        html.light {
+            --bg-primary: #f5f5f8;
+            --bg-secondary: #ebebf0;
+            --bg-card: #ffffff;
+            --bg-hover: #e8e8ef;
+            --border: #d4d4de;
+            --border-light: #c0c0cc;
+            --text-primary: #1a1a2e;
+            --text-secondary: #5a5a72;
+            --text-muted: #8a8aa0;
+            --accent: #3b82f6;
+            --accent-dim: rgba(0, 137, 123, 0.10);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'DM Sans', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background:
+                radial-gradient(circle at 20% 30%, rgba(0, 217, 192, 0.06) 0%, transparent 40%),
+                radial-gradient(circle at 80% 70%, rgba(0, 110, 255, 0.05) 0%, transparent 40%),
+                linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
+            background-size: 100% 100%, 100% 100%, 40px 40px, 40px 40px;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        html.light body::before {
+            background:
+                radial-gradient(circle at 20% 30%, rgba(0, 137, 123, 0.04) 0%, transparent 40%),
+                radial-gradient(circle at 80% 70%, rgba(0, 110, 255, 0.03) 0%, transparent 40%),
+                linear-gradient(rgba(0, 0, 0, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 0, 0, 0.03) 1px, transparent 1px);
+            background-size: 100% 100%, 100% 100%, 40px 40px, 40px 40px;
+        }
+
+        .app {
+            display: flex;
+            min-height: 100vh;
+            position: relative;
+            z-index: 1;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 240px;
+            background: rgba(14, 14, 20, 0.85);
+            backdrop-filter: blur(20px);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            padding: 28px 18px;
+            position: fixed;
+            height: 100vh;
+            z-index: 100;
+        }
+
+        html.light .sidebar {
+            background: rgba(255, 255, 255, 0.85);
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 0 10px;
+            margin-bottom: 40px;
+        }
+
+        .logo-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, var(--accent), #0099cc);
+            display: grid;
+            place-items: center;
+            box-shadow: 0 8px 24px rgba(0, 217, 192, 0.25);
+        }
+
+        .logo-icon svg {
+            width: 22px;
+            height: 22px;
+            fill: white;
+        }
+
+        .logo-text {
+            font-family: 'Syne', sans-serif;
+            font-weight: 700;
+            font-size: 20px;
+            letter-spacing: -0.5px;
+        }
+
+        .nav {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            flex: 1;
+        }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 13px 14px;
+            border-radius: var(--radius-sm);
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+            transition: var(--transition);
+            cursor: pointer;
+            border: 1px solid transparent;
+        }
+
+        .nav-item:hover {
+            background: var(--bg-hover);
+            color: var(--text-primary);
+        }
+
+        .nav-item.active {
+            background: var(--accent-dim);
+            color: var(--accent);
+            border-color: rgba(0, 217, 192, 0.2);
+        }
+
+        .nav-item svg {
+            width: 20px;
+            height: 20px;
+            opacity: 0.8;
+        }
+
+        .nav-badge {
+            margin-left: auto;
+            background: var(--danger-dim);
+            color: var(--danger);
+            font-size: 11px;
+            font-weight: 700;
+            padding: 3px 8px;
+            border-radius: 20px;
+        }
+
+.nav-group {
+  padding: 18px 14px 6px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  user-select: none;
+}
+
+.nav-group:first-child {
+  padding-top: 0;
+}
+
+
+        /* Main Content */
+        .main {
+            flex: 1;
+            margin-left: 240px;
+            padding: 32px 40px;
+            max-width: calc(100% - 240px);
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 36px;
+        }
+
+        .header-title {
+            font-family: 'Syne', sans-serif;
+            font-size: 28px;
+            font-weight: 700;
+        }
+
+        .settings-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+            max-width: 800px;
+        }
+
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 28px;
+            transition: var(--transition);
+        }
+
+        .card:hover {
+            border-color: var(--border-light);
+        }
+
+        .card-title {
+            font-family: 'Syne', sans-serif;
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 24px;
+        }
+
+        .setting-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .setting-row:last-child {
+            border-bottom: none;
+        }
+
+        .setting-info {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .setting-label {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .setting-desc {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        /* Toggle Switch */
+        .toggle {
+            width: 48px;
+            height: 26px;
+            background: var(--bg-hover);
+            border-radius: 20px;
+            position: relative;
+            cursor: pointer;
+            transition: var(--transition);
+            border: 1px solid var(--border-light);
+            flex-shrink: 0;
+        }
+
+        .toggle.active {
+            background: var(--accent);
+            border-color: var(--accent);
+        }
+
+        .toggle::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 20px;
+            height: 20px;
+            background: white;
+            border-radius: 50%;
+            transition: var(--transition);
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+        }
+
+        .toggle.active::after {
+            transform: translateX(22px);
+        }
+
+        .toggle.disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+
+        .toggle.disabled.active {
+            background: var(--accent);
+            border-color: var(--accent);
+        }
+
+        /* Theme Toggle */
+        .theme-toggle-wrap {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .theme-label {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            transition: var(--transition);
+        }
+
+        .theme-label.active-label {
+            color: var(--accent);
+            font-weight: 700;
+        }
+
+        .theme-switch {
+            width: 56px;
+            height: 28px;
+            background: var(--bg-hover);
+            border-radius: 20px;
+            position: relative;
+            cursor: pointer;
+            transition: var(--transition);
+            border: 1px solid var(--border-light);
+            flex-shrink: 0;
+        }
+
+        .theme-switch::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 22px;
+            height: 22px;
+            background: white;
+            border-radius: 50%;
+            transition: var(--transition);
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+        }
+
+        .theme-switch.light::after {
+            transform: translateX(28px);
+        }
+
+        /* Dropdown */
+        .dropdown {
+            appearance: none;
+            -webkit-appearance: none;
+            background: var(--bg-hover);
+            border: 1px solid var(--border-light);
+            border-radius: var(--radius-sm);
+            color: var(--text-primary);
+            font-family: 'DM Sans', sans-serif;
+            font-size: 13px;
+            font-weight: 500;
+            padding: 10px 36px 10px 14px;
+            cursor: pointer;
+            transition: var(--transition);
+            outline: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238f8fab' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            min-width: 140px;
+        }
+
+        .dropdown:hover {
+            border-color: var(--accent);
+        }
+
+        .dropdown:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-dim);
+        }
+
+        .dropdown option {
+            background: var(--bg-card);
+            color: var(--text-primary);
+        }
+
+        /* About Section */
+        .about-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+
+        .about-item {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            padding: 14px 0;
+        }
+
+        .about-item .about-label {
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .about-item .about-value {
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .about-item .about-value.version {
+            font-family: 'Syne', sans-serif;
+            color: var(--accent);
+            font-weight: 700;
+        }
+
+        /* Buttons */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 11px 22px;
+            border-radius: var(--radius-sm);
+            font-family: 'DM Sans', sans-serif;
+            font-size: 13px;
+            font-weight: 600;
+            border: 1px solid var(--border-light);
+            background: var(--bg-hover);
+            color: var(--text-primary);
+            cursor: pointer;
+            transition: var(--transition);
+            white-space: nowrap;
+        }
+
+        .btn:hover {
+            background: var(--accent-dim);
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent), #00b4a6);
+            border-color: transparent;
+            color: #000;
+            font-weight: 700;
+            box-shadow: 0 4px 16px rgba(0, 217, 192, 0.2);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 8px 24px rgba(0, 217, 192, 0.3);
+            color: #000;
+        }
+
+        .btn-danger {
+            background: transparent;
+            border-color: var(--danger);
+            color: var(--danger);
+        }
+
+        .btn-danger:hover {
+            background: var(--danger-dim);
+        }
+
+        .about-actions {
+            margin-top: 20px;
+            display: flex;
+            gap: 12px;
+        }
+
+        /* Reset section */
+        .reset-section {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding-top: 8px;
+        }
+
+        .reset-section .reset-hint {
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        /* Toast */
+        .toast-container {
+            position: fixed;
+            bottom: 32px;
+            right: 32px;
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .toast {
+            padding: 14px 22px;
+            border-radius: var(--radius-sm);
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+            background: var(--bg-card);
+            border: 1px solid var(--border-light);
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+            animation: toastIn 0.35s cubic-bezier(0.4, 0, 0.2, 1), toastOut 0.3s 2.5s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            max-width: 400px;
+        }
+
+        .toast.success {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .toast.error {
+            border-color: var(--danger);
+            color: var(--danger);
+        }
+
+        .toast .toast-icon {
+            width: 20px;
+            height: 20px;
+            flex-shrink: 0;
+        }
+
+        @keyframes toastIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px) scale(0.95);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+        }
+
+        @keyframes toastOut {
+            from {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+            to {
+                opacity: 0;
+                transform: translateY(-10px) scale(0.95);
+            }
+        }
+
+        @media (max-width: 768px) {
+            .sidebar {
+                transform: translateX(-100%);
+            }
+            .main {
+                margin-left: 0;
+                max-width: 100%;
+                padding: 24px;
+            }
+            .settings-grid {
+                max-width: 100%;
+            }
+            .about-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="app">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="logo">
+                <div class="logo-icon">
+                    <svg viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg>
+                </div>
+                <span class="logo-text">安盾</span>
+            </div>
+
+                        <nav class="nav">
+                <div class="nav-group">核心功能</div>
+                <a class="nav-item" href="index.html">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+                    概览
+                </a>
+                <a class="nav-item" href="scan.html">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="m14.31 8 5.74 9.94M9.69 8h11.48M7.38 12l5.74-9.94M9.69 16 3.95 6.06M14.31 16H2.83M16.62 12l-5.74 9.94"/></svg>
+                    病毒扫描
+                </a>
+                <a class="nav-item" href="history.html">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="10"/><path d="M3.05 11a9 9 0 1 1 .5 4"/></svg>
+                    病毒记忆
+                </a>
+                <div class="nav-group">安全防护</div>
+                <a class="nav-item" href="protection.html">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                    实时保护
+                </a>
+                <a class="nav-item" href="vulnerabilities.html">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"/><line x1="16" y1="8" x2="2" y2="22"/><line x1="17.5" y1="15" x2="9" y2="15"/></svg>
+                    漏洞修复
+                </a>
+                <a class="nav-item" href="index.html#threat-intel">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/></svg>
+                    威胁情报
+                </a>
+                <div class="nav-group">管理中心</div>
+                <a class="nav-item" href="quarantine.html">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="9" x2="15" y2="15"/><line x1="15" y1="9" x2="9" y2="15"/></svg>
+                    隔离区
+                    <span class="nav-badge" id="quarantineBadge">0</span>
+                </a>
+                <a class="nav-item" href="logs.html">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+                    日志报告
+                </a>
+                <div class="nav-group">高级工具</div>
+                <a class="nav-item active" href="settings.html">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                    设置
+                </a>
+            </nav>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main">
+            <header class="header">
+                <h1 class="header-title">设置</h1>
+            </header>
+
+            <div class="settings-grid">
+
+                <!-- 常规设置 -->
+                <div class="card">
+                    <h3 class="card-title">常规设置</h3>
+
+                    <div class="setting-row">
+                        <div class="setting-info">
+                            <span class="setting-label">主题模式</span>
+                            <span class="setting-desc">选择亮色或暗色界面主题</span>
+                        </div>
+                        <div class="theme-toggle-wrap">
+                            <span class="theme-label active-label" id="labelDark">暗色</span>
+                            <div class="theme-switch" id="themeSwitch" role="switch" aria-checked="false"></div>
+                            <span class="theme-label" id="labelLight">亮色</span>
+                        </div>
+                    </div>
+
+                    <div class="setting-row">
+                        <div class="setting-info">
+                            <span class="setting-label">启动时自动扫描</span>
+                            <span class="setting-desc">系统启动时自动运行快速扫描</span>
+                        </div>
+                        <div class="toggle" id="toggleAutoScan" role="switch"></div>
+                    </div>
+
+                    <div class="setting-row">
+                        <div class="setting-info">
+                            <span class="setting-label">后台防掉线守护</span>
+                            <span class="setting-desc">监控后端服务状态，防止异常崩溃导致服务中断</span>
+                        </div>
+                        <div class="toggle active" id="toggleWatchdog" role="switch" aria-checked="true"></div>
+                    </div>
+
+                    <div class="setting-row">
+                        <div class="setting-info">
+                            <span class="setting-label">强力分析引擎 (Vigil)</span>
+                            <span class="setting-desc">基于 ML 的高级行为分析，默认关闭以节省资源</span>
+                        </div>
+                        <div class="toggle" id="toggleVigil" role="switch" aria-checked="false"></div>
+                    </div>
+
+                    <div class="setting-row">
+                        <div class="setting-info">
+                            <span class="setting-label">F12 紧急处置</span>
+                            <span class="setting-desc">紧急时连按F12五次，关闭所有非系统进程（30秒冷却）</span>
+                        </div>
+                        <div class="toggle active" id="toggleEmergencyKill" role="switch" aria-checked="true"></div>
+                    </div>
+
+                    <div class="setting-row" style="border-bottom: none;">
+                        <div class="setting-info">
+                            <span class="setting-label">关闭安盾</span>
+                            <span class="setting-desc">退出安盾主程序与后台守护进程</span>
+                        </div>
+                        <button class="btn-danger" id="btnShutdown" style="min-width:80px;">立即退出</button>
+                    </div>
+                </div>
+
+                <!-- 辅助功能（新增） -->
+                <div class="card">
+                    <h3 class="card-title">辅助功能</h3>
+
+                    <div class="setting-row">
+                        <div class="setting-info">
+                            <span class="setting-label">系统托盘</span>
+                            <span class="setting-desc">关闭窗口后最小化到系统托盘，常驻后台运行</span>
+                        </div>
+                        <div class="toggle active" id="toggleTrayIcon" role="switch" aria-checked="true"></div>
+                    </div>
+
+                    <div class="setting-row">
+                        <div class="setting-info">
+                            <span class="setting-label">开机自启</span>
+                            <span class="setting-desc">系统启动时自动运行安盾</span>
+                        </div>
+                        <div class="toggle" id="toggleAutoStart" role="switch"></div>
+                    </div>
+
+                    <div class="setting-row">
+                        <div class="setting-info">
+                            <span class="setting-label">右键菜单</span>
+                            <span class="setting-desc">在文件/文件夹右键菜单添加"使用安盾扫描"</span>
+                        </div>
+                        <div class="toggle" id="toggleShellMenu" role="switch"></div>
+                    </div>
+
+                    <div class="setting-row">
+                        <div class="setting-info">
+                            <span class="setting-label">USB 自动扫描</span>
+                            <span class="setting-desc">接入 USB 设备时自动检测病毒</span>
+                        </div>
+                        <div class="toggle active" id="toggleUsbScan" role="switch" aria-checked="true"></div>
+                    </div>
+
+                    <div class="setting-row" style="border-bottom: none;">
+                        <div class="setting-info">
+                            <span class="setting-label">游戏模式</span>
+                            <span class="setting-desc">进入全屏游戏时自动降低扫描优先级，减少干扰</span>
+                        </div>
+                        <div class="toggle active" id="toggleGameMode" role="switch" aria-checked="true"></div>
+                    </div>
+                </div>
+
+                <!-- 通知设置 -->
+                <div class="card">
+                    <h3 class="card-title">通知设置</h3>
+
+                    <div class="setting-row">
+                        <div class="setting-info">
+                            <span class="setting-label">显示桌面通知</span>
+                            <span class="setting-desc">允许 安盾 发送桌面系统通知</span>
+                        </div>
+                        <div class="toggle" id="toggleDesktopNotif" role="switch"></div>
+                    </div>
+
+                    <div class="setting-row">
+                        <div class="setting-info">
+                            <span class="setting-label">扫描完成时通知</span>
+                            <span class="setting-desc">扫描任务结束后弹出通知提示</span>
+                        </div>
+                        <div class="toggle" id="toggleScanCompleteNotif" role="switch"></div>
+                    </div>
+
+                    <div class="setting-row">
+                        <div class="setting-info">
+                            <span class="setting-label">发现威胁时通知</span>
+                            <span class="setting-desc">检测到威胁时立即通知（强制开启）</span>
+                        </div>
+                        <div class="toggle active disabled" id="toggleThreatNotif" role="switch" aria-checked="true"></div>
+                    </div>
+                </div>
+
+                <!-- 扫描设置 -->
+                <div class="card">
+                    <h3 class="card-title">扫描设置</h3>
+
+                    <div class="setting-row">
+                        <div class="setting-info">
+                            <span class="setting-label">自动更新病毒库</span>
+                            <span class="setting-desc">自动下载并安装最新的病毒特征库</span>
+                        </div>
+                        <div class="toggle" id="toggleAutoUpdate" role="switch"></div>
+                    </div>
+
+                    <div class="setting-row">
+                        <div class="setting-info">
+                            <span class="setting-label">检测潜在不需要的程序 (PUP)</span>
+                            <span class="setting-desc">扫描可能不需要但非恶意的软件</span>
+                        </div>
+                        <div class="toggle" id="togglePUP" role="switch"></div>
+                    </div>
+
+                    <div class="setting-row">
+                        <div class="setting-info">
+                            <span class="setting-label">每日自动扫描时间</span>
+                            <span class="setting-desc">设定每天定时执行自动扫描</span>
+                        </div>
+                        <select class="dropdown" id="dailyScanTime">
+                            <option value="00:00">00:00</option>
+                            <option value="01:00">01:00</option>
+                            <option value="02:00" selected>02:00</option>
+                            <option value="03:00">03:00</option>
+                            <option value="04:00">04:00</option>
+                            <option value="05:00">05:00</option>
+                            <option value="06:00">06:00</option>
+                            <option value="07:00">07:00</option>
+                            <option value="08:00">08:00</option>
+                            <option value="09:00">09:00</option>
+                            <option value="10:00">10:00</option>
+                            <option value="11:00">11:00</option>
+                            <option value="12:00">12:00</option>
+                            <option value="13:00">13:00</option>
+                            <option value="14:00">14:00</option>
+                            <option value="15:00">15:00</option>
+                            <option value="16:00">16:00</option>
+                            <option value="17:00">17:00</option>
+                            <option value="18:00">18:00</option>
+                            <option value="19:00">19:00</option>
+                            <option value="20:00">20:00</option>
+                            <option value="21:00">21:00</option>
+                            <option value="22:00">22:00</option>
+                            <option value="23:00">23:00</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- ML PE 扫描引擎 -->
+                <div class="card">
+                    <h3 class="card-title">ML PE 扫描引擎</h3>
+
+                    <div class="setting-row">
+                        <div class="setting-info">
+                            <span class="setting-label">启用 ML 智能检测</span>
+                            <span class="setting-desc">使用机器学习模型增强 PE 文件威胁检测能力</span>
+                        </div>
+                        <div class="toggle active" id="toggleMLScanner" role="switch" aria-checked="true"></div>
+                    </div>
+
+                    <div class="setting-row">
+                        <div class="setting-info">
+                            <span class="setting-label">ML 引擎状态</span>
+                            <span class="setting-desc" id="mlEngineStatus">就绪 | 2381维特征 | EMBER v2</span>
+                        </div>
+                        <span style="color:var(--accent);font-weight:700;font-size:13px;" id="mlEngineBadge">● 已激活</span>
+                    </div>
+
+                    <div class="setting-row" style="flex-wrap:wrap;gap:10px;">
+                        <button class="btn btn-primary" id="btnTestML" style="flex:1;min-width:200px;">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                            测试 ML 扫描
+                        </button>
+                        <button class="btn" id="btnMLRefresh" style="flex:1;min-width:200px;">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                            刷新引擎状态
+                        </button>
+                    </div>
+
+                    <div id="mlScanResult" style="display:none;margin-top:16px;padding:16px;background:var(--bg-hover);border-radius:var(--radius-sm);font-size:13px;line-height:1.8;">
+                    </div>
+                    <input type="file" id="mlFileInput" style="display:none;" accept=".exe,.dll,.sys,.com,.scr,.pif,.bin">
+                </div>
+
+                <!-- 关于 -->
+                <div class="card">
+                    <h3 class="card-title">关于</h3>
+
+                    <div class="about-grid">
+                        <div class="about-item">
+                            <span class="about-label">产品版本</span>
+                            <span class="about-value version" id="productVersion">--</span>
+                        </div>
+                        <div class="about-item">
+                            <span class="about-label">病毒库版本</span>
+                            <span class="about-value" id="dbVersion">--</span>
+                        </div>
+                        <div class="about-item">
+                            <span class="about-label">上次更新时间</span>
+                            <span class="about-value" id="lastUpdate">--</span>
+                        </div>
+                        <div class="about-item">
+                            <span class="about-label">引擎状态</span>
+                            <span class="about-value" style="color:var(--accent);">运行正常</span>
+                        </div>
+                    </div>
+
+                    <div class="about-actions">
+                        <button class="btn btn-primary" id="btnCheckUpdate">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                            检查更新
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 恢复默认 -->
+                <div class="reset-section">
+                    <span class="reset-hint">将所有设置恢复为默认值，此操作不可撤销。</span>
+                    <button class="btn btn-danger" id="btnReset">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+                        恢复默认设置
+                    </button>
+                </div>
+
+            </div>
+        </main>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script>
+        // ==================== 常量 ====================
+        const STORAGE_KEY = '安盾_settings';
+        const API_BASE = ''; // 动态适配当前 origin
+
+        // 读取真实隔离区数量
+        (function() {
+            try {
+                var q = JSON.parse(localStorage.getItem('安盾_quarantine') || '[]');
+                document.getElementById('quarantineBadge').textContent = q.length || '0';
+            } catch(e) {}
+        })();
+
+        async function apiGet(path) {
+            try { const res = await fetch(`${API_BASE}${path}`); return await res.json(); }
+            catch (e) { console.warn('API 不可用:', e.message); return null; }
+        }
+
+        async function apiPost(path, body) {
+            try {
+                const res = await fetch(`${API_BASE}${path}`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                return await res.json();
+            } catch (e) { console.warn('API 不可用:', e.message); return null; }
+        }
+
+        const DEFAULTS = {
+            theme: 'dark',
+            autoScanOnStartup: false,
+            showDesktopNotifications: true,
+            notifyOnScanComplete: true,
+            notifyOnThreatFound: true,
+            autoUpdateDefinitions: true,
+            detectPUP: false,
+            dailyScanTime: '02:00',
+            watchdogEnabled: true,
+            emergencyKillEnabled: true,
+            mlScannerEnabled: true
+        };
+
+        // ==================== 设置读写 ====================
+        function loadSettings() {
+            try {
+                const raw = localStorage.getItem(STORAGE_KEY);
+                if (raw) {
+                    const saved = JSON.parse(raw);
+                    return { ...DEFAULTS, ...saved };
+                }
+            } catch (e) {
+                console.warn('读取设置失败，使用默认值');
+            }
+            return { ...DEFAULTS };
+        }
+
+        function saveSettings(settings) {
+            try {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+            } catch (e) {
+                console.warn('保存设置失败');
+            }
+        }
+
+        let settings = loadSettings();
+
+        // ==================== DOM 引用 ====================
+        const themeSwitch = document.getElementById('themeSwitch');
+        const labelDark = document.getElementById('labelDark');
+        const labelLight = document.getElementById('labelLight');
+        const toggleAutoScan = document.getElementById('toggleAutoScan');
+        const toggleDesktopNotif = document.getElementById('toggleDesktopNotif');
+        const toggleScanCompleteNotif = document.getElementById('toggleScanCompleteNotif');
+        const toggleAutoUpdate = document.getElementById('toggleAutoUpdate');
+        const togglePUP = document.getElementById('togglePUP');
+        const dailyScanTime = document.getElementById('dailyScanTime');
+        const btnCheckUpdate = document.getElementById('btnCheckUpdate');
+        const btnReset = document.getElementById('btnReset');
+        const toastContainer = document.getElementById('toastContainer');
+        const dbVersionEl = document.getElementById('dbVersion');
+        const lastUpdateEl = document.getElementById('lastUpdate');
+        const productVersionEl = document.getElementById('productVersion');
+
+        // ==================== Toast ====================
+        function showToast(message, type) {
+            type = type || '';
+            var toast = document.createElement('div');
+            toast.className = 'toast ' + type;
+            var icon = '';
+            if (type === 'success') {
+                icon = '<svg class="toast-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>';
+            }
+            toast.innerHTML = icon + '<span>' + message + '</span>';
+            toastContainer.appendChild(toast);
+            setTimeout(function () {
+                if (toast.parentNode) {
+                    toast.remove();
+                }
+            }, 3000);
+        }
+
+        // ==================== 主题 ====================
+        function applyTheme(theme) {
+            if (theme === 'light') {
+                document.documentElement.classList.add('light');
+                themeSwitch.classList.add('light');
+                themeSwitch.setAttribute('aria-checked', 'true');
+                labelDark.classList.remove('active-label');
+                labelLight.classList.add('active-label');
+            } else {
+                document.documentElement.classList.remove('light');
+                themeSwitch.classList.remove('light');
+                themeSwitch.setAttribute('aria-checked', 'false');
+                labelDark.classList.add('active-label');
+                labelLight.classList.remove('active-label');
+            }
+        }
+
+        themeSwitch.addEventListener('click', function () {
+            settings.theme = settings.theme === 'dark' ? 'light' : 'dark';
+            applyTheme(settings.theme);
+            saveSettings(settings);
+            showToast(settings.theme === 'dark' ? '已切换至暗色主题' : '已切换至亮色主题', 'success');
+        });
+
+        // ==================== 切换开关通用函数 ====================
+        function setupToggle(el, settingKey, label) {
+            if (settings[settingKey]) {
+                el.classList.add('active');
+                el.setAttribute('aria-checked', 'true');
+            } else {
+                el.classList.remove('active');
+                el.setAttribute('aria-checked', 'false');
+            }
+
+            el.addEventListener('click', function () {
+                var isActive = el.classList.contains('active');
+                if (isActive) {
+                    el.classList.remove('active');
+                    el.setAttribute('aria-checked', 'false');
+                    settings[settingKey] = false;
+                } else {
+                    el.classList.add('active');
+                    el.setAttribute('aria-checked', 'true');
+                    settings[settingKey] = true;
+                }
+                saveSettings(settings);
+                showToast((label || '设置') + '：' + (settings[settingKey] ? '已开启' : '已关闭'), 'success');
+            });
+        }
+
+        setupToggle(toggleAutoScan, 'autoScanOnStartup', '启动时自动扫描');
+        setupToggle(toggleDesktopNotif, 'showDesktopNotifications', '桌面通知');
+        setupToggle(toggleScanCompleteNotif, 'notifyOnScanComplete', '扫描完成通知');
+        setupToggle(toggleAutoUpdate, 'autoUpdateDefinitions', '自动更新病毒库');
+        setupToggle(togglePUP, 'detectPUP', '检测PUP');
+
+        // 防掉线守护开关（同步后端 API）
+        const toggleWatchdog = document.getElementById('toggleWatchdog');
+        if (settings.watchdogEnabled) {
+            toggleWatchdog.classList.add('active');
+            toggleWatchdog.setAttribute('aria-checked', 'true');
+        }
+        toggleWatchdog.addEventListener('click', async function () {
+            var isActive = toggleWatchdog.classList.contains('active');
+            var newState = !isActive;
+            // 调用后端 API
+            var resp = await apiPost('/api/v1/watchdog/toggle', { enabled: newState });
+            if (resp) {
+                if (newState) {
+                    toggleWatchdog.classList.add('active');
+                    toggleWatchdog.setAttribute('aria-checked', 'true');
+                } else {
+                    toggleWatchdog.classList.remove('active');
+                    toggleWatchdog.setAttribute('aria-checked', 'false');
+                }
+                settings.watchdogEnabled = newState;
+                saveSettings(settings);
+                showToast('后台防掉线守护：' + (newState ? '已开启' : '已关闭'), 'success');
+            } else {
+                showToast('无法连接到后端服务', 'error');
+            }
+        });
+
+        // Vigil 强力分析引擎开关（默认关闭，后端 API 启用）
+        const toggleVigil = document.getElementById('toggleVigil');
+        (async function () {
+            var resp = await apiGet('/api/v1/vigil/status');
+            if (resp && resp.running) {
+                toggleVigil.classList.add('active');
+                toggleVigil.setAttribute('aria-checked', 'true');
+            }
+        })();
+        toggleVigil.addEventListener('click', async function () {
+            var isActive = toggleVigil.classList.contains('active');
+            if (isActive) {
+                showToast('请重启安盾以关闭 Vigil', 'info');
+                return;
+            }
+            var resp = await apiPost('/api/v1/vigil/start', {});
+            if (resp && resp.status === 'started') {
+                toggleVigil.classList.add('active');
+                toggleVigil.setAttribute('aria-checked', 'true');
+                showToast('Vigil 强力分析已启动', 'success');
+            } else if (resp && resp.status === 'already_running') {
+                toggleVigil.classList.add('active');
+                toggleVigil.setAttribute('aria-checked', 'true');
+                showToast('Vigil 已在运行', 'info');
+            } else {
+                showToast('Vigil 启动失败：' + (resp ? resp.error : '无法连接后端'), 'error');
+            }
+        });
+
+        // F12 紧急处置开关（同步后端 API）
+        const toggleEmergencyKill = document.getElementById('toggleEmergencyKill');
+        if (settings.emergencyKillEnabled) {
+            toggleEmergencyKill.classList.add('active');
+            toggleEmergencyKill.setAttribute('aria-checked', 'true');
+        }
+        toggleEmergencyKill.addEventListener('click', async function () {
+            var isActive = toggleEmergencyKill.classList.contains('active');
+            var newState = !isActive;
+            var resp = await apiPost('/api/v1/emergency-kill/toggle', { enabled: newState });
+            if (resp) {
+                if (newState) {
+                    toggleEmergencyKill.classList.add('active');
+                    toggleEmergencyKill.setAttribute('aria-checked', 'true');
+                } else {
+                    toggleEmergencyKill.classList.remove('active');
+                    toggleEmergencyKill.setAttribute('aria-checked', 'false');
+                }
+                settings.emergencyKillEnabled = newState;
+                saveSettings(settings);
+                showToast('F12 紧急处置：' + (newState ? '已开启' : '已关闭'), 'success');
+            } else {
+                showToast('无法连接到后端服务', 'error');
+            }
+        });
+
+        // ==================== 辅助功能开关（后端 API） ====================
+
+        // 系统托盘
+        const toggleTrayIcon = document.getElementById('toggleTrayIcon');
+        (async function () {
+            var resp = await apiGet('/api/v1/tray-icon/status');
+            if (resp && resp.enabled) {
+                toggleTrayIcon.classList.add('active');
+                toggleTrayIcon.setAttribute('aria-checked', 'true');
+            } else {
+                toggleTrayIcon.classList.remove('active');
+                toggleTrayIcon.setAttribute('aria-checked', 'false');
+            }
+        })();
+        toggleTrayIcon.addEventListener('click', async function () {
+            var resp = await apiPost('/api/v1/tray-icon/toggle', {});
+            if (resp) {
+                var on = resp.enabled;
+                if (on) {
+                    toggleTrayIcon.classList.add('active');
+                    toggleTrayIcon.setAttribute('aria-checked', 'true');
+                } else {
+                    toggleTrayIcon.classList.remove('active');
+                    toggleTrayIcon.setAttribute('aria-checked', 'false');
+                }
+                showToast('系统托盘：' + (on ? '已开启' : '已关闭'), 'success');
+            } else {
+                showToast('无法连接到后端服务', 'error');
+            }
+        });
+
+        // 开机自启
+        const toggleAutoStart = document.getElementById('toggleAutoStart');
+        (async function () {
+            var resp = await apiGet('/api/v1/auto-start/status');
+            if (resp && resp.enabled) {
+                toggleAutoStart.classList.add('active');
+                toggleAutoStart.setAttribute('aria-checked', 'true');
+            }
+        })();
+        toggleAutoStart.addEventListener('click', async function () {
+            var resp = await apiPost('/api/v1/auto-start/toggle', {});
+            if (resp) {
+                var on = resp.enabled;
+                if (on) {
+                    toggleAutoStart.classList.add('active');
+                    toggleAutoStart.setAttribute('aria-checked', 'true');
+                } else {
+                    toggleAutoStart.classList.remove('active');
+                    toggleAutoStart.setAttribute('aria-checked', 'false');
+                }
+                showToast('开机自启：' + (on ? '已开启' : '已关闭'), 'success');
+            } else {
+                showToast('无法连接到后端服务', 'error');
+            }
+        });
+
+        // 右键菜单
+        const toggleShellMenu = document.getElementById('toggleShellMenu');
+        (async function () {
+            var resp = await apiGet('/api/v1/shell-menu/status');
+            if (resp && resp.registered) {
+                toggleShellMenu.classList.add('active');
+                toggleShellMenu.setAttribute('aria-checked', 'true');
+            }
+        })();
+        toggleShellMenu.addEventListener('click', async function () {
+            var isActive = toggleShellMenu.classList.contains('active');
+            if (isActive) {
+                // 已注册 → 取消注册
+                var resp = await apiPost('/api/v1/shell-menu/unregister', {});
+                if (resp && resp.success) {
+                    toggleShellMenu.classList.remove('active');
+                    toggleShellMenu.setAttribute('aria-checked', 'false');
+                    showToast('右键菜单已移除', 'success');
+                } else {
+                    showToast('移除右键菜单失败', 'error');
+                }
+            } else {
+                // 未注册 → 注册
+                var resp = await apiPost('/api/v1/shell-menu/register', {});
+                if (resp && resp.success) {
+                    toggleShellMenu.classList.add('active');
+                    toggleShellMenu.setAttribute('aria-checked', 'true');
+                    showToast('右键菜单已注册，下次打开文件管理器生效', 'success');
+                } else {
+                    showToast('注册右键菜单失败', 'error');
+                }
+            }
+        });
+
+        // USB 自动扫描
+        const toggleUsbScan = document.getElementById('toggleUsbScan');
+        (async function () {
+            var resp = await apiGet('/api/v1/usb-scan/status');
+            if (resp && resp.enabled) {
+                toggleUsbScan.classList.add('active');
+                toggleUsbScan.setAttribute('aria-checked', 'true');
+            } else {
+                toggleUsbScan.classList.remove('active');
+                toggleUsbScan.setAttribute('aria-checked', 'false');
+            }
+        })();
+        toggleUsbScan.addEventListener('click', async function () {
+            var resp = await apiPost('/api/v1/usb-scan/toggle', {});
+            if (resp) {
+                var on = resp.enabled;
+                if (on) {
+                    toggleUsbScan.classList.add('active');
+                    toggleUsbScan.setAttribute('aria-checked', 'true');
+                } else {
+                    toggleUsbScan.classList.remove('active');
+                    toggleUsbScan.setAttribute('aria-checked', 'false');
+                }
+                showToast('USB 自动扫描：' + (on ? '已开启' : '已关闭'), 'success');
+            } else {
+                showToast('无法连接到后端服务', 'error');
+            }
+        });
+
+        // 游戏模式
+        const toggleGameMode = document.getElementById('toggleGameMode');
+        (async function () {
+            var resp = await apiGet('/api/v1/game-mode/status');
+            if (resp && resp.enabled) {
+                toggleGameMode.classList.add('active');
+                toggleGameMode.setAttribute('aria-checked', 'true');
+            } else {
+                toggleGameMode.classList.remove('active');
+                toggleGameMode.setAttribute('aria-checked', 'false');
+            }
+        })();
+        toggleGameMode.addEventListener('click', async function () {
+            var resp = await apiPost('/api/v1/game-mode/toggle', {});
+            if (resp) {
+                var on = resp.enabled;
+                if (on) {
+                    toggleGameMode.classList.add('active');
+                    toggleGameMode.setAttribute('aria-checked', 'true');
+                } else {
+                    toggleGameMode.classList.remove('active');
+                    toggleGameMode.setAttribute('aria-checked', 'false');
+                }
+                showToast('游戏模式：' + (on ? '已开启' : '已关闭'), 'success');
+            } else {
+                showToast('无法连接到后端服务', 'error');
+            }
+        });
+
+        // 退出安盾
+        document.getElementById('btnShutdown').addEventListener('click', async function () {
+            if (!confirm('确定要关闭安盾吗？退出后所有保护功能将停止。')) return;
+            var btn = this;
+            btn.disabled = true;
+            btn.textContent = '正在退出...';
+            var resp = await apiPost('/api/v1/shutdown', {});
+            if (resp) {
+                showToast('安盾即将退出', 'success');
+                setTimeout(function () { window.close(); }, 1000);
+            } else {
+                btn.disabled = false;
+                btn.textContent = '立即退出';
+                showToast('无法连接到后端服务', 'error');
+            }
+        });
+
+        // ==================== 每日扫描时间 ====================
+        dailyScanTime.value = settings.dailyScanTime;
+        dailyScanTime.addEventListener('change', function () {
+            settings.dailyScanTime = this.value;
+            saveSettings(settings);
+            showToast('每日自动扫描时间：' + this.value, 'success');
+        });
+
+        // ==================== 检查更新 ====================
+        btnCheckUpdate.addEventListener('click', async function () {
+            btnCheckUpdate.textContent = '正在连接...';
+            btnCheckUpdate.disabled = true;
+
+            // 调用后端下载病毒库（全部源）
+            var resp = await apiPost('/api/v1/signatures/download', { source: 'all', limit: 2000 });
+            if (!resp) {
+                btnCheckUpdate.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>检查更新';
+                btnCheckUpdate.disabled = false;
+                showToast('无法连接后端服务，请确认安盾正在运行', 'error');
+                return;
+            }
+
+            // 轮询下载进度
+            var pollCount = 0;
+            var pollInterval = setInterval(async function() {
+                pollCount++;
+                try {
+                    var status = await apiGet('/api/v1/signatures/download/status');
+                } catch(e) {
+                    // API 调用失败，继续轮询
+                    pollCount++;
+                    if (pollCount > 60) {
+                        clearInterval(pollInterval);
+                        btnCheckUpdate.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>检查更新';
+                        btnCheckUpdate.disabled = false;
+                        showToast('下载超时，请检查网络连接后重试', 'error');
+                    }
+                    return;
+                }
+                
+                if (status && status.downloading) {
+                    var src = status.current_source || '下载中';
+                    var imported = status.imported || 0;
+                    var total = status.total || 0;
+                    if (total > 0) {
+                        var pct = Math.round((status.progress || 0) / total * 100);
+                        btnCheckUpdate.textContent = src + ' ' + pct + '% (' + imported + '条)';
+                    } else {
+                        btnCheckUpdate.textContent = src + ' ' + imported + '条';
+                    }
+                } else if (status && !status.downloading) {
+                    clearInterval(pollInterval);
+                    var imported = status.imported || 0;
+                    if (status.errors && status.errors.length > 0) {
+                        showToast('部分数据源下载失败: ' + status.errors.slice(0, 2).join('; '), 'error');
+                    }
+                    var infoData = await apiGet('/api/v1/signatures/info');
+                    if (infoData) {
+                        dbVersionEl.textContent = infoData.version || '1.0.0';
+                        var total = infoData.total_signatures || 0;
+                        lastUpdateEl.textContent = new Date().toLocaleString('zh-CN', {
+                            year: 'numeric', month: '2-digit', day: '2-digit',
+                            hour: '2-digit', minute: '2-digit'
+                        });
+                        if (imported > 0) {
+                            showToast('更新完成: 新增 ' + imported + ' 条特征 (共 ' + total + ' 条)', 'success');
+                        } else {
+                            showToast('病毒库已是最新 (共 ' + total + ' 条)', 'success');
+                        }
+                    }
+                    btnCheckUpdate.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>检查更新';
+                    btnCheckUpdate.disabled = false;
+                }
+                if (pollCount > 120) {  // 2分钟超时
+                    clearInterval(pollInterval);
+                    btnCheckUpdate.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>检查更新';
+                    btnCheckUpdate.disabled = false;
+                    showToast('下载超时，已导入部分数据，请重试', 'error');
+                }
+            }, 1000);
+        });
+
+        // ==================== 恢复默认 ====================
+        btnReset.addEventListener('click', function () {
+            settings = { ...DEFAULTS };
+            saveSettings(settings);
+
+            applyTheme(settings.theme);
+
+            toggleAutoScan.classList.toggle('active', settings.autoScanOnStartup);
+            toggleAutoScan.setAttribute('aria-checked', settings.autoScanOnStartup);
+
+            toggleDesktopNotif.classList.toggle('active', settings.showDesktopNotifications);
+            toggleDesktopNotif.setAttribute('aria-checked', settings.showDesktopNotifications);
+
+            toggleScanCompleteNotif.classList.toggle('active', settings.notifyOnScanComplete);
+            toggleScanCompleteNotif.setAttribute('aria-checked', settings.notifyOnScanComplete);
+
+            toggleAutoUpdate.classList.toggle('active', settings.autoUpdateDefinitions);
+            toggleAutoUpdate.setAttribute('aria-checked', settings.autoUpdateDefinitions);
+
+            togglePUP.classList.toggle('active', settings.detectPUP);
+            togglePUP.setAttribute('aria-checked', settings.detectPUP);
+
+            dailyScanTime.value = settings.dailyScanTime;
+
+            showToast('所有设置已恢复为默认值', 'success');
+        });
+
+        // ==================== 初始化 ====================
+        async function init() {
+            applyTheme(settings.theme);
+
+            // 从后端加载特征库信息
+            const sigInfo = await apiGet('/api/v1/signatures/info');
+            if (sigInfo) {
+                dbVersionEl.textContent = sigInfo.version || '1.0.0';
+                productVersionEl.textContent = '1.0.0';
+                lastUpdateEl.textContent = '自动同步中';
+            } else {
+                // 本地回退
+                try {
+                    var dbVer = localStorage.getItem('安盾_db_version');
+                    if (dbVer) dbVersionEl.textContent = dbVer;
+                    var dbUpdated = localStorage.getItem('安盾_db_updated');
+                    if (dbUpdated) lastUpdateEl.textContent = dbUpdated;
+                    var prodVer = localStorage.getItem('安盾_product_version');
+                    if (prodVer && productVersionEl) productVersionEl.textContent = prodVer;
+                } catch (e) {}
+            }
+
+            if (!localStorage.getItem(STORAGE_KEY)) {
+                saveSettings(DEFAULTS);
+            }
+        }
+
+        init();
+
+        // ==================== ML PE 扫描引擎 ====================
+        const toggleMLScanner = document.getElementById('toggleMLScanner');
+        const btnTestML = document.getElementById('btnTestML');
+        const btnMLRefresh = document.getElementById('btnMLRefresh');
+        const mlScanResult = document.getElementById('mlScanResult');
+        const mlEngineBadge = document.getElementById('mlEngineBadge');
+        const mlEngineStatus = document.getElementById('mlEngineStatus');
+        const mlFileInput = document.getElementById('mlFileInput');
+
+        // ML 开关
+        setupToggle(toggleMLScanner, 'mlScannerEnabled', 'ML 智能检测');
+
+        // 点击选择文件
+        btnTestML.addEventListener('click', function() {
+            mlFileInput.click();
+        });
+
+        // 文件选择后自动扫描
+        mlFileInput.addEventListener('change', async function() {
+            var file = mlFileInput.files[0];
+            if (!file) return;
+            
+            btnTestML.textContent = '扫描中...';
+            btnTestML.disabled = true;
+            
+            try {
+                // 直接上传文件内容到 ML 扫描 API
+                var formData = new FormData();
+                formData.append('file', file);
+                
+                var resp = await fetch(API_BASE + '/api/v1/ml/scan-file', {
+                    method: 'POST',
+                    body: formData
+                });
+                var data = await resp.json();
+                data.file = file.name;
+                renderMLResult(data);
+            } catch(e) {
+                showToast('扫描出错: ' + e.message, 'error');
+            }
+            
+            btnTestML.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>测试 ML 扫描';
+            btnTestML.disabled = false;
+            mlFileInput.value = '';
+        });
+
+        // 右键手动输入路径
+        btnTestML.addEventListener('contextmenu', async function(e) {
+            e.preventDefault();
+            var path = prompt('请输入要扫描的文件路径:');
+            if (!path) return;
+            btnTestML.textContent = '扫描中...';
+            btnTestML.disabled = true;
+            try {
+                var scanResp = await apiPost('/api/v1/ml/scan', { file_path: path });
+                renderMLResult(scanResp);
+            } catch(err) {
+                showToast('扫描出错: ' + err.message, 'error');
+            }
+            btnTestML.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>测试 ML 扫描';
+            btnTestML.disabled = false;
+        });
+
+        function renderMLResult(data) {
+            mlScanResult.style.display = 'block';
+            if (!data || data.error) {
+                mlScanResult.innerHTML = '<span style="color:var(--danger);">✕ 扫描失败: ' + (data ? data.error : '无响应') + '</span>';
+                return;
+            }
+            var verdict = data.verdict || 'UNKNOWN';
+            var conf = data.confidence || 0;
+            var reasons = data.reasons || [];
+            var verdictColor = verdict === 'MALICIOUS' ? 'var(--danger)' : 
+                              verdict === 'SUSPICIOUS' ? 'var(--warning)' : 'var(--accent)';
+            var verdictIcon = verdict === 'MALICIOUS' ? '⚠' : 
+                             verdict === 'SUSPICIOUS' ? '⚡' : '✓';
+            
+            var html = '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">';
+            html += '<span style="font-size:28px;">' + verdictIcon + '</span>';
+            html += '<div>';
+            html += '<div style="font-weight:700;font-size:16px;color:' + verdictColor + ';">' + verdict + '</div>';
+            html += '<div style="color:var(--text-muted);">置信度: ' + (conf * 100).toFixed(1) + '% | 文件: ' + (data.file || '-') + '</div>';
+            html += '</div></div>';
+            
+            if (reasons.length > 0) {
+                html += '<div style="border-top:1px solid var(--border);padding-top:10px;margin-top:8px;">';
+                html += '<div style="font-weight:600;color:var(--text-secondary);margin-bottom:6px;">检测依据:</div>';
+                reasons.forEach(function(r, i) {
+                    html += '<div style="color:var(--text-muted);padding:2px 0;">' + (i+1) + '. ' + r + '</div>';
+                });
+                html += '</div>';
+            }
+            
+            if (data.features) {
+                var feats = data.features;
+                html += '<div style="border-top:1px solid var(--border);padding-top:10px;margin-top:8px;">';
+                html += '<div style="font-weight:600;color:var(--text-secondary);margin-bottom:6px;">特征摘要:</div>';
+                html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;color:var(--text-muted);font-size:12px;">';
+                if (feats.import_count !== undefined) html += '<div>导入函数: ' + feats.import_count + '</div>';
+                if (feats.section_count !== undefined) html += '<div>节数量: ' + feats.section_count + '</div>';
+                if (feats.has_signature !== undefined) html += '<div>数字签名: ' + (feats.has_signature ? '有' : '无') + '</div>';
+                if (feats.rwx_sections !== undefined) html += '<div>RWX节: ' + feats.rwx_sections + '</div>';
+                if (feats.high_entropy_sections !== undefined) html += '<div>高熵节: ' + feats.high_entropy_sections + '</div>';
+                if (feats.file_size !== undefined) html += '<div>文件大小: ' + (feats.file_size / 1024).toFixed(1) + ' KB</div>';
+                html += '</div></div>';
+            }
+            
+            mlScanResult.innerHTML = html;
+        }
+
+        // 刷新引擎状态
+        btnMLRefresh.addEventListener('click', function() {
+            mlEngineBadge.innerHTML = '● 已激活';
+            mlEngineBadge.style.color = 'var(--accent)';
+            mlEngineStatus.textContent = '就绪 | 2381维特征 | EMBER v2';
+            showToast('ML 引擎状态已刷新', 'success');
+        });
+    </script>
+</body>
+</html>

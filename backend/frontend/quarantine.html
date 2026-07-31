@@ -1,0 +1,927 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>隔离区 - 安盾</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Syne:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script>(function(){try{var s=JSON.parse(localStorage.getItem('安盾_settings')||'{}');if(s.theme==='light')document.documentElement.classList.add('light');}catch(e){}}())</script>
+<style>
+:root {
+  --bg-primary: #0a0a12;
+  --bg-secondary: #111120;
+  --bg-card: #16162a;
+  --bg-hover: #1e1e3a;
+  --border: #2a2a45;
+  --border-light: #3a3a55;
+  --text-primary: #f0f0f8;
+  --text-secondary: #a0a0be;
+  --text-muted: #6a6a88;
+  --accent: #3b82f6;
+  --accent-dim: rgba(59, 130, 246, 0.12);
+  --danger: #ef4444;
+  --danger-dim: rgba(239, 68, 68, 0.12);
+  --warning: #ffcc00;
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 24px;
+  --transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+*,
+*::before,
+*::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: 'DM Sans', -apple-system, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Syne', sans-serif;
+}
+
+.app {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ========== SIDEBAR ========== */
+.sidebar {
+  width: 240px;
+  min-width: 240px;
+  height: 100vh;
+  position: fixed;
+  top: 0;
+  left: 0;
+  background: rgba(14, 14, 20, 0.85);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  z-index: 100;
+  padding: 28px 18px;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 10px;
+  margin-bottom: 40px;
+}
+
+.logo-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, var(--accent), #0099cc);
+  display: grid;
+  place-items: center;
+  box-shadow: 0 8px 24px rgba(0, 217, 192, 0.25);
+}
+
+.logo-icon svg {
+  width: 22px;
+  height: 22px;
+  fill: white;
+}
+
+.logo-text {
+  font-family: 'Syne', sans-serif;
+  font-weight: 700;
+  font-size: 20px;
+  letter-spacing: -0.5px;
+  color: var(--text-primary);
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 14px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  transition: var(--transition);
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.nav-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.nav-item.active {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-color: rgba(0, 217, 192, 0.2);
+}
+
+.nav-item svg {
+  width: 20px;
+  height: 20px;
+  opacity: 0.8;
+}
+
+.nav-badge {
+  margin-left: auto;
+  background: var(--danger-dim);
+  color: var(--danger);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 20px;
+}
+
+.nav-group {
+  padding: 18px 14px 6px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  user-select: none;
+}
+
+.nav-group:first-child {
+  padding-top: 0;
+}
+
+
+/* ========== MAIN CONTENT ========== */
+.main {
+  margin-left: 240px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* ========== HEADER ========== */
+.header {
+  padding: 28px 36px 0;
+}
+
+.header-top {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 6px;
+}
+
+.header h1 {
+  font-family: 'Syne', sans-serif;
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  background: var(--accent);
+  color: var(--bg-primary);
+  border-radius: 20px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 0 9px;
+}
+
+.badge:empty {
+  display: none;
+}
+
+.header-sub {
+  color: var(--text-secondary);
+  font-size: 14px;
+  padding-left: 0;
+}
+
+/* ========== CONTENT WRAPPER ========== */
+.content {
+  padding: 24px 36px 40px;
+  flex: 1;
+}
+
+/* ========== ACTION BAR ========== */
+.action-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  border-radius: var(--radius-sm);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: var(--transition);
+  white-space: nowrap;
+}
+
+.btn-accent {
+  background: var(--accent);
+  color: var(--bg-primary);
+}
+
+.btn-accent:hover {
+  background: #00e6cc;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(0, 217, 192, 0.3);
+}
+
+.btn-danger {
+  background: var(--danger-dim);
+  color: var(--danger);
+  border: 1px solid rgba(255, 77, 109, 0.2);
+}
+
+.btn-danger:hover {
+  background: rgba(255, 77, 109, 0.2);
+  transform: translateY(-1px);
+}
+
+.btn-sm {
+  padding: 6px 14px;
+  font-size: 13px;
+  border-radius: 8px;
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+}
+
+.btn-ghost:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border-light);
+}
+
+.btn-ghost-danger {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+}
+
+.btn-ghost-danger:hover {
+  background: var(--danger-dim);
+  color: var(--danger);
+  border-color: rgba(255, 77, 109, 0.3);
+}
+
+/* ========== TABLE ========== */
+.table-wrapper {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.table-header-row {
+  display: grid;
+  grid-template-columns: 1fr 200px 160px 130px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+
+.quarantine-item {
+  display: grid;
+  grid-template-columns: 1fr 200px 160px 130px;
+  padding: 16px 20px;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  transition: var(--transition);
+}
+
+.quarantine-item:last-child {
+  border-bottom: none;
+}
+
+.quarantine-item:hover {
+  background: var(--bg-hover);
+}
+
+.quarantine-item.removing {
+  opacity: 0;
+  transform: translateX(30px);
+  transition: all 0.3s ease;
+}
+
+.file-info {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.file-icon {
+  width: 42px;
+  height: 42px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.file-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.file-details {
+  min-width: 0;
+}
+
+.file-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.badge-risk {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+.badge-risk-high {
+  background: var(--danger-dim);
+  color: var(--danger);
+}
+
+.badge-risk-medium {
+  background: rgba(255, 204, 0, 0.12);
+  color: #e6b800;
+}
+
+.badge-risk-low {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.threat-type {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.date-col {
+  color: var(--text-secondary);
+  font-size: 13.5px;
+}
+
+.actions-col {
+  display: flex;
+  gap: 8px;
+}
+
+/* ========== EMPTY STATE ========== */
+.empty-state {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 70px 20px;
+  text-align: center;
+}
+
+.empty-state.visible {
+  display: flex;
+}
+
+.empty-state .empty-icon {
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 20px;
+  color: var(--text-muted);
+}
+
+.empty-state .empty-icon svg {
+  width: 36px;
+  height: 36px;
+}
+
+.empty-state h3 {
+  font-family: 'Syne', sans-serif;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+
+.empty-state p {
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+/* ========== TOAST ========== */
+.toast-container {
+  position: fixed;
+  top: 24px;
+  right: 24px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.toast {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  padding: 14px 20px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  animation: toastIn 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+  pointer-events: auto;
+  min-width: 260px;
+}
+
+.toast.removing {
+  animation: toastOut 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+.toast .toast-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.toast-success .toast-icon {
+  color: var(--accent);
+}
+
+.toast-danger .toast-icon {
+  color: var(--danger);
+}
+
+@keyframes toastIn {
+  from {
+    opacity: 0;
+    transform: translateX(60px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@keyframes toastOut {
+  from {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(60px) scale(0.95);
+  }
+}
+
+/* ========== RESPONSIVE ========== */
+@media (max-width: 900px) {
+  .table-header-row,
+  .quarantine-item {
+    grid-template-columns: 1fr 140px 120px 100px;
+  }
+}
+
+@media (max-width: 720px) {
+  .sidebar {
+    width: 200px;
+    min-width: 200px;
+  }
+  .main {
+    margin-left: 200px;
+  }
+}
+
+  html.light {
+    --bg-primary: #f5f5f8;
+    --bg-secondary: #eeeef3;
+    --bg-card: #ffffff;
+    --bg-hover: #e8e8f0;
+    --border: #d8d8e4;
+    --border-light: #c8c8d4;
+    --text-primary: #1a1a2e;
+    --text-secondary: #5a5a6e;
+    --text-muted: #8a8a9e;
+  }
+  html.light .sidebar { background: rgba(255, 255, 255, 0.85); }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ===== SIDEBAR ===== -->
+  <aside class="sidebar">
+    <div class="logo">
+      <div class="logo-icon">
+        <svg viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg>
+      </div>
+      <span class="logo-text">安盾</span>
+    </div>
+                <nav class="nav">
+                <div class="nav-group">核心功能</div>
+                <a class="nav-item" href="index.html">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+                    概览
+                </a>
+                <a class="nav-item" href="scan.html">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="m14.31 8 5.74 9.94M9.69 8h11.48M7.38 12l5.74-9.94M9.69 16 3.95 6.06M14.31 16H2.83M16.62 12l-5.74 9.94"/></svg>
+                    病毒扫描
+                </a>
+                <a class="nav-item" href="history.html">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="10"/><path d="M3.05 11a9 9 0 1 1 .5 4"/></svg>
+                    病毒记忆
+                </a>
+                <div class="nav-group">安全防护</div>
+                <a class="nav-item" href="protection.html">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                    实时保护
+                </a>
+                <a class="nav-item" href="vulnerabilities.html">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"/><line x1="16" y1="8" x2="2" y2="22"/><line x1="17.5" y1="15" x2="9" y2="15"/></svg>
+                    漏洞修复
+                </a>
+                <a class="nav-item" href="index.html#threat-intel">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/></svg>
+                    威胁情报
+                </a>
+                <div class="nav-group">管理中心</div>
+                <a class="nav-item active" href="quarantine.html">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="9" x2="15" y2="15"/><line x1="15" y1="9" x2="9" y2="15"/></svg>
+                    隔离区
+                    <span class="nav-badge" id="quarantineBadge">0</span>
+                </a>
+                <a class="nav-item" href="logs.html">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+                    日志报告
+                </a>
+                <div class="nav-group">高级工具</div>
+                <a class="nav-item" href="settings.html">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                    设置
+                </a>
+            </nav>
+  </aside>
+
+  <!-- ===== MAIN ===== -->
+  <main class="main">
+    <div class="header">
+      <div class="header-top">
+        <h1>隔离区</h1>
+        <span class="badge" id="itemCount">0</span>
+      </div>
+      <p class="header-sub">管理已隔离的威胁文件</p>
+    </div>
+
+    <div class="content">
+
+      <!-- ACTION BAR -->
+      <div class="action-bar" id="actionBar">
+        <button class="btn btn-accent" id="btnRestoreAll">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="1 4 1 10 7 10"/><path d="M3.5 17.5A9 9 0 102 12"/></svg>
+          全部恢复
+        </button>
+        <button class="btn btn-danger" id="btnDeleteAll">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+          全部删除
+        </button>
+      </div>
+
+      <!-- QUARANTINE TABLE -->
+      <div class="table-wrapper" id="tableWrapper">
+        <div class="table-header-row">
+          <span>文件</span>
+          <span>威胁类型</span>
+          <span>隔离日期</span>
+          <span>操作</span>
+        </div>
+        <div id="quarantineList"></div>
+      </div>
+
+      <!-- EMPTY STATE -->
+      <div class="empty-state visible" id="emptyState">
+        <div class="empty-icon">
+          <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.5">
+            <rect x="3" y="3" width="18" height="18" rx="3"/>
+            <path d="M9 10h6M9 14h6"/>
+          </svg>
+        </div>
+        <h3>隔离区为空</h3>
+        <p>没有已隔离的威胁文件，您的系统很安全</p>
+      </div>
+
+    </div>
+  </main>
+
+</div>
+
+<!-- TOAST CONTAINER -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+  (function() { try { var q = JSON.parse(localStorage.getItem('安盾_quarantine') || '[]'); document.getElementById('quarantineBadge').textContent = q.length || '0'; } catch(e) {} })();
+(function() {
+  'use strict';
+
+  const API_BASE = ''; // 动态适配当前 origin
+
+  async function apiGet(path) {
+    try { const res = await fetch(`${API_BASE}${path}`); return await res.json(); }
+    catch (e) { console.warn('API 不可用:', e.message); return null; }
+  }
+
+  async function apiPost(path, body) {
+    try {
+      const res = await fetch(`${API_BASE}${path}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      return await res.json();
+    } catch (e) { console.warn('API 不可用:', e.message); return null; }
+  }
+
+  async function apiDelete(path) {
+    try {
+      const res = await fetch(`${API_BASE}${path}`, { method: 'DELETE' });
+      return await res.json();
+    } catch (e) { console.warn('API 不可用:', e.message); return null; }
+  }
+
+  // ===== API TO LOCAL MODEL MAPPING =====
+  function mapQuarantineItem(item) {
+    // Map backend fields to frontend expected fields
+    return {
+      id: item.id,
+      name: item.original_path ? item.original_path.split('\\').pop() : (item.quarantine_name || '未知文件'),
+      originalPath: item.original_path || '',
+      threatType: item.threat_name || '未知威胁',
+      riskLevel: item.threat_level || 'medium',
+      riskLabel: (item.threat_level || 'medium') === 'critical' ? '严重' :
+                (item.threat_level || 'medium') === 'high' ? '高危' :
+                (item.threat_level || 'medium') === 'medium' ? '中危' : '低危',
+      dateQuarantined: item.quarantined_at ? new Date(item.quarantined_at).toLocaleString('zh-CN', {
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit'
+      }) : '未知',
+      fileSize: item.file_size || 0,
+      fileHash: item.file_hash || ''
+    };
+  }
+
+  async function loadQuarantine() {
+    const data = await apiGet('/api/v1/quarantine');
+    if (data && data.items) {
+      return data.items.map(mapQuarantineItem);
+    }
+    return [];
+  }
+
+  // ===== RENDER =====
+  var quarantineList = document.getElementById('quarantineList');
+  var emptyState = document.getElementById('emptyState');
+  var tableWrapper = document.getElementById('tableWrapper');
+  var itemCount = document.getElementById('itemCount');
+
+  function riskClass(level) {
+    if (level === 'high' || level === 'critical') return 'badge-risk-high';
+    if (level === 'medium') return 'badge-risk-medium';
+    return 'badge-risk-low';
+  }
+
+  function renderItem(item) {
+    var div = document.createElement('div');
+    div.className = 'quarantine-item';
+    div.dataset.id = item.id;
+    div.innerHTML =
+      '<div class="file-info">' +
+        '<div class="file-icon">' +
+          '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8">' +
+            '<path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>' +
+            '<polyline points="14 2 14 8 20 8"/>' +
+            '<line x1="16" y1="13" x2="8" y2="13"/>' +
+            '<line x1="16" y1="17" x2="8" y2="17"/>' +
+          '</svg>' +
+        '</div>' +
+        '<div class="file-details">' +
+          '<div class="file-name" title="' + escapeHtml(item.originalPath || item.name) + '">' + escapeHtml(item.name) + '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="threat-type">' +
+        '<span class="badge-risk ' + riskClass(item.riskLevel) + '">' + escapeHtml(item.riskLabel) + '</span>' +
+        ' ' + escapeHtml(item.threatType) +
+      '</div>' +
+      '<div class="date-col">' + escapeHtml(item.dateQuarantined) + '</div>' +
+      '<div class="actions-col">' +
+        '<button class="btn btn-sm btn-ghost btn-restore" data-id="' + escapeHtml(String(item.id)) + '">' +
+          '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="1 4 1 10 7 10"/><path d="M3.5 17.5A9 9 0 102 12"/></svg>' +
+          ' 恢复' +
+        '</button>' +
+        '<button class="btn btn-sm btn-ghost-danger btn-delete" data-id="' + escapeHtml(String(item.id)) + '">' +
+          '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>' +
+          ' 删除' +
+        '</button>' +
+      '</div>';
+    return div;
+  }
+
+  function escapeHtml(str) {
+    if (str == null) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  async function renderAll() {
+    var items = await loadQuarantine();
+    quarantineList.innerHTML = '';
+    if (items.length === 0) {
+      emptyState.classList.add('visible');
+      tableWrapper.style.display = 'none';
+      itemCount.textContent = '0';
+    } else {
+      emptyState.classList.remove('visible');
+      tableWrapper.style.display = '';
+      itemCount.textContent = items.length;
+      items.forEach(function(item) {
+        quarantineList.appendChild(renderItem(item));
+      });
+    }
+    updateActionBarVisibility(items);
+    updateBadge(items.length);
+  }
+
+  function updateBadge(count) {
+    var b = document.getElementById('quarantineBadge');
+    if (b) b.textContent = count || '0';
+  }
+
+  // ===== TOAST =====
+  function showToast(message, type) {
+    var container = document.getElementById('toastContainer');
+    var toast = document.createElement('div');
+    toast.className = 'toast ' + (type === 'danger' ? 'toast-danger' : 'toast-success');
+
+    var iconSvg = type === 'danger'
+      ? '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'
+      : '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>';
+
+    toast.innerHTML =
+      '<span class="toast-icon">' + iconSvg + '</span>' +
+      '<span>' + escapeHtml(message) + '</span>';
+
+    container.appendChild(toast);
+
+    setTimeout(function() {
+      toast.classList.add('removing');
+      toast.addEventListener('animationend', function() {
+        if (toast.parentNode) toast.parentNode.removeChild(toast);
+      });
+    }, 2500);
+  }
+
+  // ===== ACTIONS =====
+  async function restoreItem(id) {
+    const result = await apiPost('/api/v1/quarantine/restore', { id: String(id) });
+    if (result && result.success) {
+      showToast('文件已恢复', 'success');
+    } else {
+      showToast('恢复失败: ' + ((result && result.error) || '未知错误'), 'danger');
+    }
+    renderAll();
+  }
+
+  async function deleteItem(id) {
+    const result = await apiDelete('/api/v1/quarantine/' + String(id));
+    if (result && result.success) {
+      showToast('已永久删除文件', 'danger');
+    } else {
+      showToast('删除失败: ' + ((result && result.error) || '未知错误'), 'danger');
+    }
+    renderAll();
+  }
+
+  async function restoreAll() {
+    const data = await apiGet('/api/v1/quarantine');
+    if (!data || !data.items || data.items.length === 0) return;
+    const count = data.items.length;
+    const result = await apiPost('/api/v1/quarantine/restore-all', {});
+    if (result && result.success) {
+      showToast('已恢复 ' + result.restored + ' 个文件', 'success');
+    } else {
+      showToast('恢复失败', 'danger');
+    }
+    renderAll();
+  }
+
+  async function deleteAll() {
+    const data = await apiGet('/api/v1/quarantine');
+    if (!data || !data.items || data.items.length === 0) return;
+    const count = data.items.length;
+    if (!confirm('确定要永久删除全部 ' + count + ' 个隔离文件吗？此操作不可撤销。')) return;
+    const result = await apiDelete('/api/v1/quarantine');
+    if (result && result.success) {
+      showToast('已永久删除 ' + result.deleted + ' 个文件', 'danger');
+    } else {
+      showToast('删除失败', 'danger');
+    }
+    renderAll();
+  }
+
+  function updateActionBarVisibility(items) {
+      var bar = document.getElementById('actionBar');
+      bar.style.display = (items || []).length === 0 ? 'none' : '';
+  }
+
+  // ===== EVENT DELEGATION =====
+  quarantineList.addEventListener('click', function(e) {
+    var target = e.target.closest('button');
+    if (!target) return;
+    var id = target.dataset.id;
+    if (!id) return;
+    if (target.classList.contains('btn-restore')) {
+      restoreItem(id);
+    } else if (target.classList.contains('btn-delete')) {
+      deleteItem(id);
+    }
+  });
+
+  document.getElementById('btnRestoreAll').addEventListener('click', restoreAll);
+  document.getElementById('btnDeleteAll').addEventListener('click', deleteAll);
+
+  // ===== INIT =====
+  renderAll();
+
+})();
+</script>
+</body>
+</html>

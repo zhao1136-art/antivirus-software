@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>安盾 - 漏洞修复</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@500;600;700&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<script>(function(){try{var s=JSON.parse(localStorage.getItem('安盾_settings')||'{}');if(s.theme==='light')document.documentElement.classList.add('light');}catch(e){}}())</script>
+<style>
+  :root {
+    --bg-primary: #0a0a12;
+    --bg-secondary: #111120;
+    --bg-card: #16162a;
+    --bg-hover: #1e1e3a;
+    --border: #2a2a45;
+    --border-light: #3a3a55;
+    --text-primary: #f0f0f8;
+    --text-secondary: #a0a0be;
+    --text-muted: #6a6a88;
+    --accent: #3b82f6;
+    --accent-dim: rgba(59, 130, 246, 0.12);
+    --accent-glow: rgba(59, 130, 246, 0.30);
+    --danger: #ef4444;
+    --danger-dim: rgba(239, 68, 68, 0.12);
+    --warning: #ffcc00;
+    --success: #22c55e;
+    --critical: #ff1744;
+    --high: #ff6d3a;
+    --medium: #ffcc00;
+    --low: #3b82f6;
+    --radius-sm: 10px;
+    --radius-md: 16px;
+    --radius-lg: 24px;
+    --transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    min-height: 100vh;
+    display: flex;
+    overflow-x: hidden;
+  }
+
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  /* ===== SIDEBAR ===== */
+  .sidebar {
+    width: 240px; min-width: 240px; height: 100vh;
+    position: fixed; left: 0; top: 0;
+    background: rgba(14, 14, 20, 0.85);
+    backdrop-filter: blur(20px);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column;
+    padding: 28px 18px; z-index: 100;
+  }
+  .logo { display: flex; align-items: center; gap: 12px; padding: 0 10px; margin-bottom: 40px; }
+  .logo-icon {
+    width: 40px; height: 40px; border-radius: 12px;
+    background: linear-gradient(135deg, var(--accent), #0099cc);
+    display: grid; place-items: center;
+    box-shadow: 0 8px 24px rgba(0, 217, 192, 0.25);
+  }
+  .logo-icon svg { width: 22px; height: 22px; fill: white; }
+  .logo-text { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 20px; letter-spacing: -0.5px; }
+  .nav { display: flex; flex-direction: column; gap: 6px; flex: 1; }
+  .nav-item {
+    display: flex; align-items: center; gap: 12px;
+    padding: 13px 14px; border-radius: var(--radius-sm);
+    color: var(--text-secondary); text-decoration: none;
+    font-size: 14px; font-weight: 500;
+    transition: var(--transition); cursor: pointer;
+    border: 1px solid transparent;
+  }
+  .nav-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+  .nav-item.active { background: var(--accent-dim); color: var(--accent); border-color: rgba(0, 217, 192, 0.2); }
+  .nav-item svg { width: 20px; height: 20px; opacity: 0.8; }
+  .nav-badge { margin-left: auto; background: var(--danger-dim); color: var(--danger); font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 20px; }
+
+.nav-group {
+  padding: 18px 14px 6px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  user-select: none;
+}
+
+.nav-group:first-child {
+  padding-top: 0;
+}
+
+
+  /* ===== MAIN CONTENT ===== */
+  .main-content { flex: 1; margin-left: 240px; padding: 28px 36px; max-width: calc(100% - 240px); }
+
+  .top-header {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 28px;
+  }
+  .page-title-group { display: flex; align-items: center; gap: 16px; }
+  .page-title { font-family: 'Syne', sans-serif; font-size: 26px; font-weight: 700; }
+  .status-pill {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 16px; background: var(--accent-dim);
+    border: 1px solid rgba(0, 217, 192, 0.2);
+    border-radius: 30px; font-size: 13px; font-weight: 600; color: var(--accent);
+  }
+  .pulse-dot { width: 8px; height: 8px; background: var(--accent); border-radius: 50%; animation: pulse 2s infinite; }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(0, 217, 192, 0.7); }
+    70% { box-shadow: 0 0 0 10px rgba(0, 217, 192, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(0, 217, 192, 0); }
+  }
+
+  /* ===== STATS CARDS ===== */
+  .stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; margin-bottom: 24px; }
+  .stat-card {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: var(--radius-md); padding: 22px 20px;
+    transition: var(--transition);
+  }
+  .stat-card:hover { border-color: var(--border-light); transform: translateY(-2px); }
+  .stat-value { font-family: 'Syne', sans-serif; font-size: 26px; font-weight: 700; margin-bottom: 4px; }
+  .stat-label { color: var(--text-secondary); font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+  /* ===== SEARCH BAR ===== */
+  .search-section {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); padding: 24px 28px; margin-bottom: 20px;
+  }
+  .search-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .search-input-wrap {
+    flex: 1; min-width: 260px; position: relative;
+  }
+  .search-input-wrap svg {
+    position: absolute; left: 14px; top: 50%; transform: translateY(-50%);
+    width: 18px; height: 18px; stroke: var(--text-muted);
+  }
+  .search-input {
+    width: 100%; padding: 12px 16px 12px 42px;
+    background: var(--bg-secondary); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); color: var(--text-primary);
+    font-family: inherit; font-size: 14px;
+    transition: var(--transition);
+  }
+  .search-input:focus { outline: none; border-color: var(--accent); }
+  .search-input::placeholder { color: var(--text-muted); }
+  .filter-select {
+    padding: 12px 16px; background: var(--bg-secondary);
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    color: var(--text-primary); font-family: inherit; font-size: 14px;
+    cursor: pointer; min-width: 130px; transition: var(--transition);
+  }
+  .filter-select:focus { outline: none; border-color: var(--accent); }
+  .btn {
+    padding: 12px 22px; border: none; border-radius: var(--radius-sm);
+    font-family: 'Syne', sans-serif; font-size: 13px; font-weight: 600;
+    cursor: pointer; transition: var(--transition);
+    display: flex; align-items: center; gap: 8px; white-space: nowrap;
+  }
+  .btn-primary { background: linear-gradient(135deg, var(--accent), #00b4a6); color: #000; }
+  .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(0, 217, 192, 0.25); }
+  .btn-secondary { background: var(--bg-hover); color: var(--text-primary); border: 1px solid var(--border); }
+  .btn-secondary:hover { border-color: var(--border-light); background: #222238; }
+  .btn-danger { background: var(--danger-dim); color: var(--danger); border: 1px solid rgba(255, 77, 109, 0.2); }
+  .btn-sm { padding: 8px 14px; font-size: 12px; }
+  .btn-group { display: flex; gap: 8px; }
+
+  /* ===== TABLE ===== */
+  .table-card {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); overflow: hidden;
+  }
+  .table-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 20px 28px; border-bottom: 1px solid var(--border);
+  }
+  .table-title { font-family: 'Syne', sans-serif; font-size: 15px; font-weight: 600; }
+  .table-count { color: var(--text-muted); font-size: 13px; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    text-align: left; padding: 14px 20px; font-size: 12px;
+    font-weight: 600; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.5px;
+    background: var(--bg-secondary); border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  td { padding: 14px 20px; border-bottom: 1px solid var(--border); font-size: 14px; }
+  tr:hover td { background: rgba(255, 255, 255, 0.015); }
+  .cve-id { color: var(--accent); font-family: 'Syne', sans-serif; font-weight: 600; font-size: 13px; white-space: nowrap; }
+  .vuln-title { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .vuln-desc { max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); font-size: 13px; }
+  .vuln-product { color: var(--text-secondary); font-size: 12px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .severity-badge {
+    display: inline-block; padding: 4px 10px; border-radius: 16px;
+    font-size: 11px; font-weight: 700; text-transform: uppercase; white-space: nowrap;
+  }
+  .severity-CRITICAL { background: rgba(255, 23, 68, 0.15); color: var(--critical); }
+  .severity-HIGH { background: rgba(255, 109, 58, 0.15); color: var(--high); }
+  .severity-MEDIUM { background: rgba(255, 204, 0, 0.15); color: var(--medium); }
+  .severity-LOW { background: rgba(0, 217, 192, 0.15); color: var(--low); }
+  .source-badge {
+    display: inline-block; padding: 3px 8px; border-radius: 10px;
+    font-size: 11px; font-weight: 500; white-space: nowrap;
+    background: var(--bg-hover); color: var(--text-secondary);
+  }
+
+  .empty-state {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 80px 24px; color: var(--text-muted); text-align: center; gap: 16px;
+  }
+  .empty-state svg { width: 64px; height: 64px; stroke: var(--text-muted); opacity: 0.4; }
+  .empty-state h3 { font-family: 'Syne', sans-serif; font-size: 18px; color: var(--text-secondary); }
+  .empty-state p { font-size: 14px; max-width: 400px; line-height: 1.6; }
+
+  /* ===== PAGINATION ===== */
+  .pagination {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 28px; border-top: 1px solid var(--border);
+  }
+  .page-info { color: var(--text-muted); font-size: 13px; }
+  .page-btns { display: flex; gap: 6px; }
+  .page-btn {
+    width: 34px; height: 34px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--bg-secondary);
+    color: var(--text-secondary); cursor: pointer;
+    font-family: 'Syne', sans-serif; font-size: 13px; font-weight: 600;
+    transition: var(--transition); display: grid; place-items: center;
+  }
+  .page-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .page-btn.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+  .page-btn:disabled { opacity: 0.3; cursor: default; }
+
+  /* ===== DOWNLOAD OVERLAY ===== */
+  .download-overlay {
+    position: fixed; inset: 0; background: rgba(7, 7, 10, 0.88);
+    backdrop-filter: blur(8px); z-index: 1000;
+    display: none; flex-direction: column; align-items: center; justify-content: center; gap: 24px;
+  }
+  .download-overlay.active { display: flex; }
+  .download-spinner {
+    width: 60px; height: 60px; border-radius: 50%;
+    border: 3px solid var(--border); border-top-color: var(--accent);
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .download-status { font-family: 'Syne', sans-serif; font-size: 16px; font-weight: 600; }
+  .download-progress { color: var(--text-secondary); font-size: 14px; }
+  .download-bar-wrap { width: 300px; height: 4px; background: var(--bg-hover); border-radius: 2px; overflow: hidden; }
+  .download-bar-fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), #00b4a6); transition: width 0.5s ease; }
+
+  /* ===== LIGHT THEME ===== */
+  html.light {
+    --bg-primary: #f5f5f8; --bg-secondary: #eeeef3; --bg-card: #ffffff;
+    --bg-hover: #e8e8f0; --border: #d8d8e4; --border-light: #c8c8d4;
+    --text-primary: #1a1a2e; --text-secondary: #5a5a6e; --text-muted: #8a8a9e;
+  }
+  html.light .sidebar { background: rgba(255, 255, 255, 0.85); }
+
+  @media (max-width: 900px) {
+    .stats-row { grid-template-columns: repeat(2, 1fr); }
+    .search-row { flex-direction: column; }
+    .search-input-wrap, .filter-select { width: 100%; min-width: 0; }
+  }
+  @media (max-width: 768px) {
+    .sidebar { transform: translateX(-100%); }
+    .main-content { margin-left: 0; max-width: 100%; padding: 20px; }
+    .stats-row { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="sidebar">
+  <div class="logo">
+    <div class="logo-icon">
+      <svg viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/></svg>
+    </div>
+    <span class="logo-text">安盾</span>
+  </div>
+              <nav class="nav">
+                <div class="nav-group">核心功能</div>
+                <a class="nav-item" href="index.html">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+                    概览
+                </a>
+                <a class="nav-item" href="scan.html">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="m14.31 8 5.74 9.94M9.69 8h11.48M7.38 12l5.74-9.94M9.69 16 3.95 6.06M14.31 16H2.83M16.62 12l-5.74 9.94"/></svg>
+                    病毒扫描
+                </a>
+                <a class="nav-item" href="history.html">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="10"/><path d="M3.05 11a9 9 0 1 1 .5 4"/></svg>
+                    病毒记忆
+                </a>
+                <div class="nav-group">安全防护</div>
+                <a class="nav-item" href="protection.html">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                    实时保护
+                </a>
+                <a class="nav-item active" href="vulnerabilities.html">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"/><line x1="16" y1="8" x2="2" y2="22"/><line x1="17.5" y1="15" x2="9" y2="15"/></svg>
+                    漏洞修复
+                </a>
+                <a class="nav-item" href="index.html#threat-intel">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/></svg>
+                    威胁情报
+                </a>
+                <div class="nav-group">管理中心</div>
+                <a class="nav-item" href="quarantine.html">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="9" x2="15" y2="15"/><line x1="15" y1="9" x2="9" y2="15"/></svg>
+                    隔离区
+                    <span class="nav-badge" id="quarantineBadge">0</span>
+                </a>
+                <a class="nav-item" href="logs.html">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+                    日志报告
+                </a>
+                <div class="nav-group">高级工具</div>
+                <a class="nav-item" href="settings.html">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                    设置
+                </a>
+            </nav>
+</div>
+
+<main class="main-content">
+  <header class="top-header">
+    <div class="page-title-group">
+      <h1 class="page-title">漏洞修复</h1>
+      <div class="status-pill">
+        <span class="pulse-dot"></span>
+        国家信息安全漏洞库
+      </div>
+    </div>
+    <div class="btn-group">
+      <button class="btn btn-primary" id="downloadBtn" onclick="startDownload()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        更新漏洞库
+      </button>
+      <button class="btn btn-secondary" onclick="refreshData()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+        刷新
+      </button>
+    </div>
+  </header>
+
+  <div class="stats-row" id="statsRow">
+    <div class="stat-card">
+      <div class="stat-value" id="totalVulns">--</div>
+      <div class="stat-label">漏洞总数</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="criticalCount" style="color:var(--critical)">--</div>
+      <div class="stat-label">严重 / 高危</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="mediumCount" style="color:var(--medium)">--</div>
+      <div class="stat-label">中危</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="lowCount" style="color:var(--low)">--</div>
+      <div class="stat-label">低危</div>
+    </div>
+  </div>
+
+  <div class="search-section">
+    <div class="search-row">
+      <div class="search-input-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input class="search-input" id="searchKeyword" type="text" placeholder="搜索 CVE 编号、漏洞名称、受影响产品..." onkeydown="if(event.key==='Enter')search()">
+      </div>
+      <select class="filter-select" id="severityFilter">
+        <option value="">全部等级</option>
+        <option value="CRITICAL">严重</option>
+        <option value="HIGH">高危</option>
+        <option value="MEDIUM">中危</option>
+        <option value="LOW">低危</option>
+      </select>
+      <select class="filter-select" id="sourceFilter">
+        <option value="">全部来源</option>
+        <option value="nvd">NVD (美国)</option>
+        <option value="cnnvd">CNNVD (中国)</option>
+      </select>
+      <button class="btn btn-primary" onclick="search()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        搜索
+      </button>
+      <button class="btn btn-secondary" onclick="clearFilters()">清除</button>
+    </div>
+  </div>
+
+  <div class="table-card">
+    <div class="table-header">
+      <span class="table-title">漏洞列表</span>
+      <span class="table-count" id="tableCount">共 0 条记录</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>CVE / CNNVD 编号</th>
+            <th>漏洞名称</th>
+            <th>等级</th>
+            <th>CVSS 评分</th>
+            <th>受影响产品</th>
+            <th>来源</th>
+            <th>发布日期</th>
+          </tr>
+        </thead>
+        <tbody id="tableBody">
+          <tr><td colspan="7">
+            <div class="empty-state" id="emptyState">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <h3>暂无漏洞数据</h3>
+              <p>请先点击右上角"更新漏洞库"按钮，从 NVD (美国国家漏洞数据库) 或 CNNVD (国家信息安全漏洞库) 下载漏洞数据。</p>
+              <button class="btn btn-primary" onclick="startDownload()" style="margin-top:8px">立即更新漏洞库</button>
+            </div>
+          </td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="pagination" id="pagination" style="display:none">
+      <span class="page-info" id="pageInfo"></span>
+      <div class="page-btns" id="pageBtns"></div>
+    </div>
+  </div>
+</main>
+
+<!-- Download Overlay -->
+<div class="download-overlay" id="downloadOverlay">
+  <div class="download-spinner"></div>
+  <div class="download-status" id="dlStatus">正在下载漏洞数据库...</div>
+  <div class="download-progress" id="dlProgress"></div>
+  <div class="download-bar-wrap">
+    <div class="download-bar-fill" id="dlBarFill"></div>
+  </div>
+  <button class="btn btn-secondary" id="dlCancelBtn" style="display:none" onclick="cancelDownload()">取消下载</button>
+</div>
+
+<script>
+  // ==================== CONFIG ====================
+  const API_BASE = ''; // 动态适配当前 origin
+  let currentPage = 1;
+  let pageSize = 50;
+  let downloadPollTimer = null;
+
+  // ==================== UTILS ====================
+  async function apiGet(path) {
+    try {
+      const res = await fetch(`${API_BASE}${path}`);
+      return await res.json();
+    } catch (e) { console.warn('API 不可用:', e.message); return null; }
+  }
+
+  async function apiPost(path, body) {
+    try {
+      const res = await fetch(`${API_BASE}${path}`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+      });
+      return await res.json();
+    } catch (e) { console.warn('API 不可用:', e.message); return null; }
+  }
+
+  function formatDate(dateStr) {
+    if (!dateStr) return '--';
+    try {
+      const d = new Date(dateStr);
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    } catch(e) { return dateStr.substring(0, 10); }
+  }
+
+  function truncate(str, max) {
+    if (!str) return '--';
+    return str.length > max ? str.substring(0, max) + '...' : str;
+  }
+
+  // ==================== LOAD STATS ====================
+  async function loadStats() {
+    const data = await apiGet('/api/v1/vulnerabilities/stats');
+    if (data) {
+      document.getElementById('totalVulns').textContent = (data.total || 0).toLocaleString();
+      const bySev = data.by_severity || {};
+      const critical = (bySev['CRITICAL'] || 0) + (bySev['HIGH'] || 0);
+      document.getElementById('criticalCount').textContent = critical.toLocaleString();
+      document.getElementById('mediumCount').textContent = (bySev['MEDIUM'] || 0).toLocaleString();
+      document.getElementById('lowCount').textContent = (bySev['LOW'] || 0).toLocaleString();
+    }
+  }
+
+  // ==================== SEARCH ====================
+  async function search(page) {
+    if (page) currentPage = page;
+    const keyword = document.getElementById('searchKeyword').value.trim();
+    const severity = document.getElementById('severityFilter').value;
+    const source = document.getElementById('sourceFilter').value;
+
+    const params = new URLSearchParams();
+    if (keyword) params.set('keyword', keyword);
+    if (severity) params.set('severity', severity);
+    if (source) params.set('source', source);
+    params.set('page', currentPage);
+    params.set('pagesize', pageSize);
+
+    const data = await apiGet(`/api/v1/vulnerabilities/search?${params.toString()}`);
+    if (!data) return;
+
+    renderTable(data.results);
+    renderPagination(data.total, data.page);
+  }
+
+  function renderTable(results) {
+    const tbody = document.getElementById('tableBody');
+    const emptyState = document.getElementById('emptyState');
+
+    if (!results || results.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="7">
+        <div class="empty-state" id="emptyState">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <h3>未找到漏洞数据</h3>
+          <p>尝试更换搜索关键词，或下载漏洞数据库后再搜索。</p>
+        </div>
+      </td></tr>`;
+      document.getElementById('tableCount').textContent = '共 0 条记录';
+      document.getElementById('pagination').style.display = 'none';
+      return;
+    }
+
+    let html = '';
+    for (const v of results) {
+      const id = v.cve_id || v.cnnvd_id || '--';
+      const title = truncate(v.title || v.description || '--', 60);
+      const desc = truncate(v.description || '', 80);
+      const sev = v.severity || '--';
+      const score = v.cvss_score ? v.cvss_score.toFixed(1) : '--';
+      const product = truncate(v.affected_product || '--', 30);
+      const source = v.source === 'nvd' ? 'NVD' : v.source === 'cnnvd' ? 'CNNVD' : (v.source || '--');
+      const date = formatDate(v.published_date);
+
+      html += `<tr>
+        <td><span class="cve-id">${id}</span></td>
+        <td><span class="vuln-title" title="${escapeHtml(v.title || v.description || '')}">${title}</span></td>
+        <td><span class="severity-badge severity-${sev}">${sev}</span></td>
+        <td>${score}</td>
+        <td><span class="vuln-product" title="${escapeHtml(v.affected_product || '')}">${product}</span></td>
+        <td><span class="source-badge">${source}</span></td>
+        <td>${date}</td>
+      </tr>`;
+    }
+    tbody.innerHTML = html;
+    document.getElementById('tableCount').textContent = `共 ${results.length} 条记录`;
+  }
+
+  function escapeHtml(str) {
+    if (!str) return '';
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  function renderPagination(total, page) {
+    const totalPages = Math.ceil(total / pageSize) || 1;
+    const pagination = document.getElementById('pagination');
+    const pageInfo = document.getElementById('pageInfo');
+    const pageBtns = document.getElementById('pageBtns');
+
+    if (total <= pageSize) {
+      pagination.style.display = 'none';
+      document.getElementById('tableCount').textContent = `共 ${total} 条记录`;
+      return;
+    }
+
+    pagination.style.display = 'flex';
+    pageInfo.textContent = `共 ${total} 条记录 · 第 ${page} / ${totalPages} 页`;
+
+    let btnsHtml = '';
+    btnsHtml += `<button class="page-btn" ${page <= 1 ? 'disabled' : ''} onclick="search(${page-1})">&laquo;</button>`;
+
+    const startPage = Math.max(1, page - 2);
+    const endPage = Math.min(totalPages, page + 2);
+    if (startPage > 1) btnsHtml += `<button class="page-btn" onclick="search(1)">1</button>`;
+    if (startPage > 2) btnsHtml += `<span style="color:var(--text-muted);padding:0 4px">...</span>`;
+
+    for (let i = startPage; i <= endPage; i++) {
+      btnsHtml += `<button class="page-btn ${i === page ? 'active' : ''}" onclick="search(${i})">${i}</button>`;
+    }
+
+    if (endPage < totalPages - 1) btnsHtml += `<span style="color:var(--text-muted);padding:0 4px">...</span>`;
+    if (endPage < totalPages) btnsHtml += `<button class="page-btn" onclick="search(${totalPages})">${totalPages}</button>`;
+
+    btnsHtml += `<button class="page-btn" ${page >= totalPages ? 'disabled' : ''} onclick="search(${page+1})">&raquo;</button>`;
+    pageBtns.innerHTML = btnsHtml;
+    document.getElementById('tableCount').textContent = `共 ${total} 条记录`;
+  }
+
+  function clearFilters() {
+    document.getElementById('searchKeyword').value = '';
+    document.getElementById('severityFilter').value = '';
+    document.getElementById('sourceFilter').value = '';
+    currentPage = 1;
+    search();
+  }
+
+  // ==================== DOWNLOAD ====================
+  async function startDownload() {
+    var overlay = document.getElementById('downloadOverlay');
+    overlay.classList.add('active');
+    document.getElementById('dlStatus').textContent = '正在连接数据源...';
+    document.getElementById('dlProgress').textContent = '';
+    document.getElementById('dlBarFill').style.width = '5%';
+    document.getElementById('dlCancelBtn').style.display = 'inline-block';
+
+    var data = await apiPost('/api/v1/vulnerabilities/download', { source: 'community' });
+    if (!data) {
+      document.getElementById('dlStatus').textContent = '启动下载失败';
+      document.getElementById('dlProgress').textContent = '请确认安盾后端已启动且网络可用';
+      document.getElementById('dlBarFill').style.width = '0%';
+      setTimeout(function() { overlay.classList.remove('active'); }, 3000);
+      return;
+    }
+
+    document.getElementById('dlStatus').textContent = '正在下载漏洞数据库...';
+    document.getElementById('dlProgress').textContent = '来源: NVD Community Feed + CNNVD';
+    pollDownload();
+  }
+
+  function pollDownload() {
+    if (downloadPollTimer) clearInterval(downloadPollTimer);
+    var pollCount = 0;
+    downloadPollTimer = setInterval(async function() {
+      pollCount++;
+      var status = null;
+      try {
+        status = await apiGet('/api/v1/vulnerabilities/download/status');
+      } catch(e) {
+        // API 暂时不可用
+      }
+
+      if (!status) {
+        if (pollCount > 15) {
+          clearInterval(downloadPollTimer);
+          finishDownload(false, '无法获取下载状态，请检查后端服务');
+        }
+        return;
+      }
+
+      if (status.downloading) {
+        var src = status.current_source || '下载中';
+        document.getElementById('dlStatus').textContent = '正在下载: ' + src;
+        if (status.total > 0) {
+          var pct = Math.round((status.progress / status.total) * 100);
+          document.getElementById('dlBarFill').style.width = Math.min(pct, 95) + '%';
+        }
+        var imported = status.imported || 0;
+        document.getElementById('dlProgress').textContent = '已导入 ' + imported + ' 条漏洞';
+      } else {
+        clearInterval(downloadPollTimer);
+        document.getElementById('dlBarFill').style.width = '100%';
+        var imported = status.imported || 0;
+        if (imported > 0) {
+          document.getElementById('dlStatus').textContent = '下载完成!';
+          document.getElementById('dlProgress').textContent = '共导入 ' + imported + ' 条漏洞数据';
+        } else {
+          document.getElementById('dlStatus').textContent = '下载完成';
+          document.getElementById('dlProgress').textContent = '未获取到新漏洞数据，可能已是最新';
+        }
+        if (status.errors && status.errors.length > 0) {
+          document.getElementById('dlProgress').textContent += ' (部分源失败)';
+        }
+        setTimeout(function() {
+          document.getElementById('downloadOverlay').classList.remove('active');
+          refreshData();
+        }, 2000);
+      }
+
+      if (pollCount > 180) {  // 3分钟超时
+        clearInterval(downloadPollTimer);
+        finishDownload(false, '下载超时，已导入 ' + (status.imported || 0) + ' 条数据');
+      }
+    }, 1000);
+  }
+
+  function cancelDownload() {
+    if (downloadPollTimer) clearInterval(downloadPollTimer);
+    document.getElementById('downloadOverlay').classList.remove('active');
+  }
+
+  function finishDownload(success, msg) {
+    document.getElementById('dlBarFill').style.width = success ? '100%' : '50%';
+    document.getElementById('dlStatus').textContent = success ? '下载完成!' : '下载失败';
+    document.getElementById('dlProgress').textContent = msg;
+    setTimeout(function() {
+      document.getElementById('downloadOverlay').classList.remove('active');
+      if (success) refreshData();
+    }, 2500);
+  }
+
+  async function refreshData() {
+    await loadStats();
+    await search();
+  }
+
+  // ==================== INIT ====================
+  (function() {
+    try {
+      var q = JSON.parse(localStorage.getItem('安盾_quarantine') || '[]');
+      document.getElementById('quarantineBadge').textContent = q.length || '0';
+    } catch(e) {}
+  })();
+
+  loadStats();
+  search();
+</script>
+
+</body>
+</html>
