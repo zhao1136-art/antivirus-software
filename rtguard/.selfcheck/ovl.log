@@ -1,0 +1,28 @@
+dir: C:\Users\Administrator\AppData\Local\Temp\rdcw-ovl-1272
+handle: 0x18c err 0
+call#0 wait=0x0 after 0.000s GetOverlappedResult=True err=0 bytes=32 lpBytesReturned=0
+        action=1 name=file00.txt
+call#1 wait=0x0 after 0.000s GetOverlappedResult=True err=0 bytes=96 lpBytesReturned=0
+        action=3 name=file00.txt
+        action=3 name=file00.txt
+        action=2 name=file00.txt
+call#2 wait=0x0 after 0.000s GetOverlappedResult=True err=0 bytes=96 lpBytesReturned=0
+        action=1 name=file01.txt
+        action=3 name=file01.txt
+        action=2 name=file01.txt
+call#3 wait=0x0 after 0.000s GetOverlappedResult=True err=0 bytes=128 lpBytesReturned=0
+        action=1 name=file02.txt
+        action=3 name=file02.txt
+        action=3 name=file02.txt
+        action=2 name=file02.txt
+call#4 wait=0x0 after 0.000s GetOverlappedResult=True err=0 bytes=96 lpBytesReturned=0
+        action=1 name=file03.txt
+        action=3 name=file03.txt
+        action=2 name=file03.txt
+call#5 wait=0x0 after 0.000s GetOverlappedResult=True err=0 bytes=128 lpBytesReturned=0
+        action=1 name=file04.txt
+        action=3 name=file04.txt
+        action=3 name=file04.txt
+        action=2 name=file04.txt
+RESULT: with-data=6 zero-bytes=0 timeouts=0
+DONE

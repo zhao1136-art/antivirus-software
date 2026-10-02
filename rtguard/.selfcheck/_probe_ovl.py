@@ -75,9 +75,9 @@ h = k32.CreateFileW(base, 0x80000000, 0x7, None, 3,
 log("handle:", hex(h), "err", ctypes.get_last_error())
 
 buf = ctypes.create_string_buffer(BUF_SIZE)
-ov = (wintypes.c_void_p * 8)()          # 64-byte OVERLAPPED storage
+ov = OVERLAPPED()
 ev = k32.CreateEventW(None, True, False, None)
-ov[4] = ev                               # hEvent at offset 32 (64-bit)
+ov.hEvent = ev
 ret = wintypes.DWORD(0)
 got = timeout = zero = 0
 
@@ -121,4 +121,13 @@ for i in range(6):
             zero += 1
     try:
         os.remove(p)
-    exc
+    except OSError:
+        pass
+    time.sleep(0.1)
+
+log("RESULT: with-data=%d zero-bytes=%d timeouts=%d" % (got, zero, timeout))
+k32.CloseHandle(ev)
+k32.CloseHandle(h)
+shutil.rmtree(base, ignore_errors=True)
+log("DONE")
+os._exit(0)

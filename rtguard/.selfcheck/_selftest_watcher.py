@@ -11,7 +11,7 @@ import tempfile
 import threading
 import time
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = r"H:\Caelire\rtguard"
 TARGET = os.path.join(HERE, "rtguard", "watcher.py")
 
 print("=" * 70)
