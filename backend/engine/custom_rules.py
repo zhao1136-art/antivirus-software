@@ -1,7 +1,7 @@
 """
 御天 自定义规则管理引擎
 
-支持用户创建自定义安全规则，规则同时下发到内核驱动 andun.sys 和用户态 HIPS。
+支持用户创建自定义安全规则，规则由用户态规则引擎本地匹配生效。
 
 规则类型：
   - file     文件操作（创建/写入/删除）
@@ -18,7 +18,7 @@
 特性：
   - 内置 20+ 预设规则模板，覆盖常见攻击场景
   - 规则持久化到 data/custom_rules.json
-  - 驱动不可用时自动降级为仅用户态 HIPS 拦截
+  - 内置状态查询，供前端展示规则总数与启用情况
   - 支持批量导入/导出
   - 线程安全（双重检查锁单例 + 实例锁）
 """
@@ -28,7 +28,7 @@ import json
 import threading
 import time
 import logging
-from typing import Optional, Any
+from typing import Optional
 
 # ============================================================
 # 路径与常量
@@ -72,7 +72,7 @@ def _get_logger() -> logging.Logger:
 class CustomRuleEngine:
     """自定义规则管理引擎
 
-    支持用户创建自定义安全规则，规则同时下发到内核驱动和用户态 HIPS。
+    支持用户创建自定义安全规则，规则由用户态规则引擎本地匹配生效。
     规则类型：文件操作、进程启动、注册表修改、网络连接、句柄操作
     动作：允许、阻断、询问
     """
@@ -107,22 +107,15 @@ class CustomRuleEngine:
         {"name": "阻止驱动加载", "type": "process", "action": "ask", "pattern": "*sc.exe*"},
     ]
 
-    def __init__(self, kernel_bridge: Any = None, hips: Any = None):
-        """初始化自定义规则引擎
-
-        Args:
-            kernel_bridge: KernelBridge 实例（用于下发规则到内核驱动）
-            hips: 用户态 HIPS 引擎实例（用于用户态拦截，可选）
-        """
-        self._kernel_bridge = kernel_bridge
-        self._hips = hips
+    def __init__(self):
+        """初始化自定义规则引擎"""
         self._logger = _get_logger()
 
         # 规则列表：每条规则结构如下
         # {
         #     "id": int, "type": str, "action": str, "pattern": str,
         #     "description": str, "enabled": bool, "created_at": float,
-        #     "driver_rule_id": int  # 下发到驱动的 ruleId（与 id 相同）
+        #     "driver_rule_id": int  # 兼容字段：规则序号（与 id 相同）
         # }
         self._rules: list[dict] = None  # 延迟加载
         self._rules_lock = threading.Lock()
@@ -130,27 +123,12 @@ class CustomRuleEngine:
         # 自增 ID 计数器
         self._next_id = 1
 
-        # 驱动可用性缓存（避免每次下发都检测）
-        self._driver_available = False
-
     def _ensure_rules(self):
         """延迟加载规则（首次访问时从磁盘读取）"""
         if self._rules is None:
             self._rules = []
             self._load_rules()
             self._log("info", f"自定义规则引擎初始化完成，已加载 {len(self._rules)} 条规则")
-
-    # ── 属性 ──
-
-    @property
-    def driver_available(self) -> bool:
-        """驱动是否可用（用于降级判断）"""
-        if self._kernel_bridge is None:
-            return False
-        try:
-            return self._kernel_bridge.is_connected()
-        except Exception:
-            return False
 
     # ── 规则增删改 ──
 
@@ -191,17 +169,9 @@ class CustomRuleEngine:
                 "description": description,
                 "enabled": True,
                 "created_at": time.time(),
-                "driver_rule_id": rule_id,  # 驱动 ruleId 与本地 id 一致
+                "driver_rule_id": rule_id,  # 兼容字段：与本地 id 一致
             }
             self._rules.append(rule)
-
-        # 下发到驱动（若可用）
-        driver_ok = self._push_to_driver(rule)
-        if not driver_ok:
-            self._log("warning", f"规则 {rule_id} 未能下发到驱动（驱动不可用），仅启用用户态 HIPS")
-
-        # 注册到 HIPS（若可用）
-        self._register_to_hips(rule)
 
         # 持久化
         self._save_rules()
@@ -229,12 +199,6 @@ class CustomRuleEngine:
                 return False
             self._rules.remove(target)
 
-        # 从驱动移除
-        self._remove_from_driver(target)
-
-        # 从 HIPS 移除
-        self._unregister_from_hips(target)
-
         # 持久化
         self._save_rules()
 
@@ -261,14 +225,6 @@ class CustomRuleEngine:
             if target is None:
                 return False
             target["enabled"] = bool(enabled)
-
-        # 同步到驱动（重新下发或删除）
-        if enabled:
-            self._push_to_driver(target)
-            self._register_to_hips(target)
-        else:
-            self._remove_from_driver(target)
-            self._unregister_from_hips(target)
 
         # 持久化
         self._save_rules()
@@ -344,66 +300,6 @@ class CustomRuleEngine:
         with self._rules_lock:
             return [dict(r) for r in self._rules]
 
-    # ── 驱动下发（私有） ──
-
-    def _push_to_driver(self, rule: dict) -> bool:
-        """将规则下发到内核驱动
-
-        驱动不可用时返回 False，调用方应进入降级模式（仅依赖 HIPS）。
-        """
-        if self._kernel_bridge is None:
-            return False
-        try:
-            driver_rule = {
-                "ruleId": rule["driver_rule_id"],
-                "ruleType": self.RULE_TYPES.get(rule["type"], 0),
-                "action": self.ACTIONS.get(rule["action"], 0),
-                "pattern": rule["pattern"],
-                "enabled": 1 if rule.get("enabled", True) else 0,
-            }
-            return bool(self._kernel_bridge.add_rule(driver_rule))
-        except Exception as e:
-            self._log("error", f"下发规则到驱动失败: {e}")
-            return False
-
-    def _remove_from_driver(self, rule: dict) -> bool:
-        """从驱动移除规则"""
-        if self._kernel_bridge is None:
-            return False
-        try:
-            return bool(self._kernel_bridge.del_rule(rule.get("driver_rule_id", 0)))
-        except Exception as e:
-            self._log("error", f"从驱动移除规则失败: {e}")
-            return False
-
-    # ── HIPS 注册（私有） ──
-
-    def _register_to_hips(self, rule: dict) -> bool:
-        """将规则注册到用户态 HIPS
-
-        HIPS 实例可选；若未提供或方法不存在，静默跳过。
-        """
-        if self._hips is None:
-            return False
-        try:
-            # 鸭子类型：HIPS 应实现 register_rule 方法
-            if hasattr(self._hips, "register_rule"):
-                return bool(self._hips.register_rule(rule))
-        except Exception as e:
-            self._log("error", f"注册规则到 HIPS 失败: {e}")
-        return False
-
-    def _unregister_from_hips(self, rule: dict) -> bool:
-        """从用户态 HIPS 移除规则"""
-        if self._hips is None:
-            return False
-        try:
-            if hasattr(self._hips, "unregister_rule"):
-                return bool(self._hips.unregister_rule(rule.get("id", 0)))
-        except Exception as e:
-            self._log("error", f"从 HIPS 移除规则失败: {e}")
-        return False
-
     # ── 持久化 ──
 
     def _save_rules(self) -> bool:
@@ -443,36 +339,10 @@ class CustomRuleEngine:
                 else:
                     self._next_id = next_id
 
-            # 启动时将已加载规则重新下发到驱动（驱动可用时）
-            self._resync_to_driver()
             return True
         except Exception as e:
             self._log("error", f"规则加载失败: {e}")
             return False
-
-    def _resync_to_driver(self) -> None:
-        """将所有已启用规则重新下发到驱动（启动时同步用）
-
-        驱动不可用时静默跳过，进入降级模式。
-        """
-        if self._kernel_bridge is None:
-            return
-        if not self.driver_available:
-            self._log("info", "驱动不可用，跳过规则同步，进入降级模式")
-            return
-
-        success = 0
-        failed = 0
-        with self._rules_lock:
-            rules_snapshot = [dict(r) for r in self._rules if r.get("enabled", True)]
-
-        for rule in rules_snapshot:
-            if self._push_to_driver(rule):
-                success += 1
-            else:
-                failed += 1
-
-        self._log("info", f"规则同步到驱动完成: 成功 {success}，失败 {failed}")
 
     # ── 状态查询 ──
 
@@ -490,8 +360,9 @@ class CustomRuleEngine:
             "enabled_rules": enabled,
             "disabled_rules": total - enabled,
             "rules_by_type": by_type,
-            "driver_available": self.driver_available,
-            "hips_available": self._hips is not None,
+            # 内核驱动/HIPS 防护层已移除，保留 key 供前端读取（恒为 False）
+            "driver_available": False,
+            "hips_available": False,
             "rules_file": RULES_FILE,
             "next_id": self._next_id,
         }
@@ -514,14 +385,8 @@ _custom_rules: Optional[CustomRuleEngine] = None
 _custom_rules_lock = threading.Lock()
 
 
-def get_custom_rules(kernel_bridge: Any = None, hips: Any = None) -> CustomRuleEngine:
+def get_custom_rules() -> CustomRuleEngine:
     """获取全局唯一的 CustomRuleEngine 实例（双重检查锁定单例）
-
-    首次调用时应传入 kernel_bridge 和 hips 参数；后续调用参数将被忽略。
-
-    Args:
-        kernel_bridge: KernelBridge 实例
-        hips: 用户态 HIPS 引擎实例
 
     Returns:
         全局唯一的 CustomRuleEngine 实例
@@ -530,7 +395,7 @@ def get_custom_rules(kernel_bridge: Any = None, hips: Any = None) -> CustomRuleE
     if _custom_rules is None:
         with _custom_rules_lock:
             if _custom_rules is None:
-                _custom_rules = CustomRuleEngine(kernel_bridge=kernel_bridge, hips=hips)
+                _custom_rules = CustomRuleEngine()
     return _custom_rules
 
 
@@ -539,8 +404,8 @@ def get_custom_rules(kernel_bridge: Any = None, hips: Any = None) -> CustomRuleE
 # ============================================================
 
 if __name__ == "__main__":
-    # 不依赖驱动，仅测试规则增删改与持久化
-    engine = CustomRuleEngine(kernel_bridge=None, hips=None)
+    # 仅测试规则增删改与持久化
+    engine = CustomRuleEngine()
 
     print("[custom_rules] 状态:", engine.get_status())
     print("[custom_rules] 模板数量:", len(engine.get_templates()))

@@ -4,8 +4,8 @@
 监控摄像头设备访问行为，防止恶意软件偷偷开启摄像头偷拍。
 
 功能：
-  1. enable() 通过 SetupDi API 枚举系统摄像头设备，通过 kernel_bridge 下发设备文件保护规则
-  2. on_camera_access(pid, device_path) 由驱动事件回调触发，检查白名单，不在白名单则阻断+弹窗
+  1. enable() 通过 SetupDi API 枚举系统摄像头设备，并启用访问监控（内核驱动防护层已移除）
+  2. on_camera_access(pid, device_path) 检查白名单，不在白名单则阻断（用户态终止进程）+弹窗
   3. add_to_whitelist / remove_from_whitelist 管理可信进程白名单
   4. get_camera_status() 获取摄像头列表与启用状态
   5. get_access_history() 获取访问历史记录
@@ -14,7 +14,7 @@
   - 使用 ctypes 调用 SetupDiGetClassDevs / SetupDiEnumDeviceInfo 枚举摄像头设备
   - 白名单持久化到 data/camera_whitelist.json
   - 访问历史持久化（最近 500 条）
-  - 驱动不可用时降级为仅记录模式（不阻断）
+  - 内核驱动防护层已移除，统一采用用户态阻断（终止非白名单进程）
   - 线程安全（双重检查锁单例 + 实例锁）
 """
 
@@ -191,13 +191,8 @@ class CameraGuard:
     # 驱动规则 ID 起始（避免与其他模块冲突）
     _next_rule_id = 70000
 
-    def __init__(self, kernel_bridge: Any = None):
-        """初始化摄像头保护引擎
-
-        Args:
-            kernel_bridge: KernelBridge 实例（可选）
-        """
-        self._kernel_bridge = kernel_bridge
+    def __init__(self):
+        """初始化摄像头保护引擎"""
         self._logger = _get_logger()
 
         # 摄像头设备列表 [{device_path, friendly_name, hardware_id}]
@@ -216,7 +211,7 @@ class CameraGuard:
         self._enabled = False
         self._enabled_lock = threading.Lock()
 
-        # 驱动下发的规则 ID 列表
+        # 驱动下发的规则 ID 列表（内核驱动防护层已移除，恒为空）
         self._driver_rule_ids: list[int] = []
         self._rule_ids_lock = threading.Lock()
 
@@ -243,13 +238,8 @@ class CameraGuard:
 
     @property
     def driver_available(self) -> bool:
-        """驱动是否可用"""
-        if self._kernel_bridge is None:
-            return False
-        try:
-            return self._kernel_bridge.is_connected()
-        except Exception:
-            return False
+        """驱动是否可用（内核驱动防护层已移除，恒为 False）"""
+        return False
 
     @property
     def enabled(self) -> bool:
@@ -262,8 +252,7 @@ class CameraGuard:
         """启用摄像头保护
 
         1. 枚举系统摄像头设备（SetupDi API）
-        2. 通过 kernel_bridge 下发设备文件保护规则
-        3. 注册驱动事件处理器（监听文件访问事件）
+        2. 记录设备保护规则数量（内核驱动防护层已移除，恒为 0）
 
         Returns:
             {"cameras": list, "rules_pushed": int, "driver_available": bool}
@@ -284,12 +273,12 @@ class CameraGuard:
         with self._stats_lock:
             self._stats["cameras_detected"] = len(cameras)
 
-        # 下发设备文件保护规则
+        # 设备文件保护规则（内核驱动防护层已移除，恒为 0 条）
         rules_pushed = 0
         for cam in cameras:
             rules_pushed += self._push_camera_protection_rule(cam["device_path"])
 
-        # 注册驱动事件处理器（监听文件访问事件，触发 on_camera_access）
+        # 注册驱动事件处理器（内核驱动防护层已移除，空实现）
         self._register_driver_handlers()
 
         self._log("info", f"摄像头保护已启用: 检测到 {len(cameras)} 个摄像头，"
@@ -306,10 +295,10 @@ class CameraGuard:
         with self._enabled_lock:
             self._enabled = False
 
-        # 移除驱动规则
+        # 移除驱动规则（内核驱动防护层已移除，空实现）
         self._remove_all_driver_rules()
 
-        # 注销驱动事件处理器
+        # 注销驱动事件处理器（内核驱动防护层已移除，空实现）
         self._unregister_driver_handlers()
 
         self._log("info", "摄像头保护已停用")
@@ -500,15 +489,11 @@ class CameraGuard:
         with self._stats_lock:
             self._stats["blocked_attempts"] += 1
 
-        # 驱动可用时，驱动已根据规则阻断；这里补充进程终止
-        if self.driver_available:
-            self._log("warning", f"摄像头访问被驱动阻断: {process_name} (PID={pid})")
+        # 内核驱动防护层已移除，统一由用户态终止非白名单进程
+        if _block_process(pid):
+            self._log("warning", f"已终止非白名单进程: {process_name} (PID={pid})")
         else:
-            # 驱动不可用时，降级为用户态终止进程
-            if _block_process(pid):
-                self._log("warning", f"已终止非白名单进程: {process_name} (PID={pid})")
-            else:
-                self._log("error", f"终止进程失败: {process_name} (PID={pid})")
+            self._log("error", f"终止进程失败: {process_name} (PID={pid})")
 
         # 弹窗告警
         self._show_alert(process_name, pid, device_path)
@@ -636,72 +621,28 @@ class CameraGuard:
     def _push_camera_protection_rule(self, device_path: str) -> int:
         """下发摄像头设备文件保护规则
 
-        驱动不可用时返回 0，进入降级模式（仅记录不阻断）。
+        内核驱动防护层已移除，规则无法下发，恒返回 0（仅记录模式）。
         """
-        if not self.driver_available:
-            self._log("info", f"驱动不可用，摄像头 {device_path} 仅启用记录模式")
-            return 0
-
-        rule_id = self._next_rule_id
-        self._next_rule_id += 1
-
-        try:
-            driver_rule = {
-                "ruleId": rule_id,
-                "ruleType": 0,  # RuleTypeFile（设备文件也走文件规则）
-                "action": 2,    # ActionAsk（询问，触发 on_camera_access 回调）
-                "pattern": device_path,
-                "enabled": 1,
-            }
-            if self._kernel_bridge.add_rule(driver_rule):
-                with self._rule_ids_lock:
-                    self._driver_rule_ids.append(rule_id)
-                return rule_id
-        except Exception as e:
-            self._log("error", f"下发摄像头保护规则失败: {e}")
-
+        self._log("info", f"内核驱动防护层已移除，摄像头 {device_path} 仅启用记录模式")
         return 0
 
     def _remove_all_driver_rules(self) -> None:
-        """移除所有已下发的摄像头保护规则"""
-        if self._kernel_bridge is None:
-            return
+        """移除所有已下发的摄像头保护规则
+
+        内核驱动防护层已移除，仅清空本地记录的规则 ID。
+        """
         with self._rule_ids_lock:
-            rule_ids = list(self._driver_rule_ids)
             self._driver_rule_ids.clear()
-        for rid in rule_ids:
-            try:
-                self._kernel_bridge.del_rule(rid)
-            except Exception:
-                pass
 
     # ── 驱动事件处理器注册（私有） ──
 
     def _register_driver_handlers(self) -> None:
-        """注册驱动事件处理器
-
-        监听文件访问事件（EventFileCreate/EventFileWrite），
-        当访问对象是摄像头设备路径时触发 on_camera_access。
-        """
-        if self._kernel_bridge is None:
-            return
-        try:
-            # 注册文件创建/写入事件处理器
-            self._kernel_bridge.register_handler(1, self._on_file_event)  # EventFileCreate
-            self._kernel_bridge.register_handler(2, self._on_file_event)  # EventFileWrite
-            self._log("info", "已注册驱动文件事件处理器")
-        except Exception as e:
-            self._log("error", f"注册驱动事件处理器失败: {e}")
+        """注册驱动事件处理器（内核驱动防护层已移除，保留空实现）"""
+        return
 
     def _unregister_driver_handlers(self) -> None:
-        """注销驱动事件处理器"""
-        if self._kernel_bridge is None:
-            return
-        try:
-            self._kernel_bridge.unregister_handler(1, self._on_file_event)
-            self._kernel_bridge.unregister_handler(2, self._on_file_event)
-        except Exception:
-            pass
+        """注销驱动事件处理器（内核驱动防护层已移除，保留空实现）"""
+        return
 
     def _on_file_event(self, event: dict) -> None:
         """驱动文件事件回调
@@ -818,13 +759,8 @@ _camera_guard: Optional[CameraGuard] = None
 _camera_guard_lock = threading.Lock()
 
 
-def get_camera_guard(kernel_bridge: Any = None) -> CameraGuard:
+def get_camera_guard() -> CameraGuard:
     """获取全局唯一的 CameraGuard 实例（双重检查锁定单例）
-
-    首次调用时应传入 kernel_bridge 参数；后续调用参数将被忽略。
-
-    Args:
-        kernel_bridge: KernelBridge 实例
 
     Returns:
         全局唯一的 CameraGuard 实例
@@ -833,7 +769,7 @@ def get_camera_guard(kernel_bridge: Any = None) -> CameraGuard:
     if _camera_guard is None:
         with _camera_guard_lock:
             if _camera_guard is None:
-                _camera_guard = CameraGuard(kernel_bridge=kernel_bridge)
+                _camera_guard = CameraGuard()
     return _camera_guard
 
 
@@ -842,7 +778,7 @@ def get_camera_guard(kernel_bridge: Any = None) -> CameraGuard:
 # ============================================================
 
 if __name__ == "__main__":
-    guard = CameraGuard(kernel_bridge=None)
+    guard = CameraGuard()
 
     print("[camera_guard] 状态:", guard.get_camera_status())
 

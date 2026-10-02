@@ -6,15 +6,14 @@
 
 工作原理：
   1. deploy() 在指定目录部署诱饵文件，设置隐藏+只读属性，记录 SHA256 基线
-  2. 通过 kernel_bridge 向内核驱动下发文件保护规则（驱动可用时）
-  3. check_all() 定期检查诱饵文件是否被篡改/加密/删除
-  4. on_tamper() 在检测到篡改时阻断进程，触发防护，弹窗告警
-  5. recall() 撤回所有诱饵文件
+  2. check_all() 定期检查诱饵文件是否被篡改/加密/删除（用户态轮询，内核驱动防护层已移除）
+  3. on_tamper() 在检测到篡改时阻断进程，触发防护，弹窗告警
+  4. recall() 撤回所有诱饵文件
 
 特性：
   - 5 种诱饵文件类型，覆盖勒索软件最关注的高价值目标
   - SHA256 哈希基线 + 内容特征双重校验
-  - 驱动不可用时降级为用户态轮询监控
+  - 内核驱动防护层已移除，采用用户态轮询监控
   - 基线持久化到 data/honeypot_baseline.json
   - 线程安全（双重检查锁单例 + 实例锁）
 """
@@ -206,20 +205,15 @@ class HoneypotManager:
     部署伪装诱饵文件，监控篡改行为，触发勒索防护。
     """
 
-    def __init__(self, kernel_bridge: Any = None):
-        """初始化诱捕系统
-
-        Args:
-            kernel_bridge: KernelBridge 实例（用于下发文件保护规则，可选）
-        """
-        self._kernel_bridge = kernel_bridge
+    def __init__(self):
+        """初始化诱捕系统"""
         self._logger = _get_logger()
 
         # 诱饵文件索引：path -> {type, name, baseline_hash, deployed_at, directory, driver_rule_id}
         self._decoys: dict[str, dict] = {}
         self._decoys_lock = threading.Lock()
 
-        # 驱动下发的规则 ID 范围（用于撤回时清理）
+        # 驱动下发的规则 ID 范围（内核驱动防护层已移除，恒为空，保留占位）
         self._driver_rule_ids: list[int] = []
         self._next_rule_id = 90000  # 诱饵规则 ID 从 90000 起，避免与 custom_rules 冲突
 
@@ -250,13 +244,8 @@ class HoneypotManager:
 
     @property
     def driver_available(self) -> bool:
-        """驱动是否可用"""
-        if self._kernel_bridge is None:
-            return False
-        try:
-            return self._kernel_bridge.is_connected()
-        except Exception:
-            return False
+        """驱动是否可用（内核驱动防护层已移除，恒为 False）"""
+        return False
 
     @property
     def monitoring(self) -> bool:
@@ -302,7 +291,7 @@ class HoneypotManager:
                     # 记录基线哈希
                     baseline_hash = _file_sha256(decoy_path)
 
-                    # 下发驱动保护规则（驱动可用时）
+                    # 下发驱动保护规则（内核驱动防护层已移除，恒返回 0）
                     driver_rule_id = self._push_protect_rule(decoy_path)
 
                     with self._decoys_lock:
@@ -509,7 +498,7 @@ class HoneypotManager:
 
         for path, info in decoys_snapshot:
             try:
-                # 从驱动移除保护规则
+                # 从驱动移除保护规则（内核驱动防护层已移除，恒为空操作）
                 self._remove_protect_rule(info.get("driver_rule_id", 0))
 
                 # 清除隐藏/只读属性后删除
@@ -610,47 +599,19 @@ class HoneypotManager:
     def _push_protect_rule(self, decoy_path: str) -> int:
         """向驱动下发诱饵文件保护规则
 
-        驱动不可用时返回 0，进入降级模式（仅用户态监控）。
+        内核驱动防护层已移除，规则无法下发，恒返回 0（仅用户态监控）。
         """
-        if self._kernel_bridge is None or not self.driver_available:
-            self._log("info", f"驱动不可用，诱饵 {decoy_path} 仅启用用户态监控")
-            return 0
-
-        rule_id = self._next_rule_id
-        self._next_rule_id += 1
-
-        try:
-            # 文件类型规则，阻断动作
-            driver_rule = {
-                "ruleId": rule_id,
-                "ruleType": 0,  # RuleTypeFile
-                "action": 1,    # ActionBlock
-                "pattern": decoy_path,
-                "enabled": 1,
-            }
-            ok = bool(self._kernel_bridge.add_rule(driver_rule))
-            if ok:
-                self._driver_rule_ids.append(rule_id)
-                return rule_id
-            else:
-                self._log("warning", f"驱动下发诱饵保护规则失败: {decoy_path}")
-                return 0
-        except Exception as e:
-            self._log("error", f"驱动下发诱饵保护规则异常: {e}")
-            return 0
+        self._log("info", f"内核驱动防护层已移除，诱饵 {decoy_path} 仅启用用户态监控")
+        return 0
 
     def _remove_protect_rule(self, rule_id: int) -> bool:
-        """从驱动移除诱饵保护规则"""
-        if not rule_id or self._kernel_bridge is None:
-            return False
-        try:
-            ok = bool(self._kernel_bridge.del_rule(rule_id))
-            if ok and rule_id in self._driver_rule_ids:
-                self._driver_rule_ids.remove(rule_id)
-            return ok
-        except Exception as e:
-            self._log("error", f"驱动移除诱饵保护规则异常: {e}")
-            return False
+        """从驱动移除诱饵保护规则
+
+        内核驱动防护层已移除，无规则可移除，恒返回 False。
+        """
+        if rule_id in self._driver_rule_ids:
+            self._driver_rule_ids.remove(rule_id)
+        return False
 
     # ── 持久化 ──
 
@@ -691,7 +652,7 @@ class HoneypotManager:
                         info = {k: v for k, v in item.items() if k != "path"}
                         self._decoys[path] = info
 
-            # 重新下发驱动规则（驱动可用时）
+            # 重新下发驱动规则（内核驱动防护层已移除，driver_available 恒为 False）
             if self.driver_available and self._decoys:
                 self._resync_driver_rules()
 
@@ -733,13 +694,8 @@ _honeypot_manager: Optional[HoneypotManager] = None
 _honeypot_lock = threading.Lock()
 
 
-def get_honeypot_manager(kernel_bridge: Any = None) -> HoneypotManager:
+def get_honeypot_manager() -> HoneypotManager:
     """获取全局唯一的 HoneypotManager 实例（双重检查锁定单例）
-
-    首次调用时应传入 kernel_bridge 参数；后续调用参数将被忽略。
-
-    Args:
-        kernel_bridge: KernelBridge 实例
 
     Returns:
         全局唯一的 HoneypotManager 实例
@@ -748,7 +704,7 @@ def get_honeypot_manager(kernel_bridge: Any = None) -> HoneypotManager:
     if _honeypot_manager is None:
         with _honeypot_lock:
             if _honeypot_manager is None:
-                _honeypot_manager = HoneypotManager(kernel_bridge=kernel_bridge)
+                _honeypot_manager = HoneypotManager()
     return _honeypot_manager
 
 
@@ -758,7 +714,7 @@ def get_honeypot_manager(kernel_bridge: Any = None) -> HoneypotManager:
 
 if __name__ == "__main__":
     # 不依赖驱动，测试诱饵部署/检查/撤回流程
-    mgr = HoneypotManager(kernel_bridge=None)
+    mgr = HoneypotManager()
 
     # 使用临时目录测试
     test_dir = os.path.join(_DATA_DIR, "honeypot_test")

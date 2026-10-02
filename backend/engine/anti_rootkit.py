@@ -1,13 +1,13 @@
 """
-御天 反 Rootkit 引擎
+御天 反 Rootkit 引擎（用户态）
 
-通过内核驱动检测各类 Rootkit 隐藏技术：
-  - 隐藏进程（对比内核 EPROCESS 链表与用户态 Toolhelp32 快照，识别 DKOM 隐藏）
-  - 隐藏驱动（对比 PsLoadedModuleList 与 EnumDeviceDrivers）
-  - 内核钩子（SSDT / IRP / Inline Hook 检测）
-  - 回调劫持（PsSetCreateProcessNotifyRoutine / CmRegisterCallback / ObRegisterCallbacks）
+通过用户态技术检测各类 Rootkit 隐藏技术：
+  - 隐藏进程（对比 NtQuerySystemInformation 与用户态 Toolhelp32 快照，识别 DKOM 隐藏）
+  - 隐藏驱动（EnumDeviceDrivers 枚举 + 可疑驱动名启发式）
+  - 内核钩子（ntdll.dll 关键函数 Inline Hook 检查）
+  - 回调劫持（AppInit_DLLs / Winlogon Shell / 通知包注册表检查）
 
-驱动不可用时降级为用户态检测（CSRSS 枚举法、NtQuerySystemInformation 等）。
+全部检测在用户态完成。
 """
 
 import ctypes
@@ -16,74 +16,6 @@ import struct
 import threading
 from datetime import datetime
 from typing import Optional
-
-
-# ============================================================
-# Rootkit 扫描结果结构体（与 andun.h 新增定义一致）
-# ============================================================
-
-class ANDUN_ROOTKIT_PROC_ENTRY(ctypes.Structure):
-    """内核进程条目"""
-    _pack_ = 1
-    _fields_ = [
-        ("pid", ct.c_ulong),
-        ("ppid", ct.c_ulong),
-        ("name", ct.c_wchar * 260),
-        ("image_path", ct.c_wchar * 520),
-    ]
-
-
-class ANDUN_ROOTKIT_DRIVER_ENTRY(ctypes.Structure):
-    """内核驱动条目"""
-    _pack_ = 1
-    _fields_ = [
-        ("name", ct.c_wchar * 260),
-        ("base_address", ct.c_ulonglong),
-        ("size", ct.c_ulonglong),
-        ("section_unloaded", ct.c_ulong),  # 节区是否已卸载
-    ]
-
-
-class ANDUN_ROOTKIT_HOOK_ENTRY(ctypes.Structure):
-    """内核钩子条目"""
-    _pack_ = 1
-    _fields_ = [
-        ("hook_type", ct.c_ulong),        # 0=SSDT, 1=IRP, 2=Inline
-        ("function_name", ct.c_wchar * 128),
-        ("hook_address", ct.c_ulonglong),
-        ("original_bytes", ct.c_ubyte * 16),
-        ("current_bytes", ct.c_ubyte * 16),
-        ("driver_name", ct.c_wchar * 260),  # 来源驱动
-        ("severity", ct.c_ulong),          # 0=info, 1=warn, 2=critical
-    ]
-
-
-class ANDUN_ROOTKIT_CALLBACK_ENTRY(ctypes.Structure):
-    """回调劫持条目"""
-    _pack_ = 1
-    _fields_ = [
-        ("callback_type", ct.c_ulong),     # 0=Process, 1=Thread, 2=Image, 3=Registry, 4=Object
-        ("callback_address", ct.c_ulonglong),
-        ("driver_name", ct.c_wchar * 260),  # 回调所在驱动
-        ("is_trusted", ct.c_ulong),         # 是否在可信列表
-        ("severity", ct.c_ulong),
-    ]
-
-
-class ANDUN_ROOTKIT_SCAN_RESULT(ctypes.Structure):
-    """Rootkit 扫描结果（驱动返回）"""
-    _pack_ = 1
-    _fields_ = [
-        ("proc_count", ct.c_ulong),
-        ("driver_count", ct.c_ulong),
-        ("hook_count", ct.c_ulong),
-        ("callback_count", ct.c_ulong),
-        # 固定大小数组：最多 256 个进程、64 个驱动、32 个钩子、32 个回调
-        ("procs", ANDUN_ROOTKIT_PROC_ENTRY * 256),
-        ("drivers", ANDUN_ROOTKIT_DRIVER_ENTRY * 64),
-        ("hooks", ANDUN_ROOTKIT_HOOK_ENTRY * 32),
-        ("callbacks", ANDUN_ROOTKIT_CALLBACK_ENTRY * 32),
-    ]
 
 
 # ============================================================
@@ -104,11 +36,9 @@ TRUSTED_DRIVERS_LOWER = {
     "dumpfve.sys", "fvevol.sys", "rdyboost.sys", "vid.sys", "vmbus.sys",
     "wdf01000.sys", "acpiex.sys", "pdc.sys", "cimfs.sys", "wcifs.sys",
     "storqosflt.sys", "iorate.sys", "filecrypt.sys", "bindflt.sys",
-    "andun.sys",
 }
 
-# 可信回调地址范围（驱动模块基址+偏移，由驱动侧解析）
-# 用户态无法精确判断，仅做辅助标记
+# 可信回调地址范围：用户态无法精确判断，仅做辅助标记
 
 
 # ============================================================
@@ -116,19 +46,16 @@ TRUSTED_DRIVERS_LOWER = {
 # ============================================================
 
 class AntiRootkit:
-    """反 Rootkit 引擎
+    """反 Rootkit 引擎（用户态）
 
-    通过内核驱动检测：
-    - 隐藏进程（内核 EPROCESS 链表 vs 用户态 Toolhelp32 快照）
-    - 隐藏驱动（PsLoadedModuleList vs EnumDeviceDrivers）
-    - 内核钩子（SSDT/IRP/Inline）
-    - 回调劫持
-
-    当驱动不可用时，降级为用户态检测。
+    用户态检测：
+    - 隐藏进程（NtQuerySystemInformation vs Toolhelp32 快照）
+    - 隐藏驱动（EnumDeviceDrivers + 可疑驱动名启发式）
+    - 内核钩子（ntdll.dll Inline Hook 检查）
+    - 回调劫持（注册表间接检测）
     """
 
-    def __init__(self, kernel_bridge):
-        self._kb = kernel_bridge
+    def __init__(self):
         self._last_scan_result = None
         self._last_scan_time = None
         self._scanning = False
@@ -146,7 +73,7 @@ class AntiRootkit:
                 'hidden_drivers': self.scan_hidden_drivers(),
                 'suspicious_hooks': self.scan_hooks(),
                 'suspicious_callbacks': self.scan_callback_highjacks(),
-                'driver_connected': self._kb.is_connected(),
+                'driver_connected': False,
             }
 
             total_threats = (
@@ -171,23 +98,11 @@ class AntiRootkit:
     def scan_hidden_processes(self) -> list:
         """检测隐藏进程
 
-        比较用户态枚举的进程列表和内核态枚举的进程列表，
+        用户态交叉比对（NtQuerySystemInformation vs Toolhelp32），
         差集即为被 DKOM（直接内核对象操作）隐藏的进程。
         """
         user_procs = self._enum_processes_usermode()
-        user_pids = set(p['pid'] for p in user_procs)
-
-        if self._kb.is_connected():
-            kernel_procs = self._enum_processes_kernelmode()
-            kernel_pids = set(p['pid'] for p in kernel_procs)
-
-            hidden = kernel_pids - user_pids
-            return [
-                {'pid': pid, 'reason': 'DKOM隐藏', 'severity': 'critical'}
-                for pid in hidden
-            ]
-        else:
-            return self._detect_hidden_processes_usermode(user_procs)
+        return self._detect_hidden_processes_usermode(user_procs)
 
     def _enum_processes_usermode(self) -> list:
         """用户态枚举进程（Toolhelp32 快照）"""
@@ -233,28 +148,6 @@ class AntiRootkit:
             return procs
         except Exception as e:
             print(f"[反Rootkit] 枚举进程失败: {e}")
-            return []
-
-    def _enum_processes_kernelmode(self) -> list:
-        """内核态枚举进程（通过 IOCTL_ANDUN_ROOTKIT_SCAN）"""
-        try:
-            result = self._do_rootkit_scan_ioctl()
-            if result is None:
-                return []
-            procs = []
-            for i in range(min(result.proc_count, 256)):
-                p = result.procs[i]
-                if p.pid == 0:
-                    continue
-                procs.append({
-                    'pid': p.pid,
-                    'ppid': p.ppid,
-                    'name': p.name,
-                    'image_path': p.image_path,
-                })
-            return procs
-        except Exception as e:
-            print(f"[反Rootkit] 内核枚举进程失败: {e}")
             return []
 
     def _detect_hidden_processes_usermode(self, user_procs: list) -> list:
@@ -424,53 +317,10 @@ class AntiRootkit:
     def scan_hidden_drivers(self) -> list:
         """检测隐藏驱动
 
-        比较 PsLoadedModuleList（内核）与 EnumDeviceDrivers（用户态），
-        差集即为隐藏驱动。
-        同时校验驱动对象节区是否已卸载（无文件驱动）。
+        用户态 EnumDeviceDrivers 枚举 + 可疑驱动名启发式检测。
         """
         user_drivers = self._enum_drivers_usermode()
-        user_names = set(d['name'].lower() for d in user_drivers)
-
-        if not self._kb.is_connected():
-            return self._detect_hidden_drivers_usermode(user_drivers)
-
-        try:
-            result = self._do_rootkit_scan_ioctl()
-            if result is None:
-                return []
-
-            suspicious = []
-            for i in range(min(result.driver_count, 64)):
-                d = result.drivers[i]
-                if d.name[0] == '\0':
-                    continue
-                name = d.name.lower()
-
-                # 隐藏驱动：内核有但用户态没有
-                if name not in user_names:
-                    suspicious.append({
-                        'name': d.name,
-                        'base_address': hex(d.base_address),
-                        'size': d.size,
-                        'reason': '隐藏驱动（未在用户态驱动列表中出现）',
-                        'severity': 'critical',
-                        'section_unloaded': bool(d.section_unloaded),
-                    })
-                # 无文件驱动：内核有、用户态也有，但节区已卸载
-                elif d.section_unloaded:
-                    suspicious.append({
-                        'name': d.name,
-                        'base_address': hex(d.base_address),
-                        'size': d.size,
-                        'reason': '无文件驱动（驱动对象节区已卸载）',
-                        'severity': 'critical',
-                        'section_unloaded': True,
-                    })
-
-            return suspicious
-        except Exception as e:
-            print(f"[反Rootkit] 隐藏驱动检测失败: {e}")
-            return []
+        return self._detect_hidden_drivers_usermode(user_drivers)
 
     def _enum_drivers_usermode(self) -> list:
         """用户态枚举驱动（EnumDeviceDrivers）"""
@@ -541,47 +391,11 @@ class AntiRootkit:
     # ---------------------------------------------------------------
 
     def scan_hooks(self) -> list:
-        """检测内核钩子
+        """检测内核钩子（用户态降级模式）
 
-        检查：
-        1. SSDT Hook — 对比 KeServiceDescriptorTable 的 KiServiceTable
-        2. IRP Hook — 检查驱动对象 MajorFunction 数组
-        3. Inline Hook — 检查关键函数前字节
+        检查 ntdll.dll 关键函数前字节是否被 Inline Hook。
         """
-        if not self._kb.is_connected():
-            return self._scan_hooks_usermode()
-
-        try:
-            result = self._do_rootkit_scan_ioctl()
-            if result is None:
-                return []
-
-            hooks = []
-            for i in range(min(result.hook_count, 32)):
-                h = result.hooks[i]
-                if h.function_name[0] == '\0':
-                    continue
-
-                hook_type_name = {0: 'SSDT', 1: 'IRP', 2: 'Inline'}.get(h.hook_type, 'Unknown')
-                severity_name = {0: 'info', 1: 'warning', 2: 'critical'}.get(h.severity, 'info')
-
-                # 显示被篡改的字节
-                original_hex = ' '.join(f'{b:02x}' for b in h.original_bytes[:8])
-                current_hex = ' '.join(f'{b:02x}' for b in h.current_bytes[:8])
-
-                hooks.append({
-                    'hook_type': hook_type_name,
-                    'function_name': h.function_name,
-                    'hook_address': hex(h.hook_address),
-                    'driver_name': h.driver_name,
-                    'original_bytes': original_hex,
-                    'current_bytes': current_hex,
-                    'severity': severity_name,
-                })
-            return hooks
-        except Exception as e:
-            print(f"[反Rootkit] 钩子检测失败: {e}")
-            return []
+        return self._scan_hooks_usermode()
 
     def _scan_hooks_usermode(self) -> list:
         """用户态钩子检测（降级模式）
@@ -658,39 +472,11 @@ class AntiRootkit:
     # ---------------------------------------------------------------
 
     def scan_callback_highjacks(self) -> list:
-        """检测回调劫持
+        """检测回调劫持（用户态降级模式）
 
-        检查 PsSetCreateProcessNotifyRoutine / CmRegisterCallback / ObRegisterCallbacks 回调列表
+        通过注册表 AppInit_DLLs / Winlogon 通知包等间接检测回调劫持。
         """
-        if not self._kb.is_connected():
-            return self._scan_callback_highjacks_usermode()
-
-        try:
-            result = self._do_rootkit_scan_ioctl()
-            if result is None:
-                return []
-
-            callbacks = []
-            for i in range(min(result.callback_count, 32)):
-                c = result.callbacks[i]
-                if c.callback_address == 0:
-                    continue
-
-                cb_type_name = {0: 'Process', 1: 'Thread', 2: 'Image', 3: 'Registry', 4: 'Object'}.get(
-                    c.callback_type, 'Unknown'
-                )
-
-                callbacks.append({
-                    'callback_type': cb_type_name,
-                    'callback_address': hex(c.callback_address),
-                    'driver_name': c.driver_name,
-                    'is_trusted': bool(c.is_trusted),
-                    'severity': 'critical' if not c.is_trusted and c.severity >= 2 else 'warning',
-                })
-            return callbacks
-        except Exception as e:
-            print(f"[反Rootkit] 回调劫持检测失败: {e}")
-            return []
+        return self._scan_callback_highjacks_usermode()
 
     def _scan_callback_highjacks_usermode(self) -> list:
         """用户态回调劫持检测（降级模式）
@@ -780,32 +566,13 @@ class AntiRootkit:
         return suspicious
 
     # ---------------------------------------------------------------
-    # 内部工具
+    # 状态
     # ---------------------------------------------------------------
-
-    def _do_rootkit_scan_ioctl(self) -> Optional[ANDUN_ROOTKIT_SCAN_RESULT]:
-        """调用驱动 IOCTL_ANDUN_ROOTKIT_SCAN 获取完整扫描结果"""
-        if not self._kb.is_connected():
-            return None
-
-        try:
-            result = ANDUN_ROOTKIT_SCAN_RESULT()
-            ok, _ = self._kb._ioctl(
-                self._kb.IOCTL_ROOTKIT_SCAN,
-                in_buffer=None, in_size=0,
-                out_buffer=ctypes.byref(result), out_size=ctypes.sizeof(result),
-            )
-            if not ok:
-                return None
-            return result
-        except Exception as e:
-            print(f"[反Rootkit] IOCTL_ROOTKIT_SCAN 失败: {e}")
-            return None
 
     def get_status(self) -> dict:
         return {
             'scanning': self._scanning,
-            'driver_connected': self._kb.is_connected(),
+            'driver_connected': False,
             'last_scan': self._last_scan_time.isoformat() if self._last_scan_time else None,
             'last_result': self._last_scan_result,
         }
@@ -819,13 +586,10 @@ _anti_rootkit = None
 _ar_lock = threading.Lock()
 
 
-def get_anti_rootkit(kernel_bridge=None) -> AntiRootkit:
+def get_anti_rootkit() -> AntiRootkit:
     global _anti_rootkit
     if _anti_rootkit is None:
         with _ar_lock:
             if _anti_rootkit is None:
-                if kernel_bridge is None:
-                    from engine.kernel_bridge import get_kernel_bridge
-                    kernel_bridge = get_kernel_bridge()
-                _anti_rootkit = AntiRootkit(kernel_bridge)
+                _anti_rootkit = AntiRootkit()
     return _anti_rootkit

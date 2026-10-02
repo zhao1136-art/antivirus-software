@@ -221,7 +221,7 @@ _logger = _setup_logging()
 # ── 关键错误告警 ──
 def _alert_critical(event: str, detail: str = ""):
     """
-    关键错误告警：驱动通信失败、签名库损坏、磁盘空间不足等。
+    关键错误告警：引擎通信失败、签名库损坏、磁盘空间不足等。
     生产环境写入 error.log 标红，开发环境额外打印到控制台。
     """
     msg = f"[CRITICAL] {event}"
@@ -493,58 +493,34 @@ class _LazyModule:
         return object.__getattribute__(self, '_instance')
 
 
-def _make_kb():
-    from engine.kernel_bridge import get_kernel_bridge
-    return get_kernel_bridge()
-
-
-def _make_hips():
-    from engine.hips import get_hips
-    from engine.kernel_bridge import get_kernel_bridge
-    return get_hips(get_kernel_bridge())
-
-
-def _make_firewall():
-    from engine.firewall import get_firewall
-    from engine.kernel_bridge import get_kernel_bridge
-    return get_firewall(get_kernel_bridge())
-
-
 def _make_anti_rootkit():
     from engine.anti_rootkit import get_anti_rootkit
-    from engine.kernel_bridge import get_kernel_bridge
-    return get_anti_rootkit(get_kernel_bridge())
+    return get_anti_rootkit()
 
 
 def _make_custom_rules():
     from engine.custom_rules import get_custom_rules
-    from engine.kernel_bridge import get_kernel_bridge
-    from engine.hips import get_hips
-    return get_custom_rules(get_kernel_bridge(), get_hips(get_kernel_bridge()))
+    return get_custom_rules()
 
 
 def _make_honeypot():
     from engine.honeypot_manager import get_honeypot_manager
-    from engine.kernel_bridge import get_kernel_bridge
-    return get_honeypot_manager(get_kernel_bridge())
+    return get_honeypot_manager()
 
 
 def _make_browser_guard():
     from engine.browser_guard import get_browser_guard
-    from engine.kernel_bridge import get_kernel_bridge
-    return get_browser_guard(get_kernel_bridge())
+    return get_browser_guard()
 
 
 def _make_camera_guard():
     from engine.camera_guard import get_camera_guard
-    from engine.kernel_bridge import get_kernel_bridge
-    return get_camera_guard(get_kernel_bridge())
+    return get_camera_guard()
 
 
 def _make_privacy_shield():
     from engine.privacy_shield import get_privacy_shield
-    from engine.kernel_bridge import get_kernel_bridge
-    return get_privacy_shield(get_kernel_bridge())
+    return get_privacy_shield()
 
 
 def _make_data_recovery():
@@ -559,19 +535,14 @@ def _make_sandbox():
 
 def _make_self_protect():
     from engine.self_protect import SelfProtect
-    from engine.kernel_bridge import get_kernel_bridge
-    return SelfProtect(get_kernel_bridge())
+    return SelfProtect()
 
 
 def _make_response_center():
     from engine.response_center import ResponseCenter
-    from engine.kernel_bridge import get_kernel_bridge
-    return ResponseCenter(get_kernel_bridge())
+    return ResponseCenter()
 
 
-kernel_bridge = _LazyModule(_make_kb)
-hips = _LazyModule(_make_hips)
-firewall = _LazyModule(_make_firewall)
 anti_rootkit = _LazyModule(_make_anti_rootkit)
 custom_rules = _LazyModule(_make_custom_rules)
 honeypot_manager = _LazyModule(_make_honeypot)
@@ -616,19 +587,6 @@ def _start_guards():
     except Exception:
         pass
 
-    # 启动内核驱动桥接
-    try:
-        if kernel_bridge.connect():
-            print("[御天] 内核驱动连接成功")
-            kernel_bridge.start_event_loop()
-            hips.enable()
-            # 保护御天自身进程
-            import os
-            kernel_bridge.protect_pid(os.getpid())
-        else:
-            print("[御天] 内核驱动未安装，以用户态模式运行")
-    except Exception as e:
-        print(f"[御天] 内核驱动连接失败: {e}")
 
 
 def _init_etw_guard():
@@ -3764,138 +3722,6 @@ def _do_exit_with_fadeout():
     release_engine_resources()
 
 
-# ==================== 内核驱动 ====================
-
-@app.get('/api/v1/kernel/status')
-async def kernel_status():
-    return {'connected': kernel_bridge.is_connected()}
-
-@app.get('/api/v1/kernel/stats')
-async def kernel_stats():
-    return kernel_bridge.get_stats()
-
-@app.get('/api/v1/kernel/events')
-async def kernel_events():
-    return {'events': kernel_bridge.get_events()}
-
-@app.post('/api/v1/kernel/config')
-async def kernel_config(config: dict = Body(...)):
-    kernel_bridge.set_config(config)
-    return {'ok': True}
-
-@app.post('/api/v1/kernel/toggle')
-async def kernel_toggle(data: dict = Body(...)):
-    try:
-        if data.get('enabled'):
-            if not kernel_bridge.is_connected():
-                kernel_bridge.connect()
-        else:
-            kernel_bridge.disconnect()
-    except Exception:
-        pass
-    return {'ok': True, 'enabled': kernel_bridge.is_connected()}
-
-# ==================== HIPS ====================
-
-@app.get('/api/v1/hips/status')
-async def hips_status():
-    return hips.get_status()
-
-@app.post('/api/v1/hips/toggle')
-async def hips_toggle(data: dict = Body(...)):
-    if data.get('enabled'):
-        hips.enable()
-    else:
-        hips.disable()
-    return {'ok': True, 'enabled': hips.is_enabled()}
-
-@app.get('/api/v1/hips/alerts')
-async def hips_alerts(limit: int = 50):
-    return {'alerts': hips.get_alerts(limit)}
-
-@app.post('/api/v1/hips/action')
-async def hips_action(data: dict = Body(...)):
-    hips.respond_to_pending(data.get('event_id', ''), data.get('action', 'allow'))
-    return {'ok': True}
-
-@app.get('/api/v1/hips/stats')
-async def hips_stats():
-    try:
-        alerts = hips.get_alerts(200)
-        return {'enabled': hips.is_enabled(), 'blocked_count': len(alerts), 'recent_alerts': alerts}
-    except Exception:
-        return {'enabled': False, 'blocked_count': 0, 'recent_alerts': []}
-
-# ==================== 防火墙 ====================
-
-@app.get('/api/v1/firewall/status')
-async def firewall_status():
-    return firewall.get_status()
-
-@app.post('/api/v1/firewall/toggle')
-async def firewall_toggle(data: dict = Body(...)):
-    if data.get('enabled'):
-        firewall.enable()
-    else:
-        firewall.disable()
-    return {'ok': True}
-
-@app.get('/api/v1/firewall/rules')
-async def firewall_rules():
-    return {'rules': firewall.get_rules()}
-
-@app.post('/api/v1/firewall/rule/add')
-async def firewall_rule_add(data: dict = Body(...)):
-    if data.get('action') == 'block':
-        rule = firewall.add_block_rule(data.get('ip', '*'), data.get('port', 0), data.get('protocol', 'tcp'), data.get('description', ''))
-    else:
-        rule = firewall.add_allow_rule(data.get('ip', '*'), data.get('port', 0), data.get('protocol', 'tcp'), data.get('description', ''))
-    return {'ok': True, 'rule': rule}
-
-@app.post('/api/v1/firewall/rule/remove')
-async def firewall_rule_remove(data: dict = Body(...)):
-    ok = firewall.remove_rule(data.get('rule_id', 0))
-    return {'ok': ok}
-
-@app.post('/api/v1/firewall/process/block')
-async def firewall_block_process(data: dict = Body(...)):
-    if data.get('action') == 'block':
-        firewall.block_process(data.get('process_name', ''))
-    else:
-        firewall.unblock_process(data.get('process_name', ''))
-    return {'ok': True}
-
-@app.get('/api/v1/firewall/blocked-processes')
-async def firewall_blocked_processes():
-    try:
-        return {'processes': firewall.get_blocked_processes()}
-    except Exception:
-        return {'processes': []}
-
-@app.post('/api/v1/firewall/blocked-processes')
-async def firewall_blocked_processes_add(data: dict = Body(...)):
-    try:
-        firewall.block_process(data.get('name', ''))
-    except Exception:
-        pass
-    return {'ok': True}
-
-@app.post('/api/v1/firewall/blocked-processes/delete')
-async def firewall_blocked_processes_remove(data: dict = Body(...)):
-    try:
-        firewall.unblock_process(data.get('id', ''))
-    except Exception:
-        pass
-    return {'ok': True}
-
-@app.get('/api/v1/firewall/connections')
-async def firewall_connections():
-    return {'connections': firewall.get_connections()}
-
-@app.get('/api/v1/firewall/stats')
-async def firewall_stats():
-    return firewall.get_stats()
-
 # ==================== 健康检查与监控 ====================
 
 # 启动时间（用于计算运行时长）
@@ -3903,12 +3729,11 @@ _START_TIME = time.time()
 
 @app.get('/api/health')
 async def health_check():
-    """健康检查：驱动状态、签名库版本、引擎版本、运行时长、内存占用"""
+    """健康检查：签名库版本、引擎版本、运行时长、内存占用"""
     import psutil
     import platform
 
-    kb = kernel_bridge._get_real()
-    driver_status = kb.is_driver_ready()
+    driver_status = False   # 内核驱动防护层已移除
 
     # 内存占用
     process = psutil.Process(os.getpid())

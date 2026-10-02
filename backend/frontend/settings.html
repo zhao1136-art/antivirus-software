@@ -1273,9 +1273,8 @@
                     <li>因误报导致正常文件被隔离或删除而造成的损失</li>
                     <li>因本软件与第三方安全软件冲突导致的系统异常</li>
                 </ul>
-                <p>2. 御天提供的内核驱动（<code>andun_driver</code>）为<strong>实验性功能</strong>，默认不启用。用户自行启用内核驱动前应充分了解其风险，开发者不对因内核驱动导致的系统不稳定、安全漏洞或兼容性问题承担责任。</p>
-                <p>3. 御天使用第三方规则库（YARA 规则、ClamAV 病毒库等），开发者不对第三方规则库的准确性、完整性和时效性做任何保证。</p>
-                <p>4. 本软件不保证：</p>
+                <p>2. 御天使用第三方规则库（YARA 规则、ClamAV 病毒库等），开发者不对第三方规则库的准确性、完整性和时效性做任何保证。</p>
+                <p>3. 本软件不保证：</p>
                 <ul>
                     <li>软件功能完全满足您的需求</li>
                     <li>软件运行不会中断或出现错误</li>
@@ -2154,14 +2153,14 @@
                 andunBadge.style.color = cfg.color;
             }
 
-            // 按服务器返回的优先级重排 chips
+            // 按服务器返回的优先级重排引擎标签
             function applyEngineOrder(order) {
                 if (!engineOrderList || !order || !order.length) return;
-                var chips = Array.prototype.slice.call(engineOrderList.children);
+                var engineTagList = Array.prototype.slice.call(engineOrderList.children);
                 var known = order.map(function (k) {
-                    return chips.filter(function (c) { return c.dataset.engine === k; })[0];
+                    return engineTagList.filter(function (c) { return c.dataset.engine === k; })[0];
                 }).filter(Boolean);
-                var rest = chips.filter(function (c) { return order.indexOf(c.dataset.engine) === -1; });
+                var rest = engineTagList.filter(function (c) { return order.indexOf(c.dataset.engine) === -1; });
                 known.concat(rest).forEach(function (chip) { engineOrderList.appendChild(chip); });
             }
 

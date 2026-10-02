@@ -4,7 +4,7 @@
 统一编排各类检测结果（ETW 攻击链 / 反 Rootkit / 病毒扫描）的自动响应：
   1. 检测：消费 ETW 事件关联引擎的攻击链、反 Rootkit 扫描结果
   2. 确认：按置信度阈值判定是否需要自动处置
-  3. 处置：终止进程 + 隔离文件 + 下发驱动拦截规则
+  3. 处置：终止进程 + 隔离文件 + 记录拦截规则（均走用户态兜底实现）
   4. 回滚：临时拦截规则超时自动移除；处置记录保留供回滚
   5. 审计：所有处置动作写入审计日志（JSON 行追加）
 
@@ -57,8 +57,7 @@ DEFAULT_RULE_AUTO_REMOVE_SEC = 300
 class ResponseCenter:
     """处置中心 - 统一编排检测与处置"""
 
-    def __init__(self, kernel_bridge=None):
-        self._kb = kernel_bridge
+    def __init__(self):
         self._auto_response_enabled = False
         self._history: list[dict] = []
         self._history_lock = threading.Lock()
@@ -123,16 +122,8 @@ class ResponseCenter:
             self._audit(result)
             return result
 
-        ok = False
-        if self._kb and self._kb.is_connected():
-            try:
-                ok = self._kb.response_kill_process(pid, force)
-            except Exception as e:
-                logger.warning("驱动终止进程失败: %s", e)
-                ok = False
-        else:
-            # 驱动不可用时用户态兜底（OpenProcess + TerminateProcess）
-            ok = self._kill_process_usermode(pid, force)
+        # 用户态终止进程（OpenProcess + TerminateProcess）
+        ok = self._kill_process_usermode(pid, force)
 
         result["status"] = STATUS_EXECUTED if ok else STATUS_FAILED
         if not ok:
@@ -151,15 +142,8 @@ class ResponseCenter:
             "ts": datetime.now().isoformat(),
         }
 
-        ok = False
-        if self._kb and self._kb.is_connected():
-            try:
-                ok = self._kb.response_quarantine_file(file_path, "")
-            except Exception as e:
-                logger.warning("驱动隔离文件失败: %s", e)
-                ok = False
-        else:
-            ok = self._quarantine_file_usermode(file_path)
+        # 用户态隔离文件（移动 + 隐藏标记）
+        ok = self._quarantine_file_usermode(file_path)
 
         result["status"] = STATUS_EXECUTED if ok else STATUS_FAILED
         if not ok:
@@ -181,15 +165,8 @@ class ResponseCenter:
         }
 
         rule_id = int(rule.get("ruleId", 0))
-        ok = False
-        if self._kb and self._kb.is_connected():
-            try:
-                ok = self._kb.response_block_rule(rule, auto_remove_sec)
-            except Exception as e:
-                logger.warning("驱动下发拦截规则失败: %s", e)
-                ok = False
-        else:
-            ok = self._block_rule_usermode(rule)
+        # 用户态兜底：规则记录到持久化文件，供下次扫描参考
+        ok = self._block_rule_usermode(rule)
 
         if ok:
             result["status"] = STATUS_EXECUTED
@@ -276,12 +253,8 @@ class ResponseCenter:
                 del self._temp_rules[rid]
 
         for rid in expired:
-            ok = False
-            if self._kb and self._kb.is_connected():
-                try:
-                    ok = self._kb.del_rule(rid)
-                except Exception:
-                    ok = False
+            # 无内核驱动：过期规则仅存在于用户态记录中，上方清理即完成回滚
+            ok = True
             rolled.append({
                 "action": "rollback_rule",
                 "ruleId": rid,
@@ -357,7 +330,7 @@ class ResponseCenter:
     def _block_rule_usermode(rule: dict) -> bool:
         """用户态兜底：记录规则到持久化，供下次扫描参考。
 
-        真正的内核拦截必须依赖驱动；驱动不可用时仅记录。
+        仅记录，不做内核层拦截。
         """
         try:
             d = os.path.join(_data_dir(), "rules_fallback.json")
@@ -385,13 +358,10 @@ _response_center: Optional[ResponseCenter] = None
 _rc_lock = threading.Lock()
 
 
-def get_response_center(kernel_bridge=None) -> ResponseCenter:
+def get_response_center() -> ResponseCenter:
     global _response_center
     if _response_center is None:
         with _rc_lock:
             if _response_center is None:
-                if kernel_bridge is None:
-                    from engine.kernel_bridge import get_kernel_bridge
-                    kernel_bridge = get_kernel_bridge()
-                _response_center = ResponseCenter(kernel_bridge)
+                _response_center = ResponseCenter()
     return _response_center

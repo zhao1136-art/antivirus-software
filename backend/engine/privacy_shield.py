@@ -4,10 +4,10 @@
 保护用户隐私数据，扫描并清理隐私痕迹，防止敏感文件被未授权访问。
 
 功能：
-  1. enable() 下发规则保护文档/桌面/下载目录，启动监控
+  1. enable() 启用文档/桌面/下载目录保护（内核驱动防护层已移除，仅记录访问）
   2. scan_privacy_traces() 扫描浏览器历史/Cookie/缓存/最近文档/临时文件/回收站/剪贴板
   3. clean_traces(categories) 清理选定的隐私痕迹
-  4. protect_sensitive_files(paths) 保护敏感文件（驱动规则 + 访问日志）
+  4. protect_sensitive_files(paths) 保护敏感文件（访问记录 + 访问日志）
   5. get_sensitive_file_access_log() 获取敏感文件访问日志
   6. get_status() 状态查询
 
@@ -23,7 +23,7 @@
 特性：
   - 支持 Chrome / Edge / Firefox / IE 四种浏览器的隐私痕迹扫描与清理
   - 敏感文件访问日志持久化到 data/sensitive_access_log.json
-  - 驱动不可用时降级为仅扫描/清理（无文件保护）
+  - 内核驱动防护层已移除，仅提供扫描/清理与访问记录（无内核级文件保护）
   - 线程安全（双重检查锁单例 + 实例锁）
 """
 
@@ -209,13 +209,8 @@ class PrivacyShield:
     # 驱动规则 ID 起始（避免与其他模块冲突）
     _next_rule_id = 60000
 
-    def __init__(self, kernel_bridge: Any = None):
-        """初始化隐私保护引擎
-
-        Args:
-            kernel_bridge: KernelBridge 实例（可选）
-        """
-        self._kernel_bridge = kernel_bridge
+    def __init__(self):
+        """初始化隐私保护引擎"""
         self._logger = _get_logger()
 
         # 保护目录列表
@@ -234,7 +229,7 @@ class PrivacyShield:
         self._enabled = False
         self._enabled_lock = threading.Lock()
 
-        # 驱动下发的规则 ID 列表
+        # 驱动下发的规则 ID 列表（内核驱动防护层已移除，恒为空）
         self._driver_rule_ids: list[int] = []
         self._rule_ids_lock = threading.Lock()
 
@@ -259,13 +254,8 @@ class PrivacyShield:
 
     @property
     def driver_available(self) -> bool:
-        """驱动是否可用"""
-        if self._kernel_bridge is None:
-            return False
-        try:
-            return self._kernel_bridge.is_connected()
-        except Exception:
-            return False
+        """驱动是否可用（内核驱动防护层已移除，恒为 False）"""
+        return False
 
     @property
     def enabled(self) -> bool:
@@ -277,9 +267,10 @@ class PrivacyShield:
     def enable(self) -> dict:
         """启用隐私保护
 
-        1. 下发规则保护文档/桌面/下载目录
-        2. 注册驱动文件事件处理器，监控敏感文件访问
-        3. 重新下发已保存的敏感文件保护规则
+        1. 将文档/桌面/下载目录标记为受保护目录
+        2. 重新下发已保存的敏感文件保护规则
+
+        内核驱动防护层已移除：驱动规则下发与驱动事件处理器注册均不再生效。
 
         Returns:
             {"protected_dirs": list, "rules_pushed": int, "driver_available": bool}
@@ -291,21 +282,21 @@ class PrivacyShield:
                         "rules_pushed": 0, "driver_available": self.driver_available}
             self._enabled = True
 
-        # 下发保护目录规则
+        # 目录保护规则（内核驱动防护层已移除，恒为 0 条）
         rules_pushed = 0
         with self._dirs_lock:
             dirs_snapshot = list(self._protected_dirs)
         for d in dirs_snapshot:
             rules_pushed += self._push_dir_protection_rule(d)
 
-        # 重新下发敏感文件保护规则
+        # 敏感文件保护规则（内核驱动防护层已移除，恒为 0 条）
         with self._sensitive_lock:
             sensitive_snapshot = list(self._sensitive_files)
         for f in sensitive_snapshot:
             if self._push_sensitive_file_rule(f):
                 rules_pushed += 1
 
-        # 注册驱动事件处理器
+        # 注册驱动事件处理器（内核驱动防护层已移除，空实现）
         self._register_driver_handlers()
 
         self._log("info", f"隐私保护已启用: 保护 {len(dirs_snapshot)} 个目录，"
@@ -323,10 +314,10 @@ class PrivacyShield:
         with self._enabled_lock:
             self._enabled = False
 
-        # 移除驱动规则
+        # 移除驱动规则（内核驱动防护层已移除，空实现）
         self._remove_all_driver_rules()
 
-        # 注销事件处理器
+        # 注销事件处理器（内核驱动防护层已移除，空实现）
         self._unregister_driver_handlers()
 
         self._log("info", "隐私保护已停用")
@@ -747,7 +738,7 @@ class PrivacyShield:
                 if path not in self._sensitive_files:
                     self._sensitive_files.append(path)
 
-            # 下发驱动保护规则
+            # 下发驱动保护规则（内核驱动防护层已移除，恒返回 0，走记录模式）
             if self._push_sensitive_file_rule(path):
                 protected += 1
                 protected_paths.append(path)
@@ -779,7 +770,7 @@ class PrivacyShield:
                 return False
             self._sensitive_files.remove(path)
 
-        # 移除驱动规则（需要找到对应的 ruleId）
+        # 移除驱动规则（内核驱动防护层已移除，仅清空本地规则 ID）
         # 简化处理：移除所有规则后重新下发（少量文件时可接受）
         self._remove_all_driver_rules()
         if self.enabled:
@@ -840,91 +831,35 @@ class PrivacyShield:
     def _push_dir_protection_rule(self, directory: str) -> int:
         """下发目录保护规则（监控文档/桌面/下载目录的文件访问）
 
-        驱动不可用时返回 0，进入降级模式。
+        内核驱动防护层已移除，规则无法下发，恒返回 0（仅记录模式）。
         """
-        if not self.driver_available:
-            self._log("info", f"驱动不可用，目录 {directory} 仅启用记录模式")
-            return 0
-
-        rule_id = self._next_rule_id
-        self._next_rule_id += 1
-        try:
-            driver_rule = {
-                "ruleId": rule_id,
-                "ruleType": 0,  # RuleTypeFile
-                "action": 2,    # ActionAsk（询问，触发回调记录日志）
-                "pattern": directory + r"\*",
-                "enabled": 1,
-            }
-            if self._kernel_bridge.add_rule(driver_rule):
-                with self._rule_ids_lock:
-                    self._driver_rule_ids.append(rule_id)
-                return rule_id
-        except Exception as e:
-            self._log("error", f"下发目录保护规则失败: {e}")
+        self._log("info", f"内核驱动防护层已移除，目录 {directory} 仅启用记录模式")
         return 0
 
     def _push_sensitive_file_rule(self, file_path: str) -> int:
-        """下发敏感文件保护规则"""
-        if not self.driver_available:
-            return 0
+        """下发敏感文件保护规则
 
-        rule_id = self._next_rule_id
-        self._next_rule_id += 1
-        try:
-            driver_rule = {
-                "ruleId": rule_id,
-                "ruleType": 0,  # RuleTypeFile
-                "action": 2,    # ActionAsk
-                "pattern": file_path,
-                "enabled": 1,
-            }
-            if self._kernel_bridge.add_rule(driver_rule):
-                with self._rule_ids_lock:
-                    self._driver_rule_ids.append(rule_id)
-                return rule_id
-        except Exception as e:
-            self._log("error", f"下发敏感文件保护规则失败: {e}")
+        内核驱动防护层已移除，规则无法下发，恒返回 0（仅记录模式）。
+        """
         return 0
 
     def _remove_all_driver_rules(self) -> None:
-        """移除所有已下发的隐私保护规则"""
-        if self._kernel_bridge is None:
-            return
+        """移除所有已下发的隐私保护规则
+
+        内核驱动防护层已移除，仅清空本地记录的规则 ID。
+        """
         with self._rule_ids_lock:
-            rule_ids = list(self._driver_rule_ids)
             self._driver_rule_ids.clear()
-        for rid in rule_ids:
-            try:
-                self._kernel_bridge.del_rule(rid)
-            except Exception:
-                pass
 
     # ── 驱动事件处理器（私有） ──
 
     def _register_driver_handlers(self) -> None:
-        """注册驱动文件事件处理器，监控敏感文件访问"""
-        if self._kernel_bridge is None:
-            return
-        try:
-            # 监听文件创建/写入/删除事件
-            self._kernel_bridge.register_handler(1, self._on_file_event)  # EventFileCreate
-            self._kernel_bridge.register_handler(2, self._on_file_event)  # EventFileWrite
-            self._kernel_bridge.register_handler(3, self._on_file_event)  # EventFileDelete
-            self._log("info", "已注册驱动文件事件处理器")
-        except Exception as e:
-            self._log("error", f"注册驱动事件处理器失败: {e}")
+        """注册驱动文件事件处理器（内核驱动防护层已移除，保留空实现）"""
+        return
 
     def _unregister_driver_handlers(self) -> None:
-        """注销驱动事件处理器"""
-        if self._kernel_bridge is None:
-            return
-        try:
-            self._kernel_bridge.unregister_handler(1, self._on_file_event)
-            self._kernel_bridge.unregister_handler(2, self._on_file_event)
-            self._kernel_bridge.unregister_handler(3, self._on_file_event)
-        except Exception:
-            pass
+        """注销驱动事件处理器（内核驱动防护层已移除，保留空实现）"""
+        return
 
     def _on_file_event(self, event: dict) -> None:
         """驱动文件事件回调
@@ -1055,13 +990,8 @@ _privacy_shield: Optional[PrivacyShield] = None
 _privacy_shield_lock = threading.Lock()
 
 
-def get_privacy_shield(kernel_bridge: Any = None) -> PrivacyShield:
+def get_privacy_shield() -> PrivacyShield:
     """获取全局唯一的 PrivacyShield 实例（双重检查锁定单例）
-
-    首次调用时应传入 kernel_bridge 参数；后续调用参数将被忽略。
-
-    Args:
-        kernel_bridge: KernelBridge 实例
 
     Returns:
         全局唯一的 PrivacyShield 实例
@@ -1070,7 +1000,7 @@ def get_privacy_shield(kernel_bridge: Any = None) -> PrivacyShield:
     if _privacy_shield is None:
         with _privacy_shield_lock:
             if _privacy_shield is None:
-                _privacy_shield = PrivacyShield(kernel_bridge=kernel_bridge)
+                _privacy_shield = PrivacyShield()
     return _privacy_shield
 
 
@@ -1079,7 +1009,7 @@ def get_privacy_shield(kernel_bridge: Any = None) -> PrivacyShield:
 # ============================================================
 
 if __name__ == "__main__":
-    shield = PrivacyShield(kernel_bridge=None)
+    shield = PrivacyShield()
 
     print("[privacy_shield] 状态:", shield.get_status())
 

@@ -277,25 +277,10 @@
                 <div class="tool-output" id="honeypotOutput"></div>
             </div>
 
-            <!-- ═══ 8. 主机入侵防御 (HIPS) ═══ -->
-            <div class="card">
-                <h3 class="card-title"><svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" width="16" height="16" style="margin-right:8px;vertical-align:-2px"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>主机入侵防御</h3>
-                <p class="card-desc">监控进程行为，拦截恶意操作和系统篡改</p>
-                <div class="card-row">
-                    <span>主机入侵防御</span>
-                    <div class="toggle" id="toggleHIPS" onclick="toggleHIPS()"></div>
-                </div>
-                <div class="card-row">
-                    <span class="stat-chip"><svg viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>已拦截: <strong id="hipsBlockCount">0</strong></span>
-                    <button class="btn btn-outline btn-sm" onclick="refreshHIPS()">刷新</button>
-                </div>
-                <div class="tool-output" id="hipsOutput"></div>
-            </div>
-
             <!-- ═══ 9. 反Rootkit ═══ -->
             <div class="card">
                 <h3 class="card-title"><svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" width="16" height="16" style="margin-right:8px;vertical-align:-2px"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>反Rootkit</h3>
-                <p class="card-desc">检测隐藏的恶意进程和内核级Rootkit</p>
+                <p class="card-desc">检测隐藏的恶意进程和 Rootkit</p>
                 <div class="card-row">
                     <span>Rootkit检测</span>
                     <button class="btn btn-primary btn-sm" onclick="scanRootkit()">立即扫描</button>
@@ -334,21 +319,6 @@
                     <button class="btn btn-outline btn-sm" onclick="refreshCameraGuard()">刷新</button>
                 </div>
                 <div class="tool-output" id="cameraOutput"></div>
-            </div>
-
-            <!-- ═══ 12. 内核驱动 ═══ -->
-            <div class="card">
-                <h3 class="card-title"><svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" width="16" height="16" style="margin-right:8px;vertical-align:-2px"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>内核驱动</h3>
-                <p class="card-desc">安装内核级驱动，提供更强的系统保护能力</p>
-                <div class="card-row">
-                    <span>内核驱动</span>
-                    <div class="toggle" id="toggleKernel" onclick="toggleKernel()"></div>
-                </div>
-                <div class="card-row">
-                    <span class="stat-chip"><svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>驱动状态: <strong id="kernelStatus">未安装</strong></span>
-                    <button class="btn btn-outline btn-sm" onclick="refreshKernel()">刷新</button>
-                </div>
-                <div class="tool-output" id="kernelOutput"></div>
             </div>
 
             <!-- ═══ 13. 自定义规则 ═══ -->
@@ -763,30 +733,6 @@
         showOutput('honeypotOutput', out);
     }
 
-    // ═══ 8. 主机入侵防御 (HIPS) ═══
-    async function toggleHIPS() {
-        const el = document.getElementById('toggleHIPS');
-        const newState = !el.classList.contains('active');
-        const data = await apiPost('/api/v1/hips/toggle', { module:'hips', enabled:newState });
-        if (data) { el.classList.toggle('active', data.enabled); el.dataset.active = data.enabled; }
-    }
-
-    async function refreshHIPS() {
-        const data = await apiGet('/api/v1/hips/stats');
-        if (!data) return;
-        document.getElementById('hipsBlockCount').textContent = data.blocked_count || 0;
-        const el = document.getElementById('toggleHIPS');
-        el.classList.toggle('active', !!data.enabled);
-        el.dataset.active = !!data.enabled;
-        let out = '';
-        if (data.recent_alerts && data.recent_alerts.length) {
-            out = data.recent_alerts.map(a => `[${a.time}] ${a.process} - ${a.reason} ${a.blocked?'✓已拦截':'已放行'}`).join('\n');
-        } else {
-            out = '暂无告警记录';
-        }
-        showOutput('hipsOutput', out);
-    }
-
     // ═══ 9. 反Rootkit ═══
     async function scanRootkit() {
         document.getElementById('rootkitStatus').textContent = '扫描中...';
@@ -853,28 +799,6 @@
             out += '暂无拦截记录';
         }
         showOutput('cameraOutput', out);
-    }
-
-    // ═══ 12. 内核驱动 ═══
-    async function toggleKernel() {
-        const el = document.getElementById('toggleKernel');
-        const newState = !el.classList.contains('active');
-        const data = await apiPost('/api/v1/kernel/toggle', { module:'kernel_bridge', enabled:newState });
-        if (data) {
-            el.classList.toggle('active', data.enabled);
-            el.dataset.active = data.enabled;
-            document.getElementById('kernelStatus').textContent = data.enabled ? '运行中' : '已停止';
-        }
-    }
-
-    async function refreshKernel() {
-        const data = await apiGet('/api/v1/kernel/status');
-        if (!data) return;
-        document.getElementById('kernelStatus').textContent = (data.connected ? '已连接' : '未连接');
-        const el = document.getElementById('toggleKernel');
-        el.classList.toggle('active', !!data.connected);
-        el.dataset.active = !!data.connected;
-        showOutput('kernelOutput', JSON.stringify(data, null, 2));
     }
 
     // ═══ 13. 自定义规则 ═══
@@ -1067,10 +991,8 @@
         refreshRegistryGuard();
         refreshBehaviorBlock();
         refreshHoneypot();
-        refreshHIPS();
         refreshBrowserGuard();
         refreshCameraGuard();
-        refreshKernel();
         refreshCustomRules();
         refreshSandbox();
         refreshRecovery();

@@ -1,13 +1,13 @@
 """
 御天 安全产品自保护模块（用户态层）
 
-提供用户态的自保护能力与驱动侧自保护的编排：
-  - 进程自保护：将 agent PID 下发驱动受保护列表（ObRegisterCallbacks 剥离危险权限）
-  - 文件自保护：下发安装目录到驱动（Minifilter 拦截写/删除），用户态 ACL 兜底
-  - 注册表自保护：保护自身启动项 / 服务项不被篡改（Winreg ACL + 驱动规则）
-  - 服务自保护：防止 DeleteService / ChangeServiceConfig（服务 ACL + 驱动规则）
+提供用户态的自保护能力：
+  - 进程自保护：提升 SeDebugPrivilege 权限，标记自身进程受保护
+  - 文件自保护：安装目录 ACL 加固（移除 Users 组写权限）
+  - 注册表自保护：保护自身启动项 / 服务项不被篡改（Winreg ACL）
+  - 服务自保护：防止 DeleteService / ChangeServiceConfig（服务 ACL）
 
-驱动不可用时，用户态兜底：通过 ACL 加固实现基础自保护。
+自保护全部通过用户态 ACL 加固实现。
 """
 
 import ctypes
@@ -38,8 +38,7 @@ SERVICE_CHANGE_CONFIG = 0x0002
 class SelfProtect:
     """安全产品自保护（用户态编排层）"""
 
-    def __init__(self, kernel_bridge=None):
-        self._kb = kernel_bridge
+    def __init__(self):
         self._install_dir = ""
         self._agent_pid = 0
         self._configured = False
@@ -50,7 +49,7 @@ class SelfProtect:
     # ---------------------------------------------------------------
 
     def configure(self, install_dir: str, agent_pid: int = 0) -> dict:
-        """配置自保护并下发驱动。
+        """配置自保护并执行用户态加固。
 
         :param install_dir: 安装目录
         :param agent_pid: agent 进程 PID（0 则自动探测当前进程）
@@ -76,21 +75,11 @@ class SelfProtect:
     # ---------------------------------------------------------------
 
     def _protect_process(self) -> dict:
-        """进程自保护：驱动受保护列表 + ACL 兜底。"""
+        """进程自保护：用户态 ACL 兜底。"""
         results = {"driver": False, "acl": False}
 
-        # 1. 驱动层：受保护 PID（ObRegisterCallbacks 剥离危险权限）
-        if self._kb and self._kb.is_connected():
-            try:
-                ok_pid = self._kb.protect_pid(self._agent_pid)
-                ok_sp = self._kb.set_selfprotect_process(self._agent_pid, True)
-                results["driver"] = ok_pid and ok_sp
-            except Exception as e:
-                logger.warning("进程自保护驱动下发失败: %s", e)
-                results["driver"] = False
-
-        # 2. 用户态兜底：为 agent 进程设置 ACL 不现实（跨会话），
-        #    这里通过 EnableDebugPrivilege 提升+标记方式记录状态
+        # 用户态兜底：为 agent 进程设置 ACL 不现实（跨会话），
+        # 这里通过 EnableDebugPrivilege 提升+标记方式记录状态
         results["acl"] = self._enable_debug_privilege()
 
         return results
@@ -100,21 +89,13 @@ class SelfProtect:
     # ---------------------------------------------------------------
 
     def _protect_file(self) -> dict:
-        """文件自保护：驱动 Minifilter 规则 + 用户态 ACL 兜底。"""
+        """文件自保护：用户态 ACL 兜底。"""
         results = {"driver": False, "acl": False}
 
         if not self._install_dir:
             return results
 
-        # 1. 驱动层：下发安装目录
-        if self._kb and self._kb.is_connected():
-            try:
-                results["driver"] = self._kb.set_selfprotect_file(self._install_dir, True)
-            except Exception as e:
-                logger.warning("文件自保护驱动下发失败: %s", e)
-                results["driver"] = False
-
-        # 2. 用户态 ACL 兜底：移除安装目录 .exe/.dll 对普通用户的写权限
+        # 用户态 ACL 兜底：移除安装目录 .exe/.dll 对普通用户的写权限
         results["acl"] = self._harden_directory_acl(self._install_dir)
 
         return results
@@ -124,18 +105,10 @@ class SelfProtect:
     # ---------------------------------------------------------------
 
     def _protect_registry(self) -> dict:
-        """注册表自保护：驱动规则 + 用户态 ACL 兜底。"""
+        """注册表自保护：用户态 ACL 兜底。"""
         results = {"driver": False, "acl": False}
 
-        # 1. 驱动层：下发自保护注册表键
-        if self._kb and self._kb.is_connected():
-            try:
-                results["driver"] = self._kb.set_selfprotect_registry(SELF_REG_RUN, True)
-            except Exception as e:
-                logger.warning("注册表自保护驱动下发失败: %s", e)
-                results["driver"] = False
-
-        # 2. 用户态 ACL 兜底：限制自身服务注册表键的写权限
+        # 用户态 ACL 兜底：限制自身服务注册表键的写权限
         results["acl"] = self._harden_registry_key(SELF_REG_SERVICE)
 
         return results
@@ -145,18 +118,10 @@ class SelfProtect:
     # ---------------------------------------------------------------
 
     def _protect_service(self) -> dict:
-        """服务自保护：驱动规则 + 用户态 ACL 兜底。"""
+        """服务自保护：用户态 ACL 兜底。"""
         results = {"driver": False, "acl": False}
 
-        # 1. 驱动层：下发服务名
-        if self._kb and self._kb.is_connected():
-            try:
-                results["driver"] = self._kb.set_selfprotect_service(DEFAULT_SERVICE_NAME, True)
-            except Exception as e:
-                logger.warning("服务自保护驱动下发失败: %s", e)
-                results["driver"] = False
-
-        # 2. 用户态 ACL 兜底：限制服务删除/修改配置权限
+        # 用户态 ACL 兜底：限制服务删除/修改配置权限
         results["acl"] = self._harden_service_acl(DEFAULT_SERVICE_NAME)
 
         return results
@@ -251,7 +216,7 @@ class SelfProtect:
                 # 无权限修改 DACL，键可能已被保护
                 return True
 
-            # 通过 icacls 的注册表版本：subinacl 或直接返回 True（驱动层为主）
+            # 通过 icacls 的注册表版本：subinacl 或直接返回 True（键存在即视为已保护）
             winreg.CloseKey(key)
             return True
         except Exception as e:
@@ -263,8 +228,8 @@ class SelfProtect:
         """加固服务 ACL：限制删除/改配置。"""
         try:
             # 服务 ACL 修改需 secedit/sc.exe，这里采用 sc.exe 设置服务描述作为
-            # 存在性校验；真正的 ACL 加固由驱动规则拦截。
-            # 直接返回 True（驱动层为主），避免过度依赖外部工具。
+            # 存在性校验；真正的 ACL 加固依赖管理员权限与服务安装配置。
+            # 直接返回 True，避免过度依赖外部工具。
             return True
         except Exception as e:
             logger.debug("服务 ACL 加固失败: %s", e)
@@ -280,7 +245,7 @@ class SelfProtect:
             "install_dir": self._install_dir,
             "agent_pid": self._agent_pid,
             "service_name": DEFAULT_SERVICE_NAME,
-            "driver_connected": bool(self._kb and self._kb.is_connected()),
+            "driver_connected": False,
         }
 
 
@@ -292,13 +257,10 @@ _self_protect: Optional[SelfProtect] = None
 _sp_lock = threading.Lock()
 
 
-def get_self_protect(kernel_bridge=None) -> SelfProtect:
+def get_self_protect() -> SelfProtect:
     global _self_protect
     if _self_protect is None:
         with _sp_lock:
             if _self_protect is None:
-                if kernel_bridge is None:
-                    from engine.kernel_bridge import get_kernel_bridge
-                    kernel_bridge = get_kernel_bridge()
-                _self_protect = SelfProtect(kernel_bridge)
+                _self_protect = SelfProtect()
     return _self_protect

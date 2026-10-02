@@ -5,11 +5,11 @@
 搜索引擎被篡改、扩展被恶意安装、代理被注入、hosts 被修改。
 
 功能：
-  1. enable() 下发文件保护规则到内核驱动（浏览器目录/快捷方式/扩展目录）
+  1. enable() 启用浏览器保护（内核驱动防护层已移除，不再下发文件保护规则）
   2. 建立配置基线（主页/搜索引擎/扩展列表/代理/hosts），持久化到 data/browser_baseline.json
   3. 启动监控线程，定期 check_browser_integrity() 检测配置漂移
   4. protect_homepage / protect_search_engine / protect_extensions 单项保护
-  5. 驱动不可用时降级为用户态轮询监控
+  5. 采用用户态轮询监控（内核驱动防护层已移除）
 
 特性：
   - 浏览器路径检测：注册表查询 + 常见安装路径双策略
@@ -241,13 +241,8 @@ class BrowserGuard:
     # 驱动规则 ID 起始（避免与 custom_rules / honeypot 冲突）
     _next_rule_id = 80000
 
-    def __init__(self, kernel_bridge: Any = None):
-        """初始化浏览器保护引擎
-
-        Args:
-            kernel_bridge: KernelBridge 实例（可选）
-        """
-        self._kernel_bridge = kernel_bridge
+    def __init__(self):
+        """初始化浏览器保护引擎"""
         self._logger = _get_logger()
 
         # 已检测到的浏览器路径 {browser: exe_path}
@@ -266,7 +261,7 @@ class BrowserGuard:
         self._stop_event = threading.Event()
         self._monitor_thread: Optional[threading.Thread] = None
 
-        # 驱动下发的规则 ID 列表
+        # 驱动下发的规则 ID 列表（内核驱动防护层已移除，恒为空）
         self._driver_rule_ids: list[int] = []
         self._rule_ids_lock = threading.Lock()
 
@@ -295,13 +290,8 @@ class BrowserGuard:
 
     @property
     def driver_available(self) -> bool:
-        """驱动是否可用"""
-        if self._kernel_bridge is None:
-            return False
-        try:
-            return self._kernel_bridge.is_connected()
-        except Exception:
-            return False
+        """驱动是否可用（内核驱动防护层已移除，恒为 False）"""
+        return False
 
     @property
     def enabled(self) -> bool:
@@ -313,7 +303,7 @@ class BrowserGuard:
     def enable(self) -> dict:
         """启用浏览器保护
 
-        1. 下发文件保护规则（浏览器目录/快捷方式/扩展目录）
+        1. 记录文件保护规则数量（内核驱动防护层已移除，恒为 0）
         2. 建立配置基线
         3. 启动监控线程
 
@@ -328,7 +318,7 @@ class BrowserGuard:
                         "rules_pushed": 0, "baseline_saved": True}
             self._enabled = True
 
-        # 下发文件保护规则
+        # 文件保护规则（内核驱动防护层已移除，恒为 0 条）
         rules_pushed = 0
         for browser, exe_path in self._browser_paths.items():
             rules_pushed += self._push_browser_protection_rules(browser, exe_path)
@@ -359,7 +349,7 @@ class BrowserGuard:
         # 停止监控
         self._stop_monitor()
 
-        # 移除驱动规则
+        # 移除驱动规则（内核驱动防护层已移除，空实现）
         self._remove_all_driver_rules()
 
         self._log("info", "浏览器保护已停用")
@@ -561,57 +551,18 @@ class BrowserGuard:
         """下发浏览器文件保护规则
 
         保护对象：浏览器可执行文件、用户数据目录、扩展目录
-        驱动不可用时返回 0，进入降级模式。
+        内核驱动防护层已移除，规则无法下发，恒返回 0（仅用户态监控）。
         """
-        if not self.driver_available:
-            self._log("info", f"驱动不可用，{browser} 仅启用用户态监控")
-            return 0
-
-        pushed = 0
-        # 保护对象列表
-        protect_paths = [exe_path]
-
-        # 用户数据目录
-        user_data = BROWSER_USER_DATA.get(browser, "")
-        if user_data and os.path.isdir(user_data):
-            protect_paths.append(user_data + r"\*")
-
-        # 扩展目录（Chromium 系）
-        if browser in ("chrome", "edge") and user_data:
-            protect_paths.append(user_data + r"\*\Extensions\*")
-
-        for pattern in protect_paths:
-            rule_id = self._next_rule_id
-            self._next_rule_id += 1
-            try:
-                driver_rule = {
-                    "ruleId": rule_id,
-                    "ruleType": 0,  # RuleTypeFile
-                    "action": 2,    # ActionAsk（询问，避免阻断正常浏览器更新）
-                    "pattern": pattern,
-                    "enabled": 1,
-                }
-                if self._kernel_bridge.add_rule(driver_rule):
-                    with self._rule_ids_lock:
-                        self._driver_rule_ids.append(rule_id)
-                    pushed += 1
-            except Exception as e:
-                self._log("error", f"下发 {browser} 保护规则失败: {e}")
-
-        return pushed
+        self._log("info", f"内核驱动防护层已移除，{browser} 仅启用用户态监控")
+        return 0
 
     def _remove_all_driver_rules(self) -> None:
-        """移除所有已下发的浏览器保护规则"""
-        if self._kernel_bridge is None:
-            return
+        """移除所有已下发的浏览器保护规则
+
+        内核驱动防护层已移除，仅清空本地记录的规则 ID。
+        """
         with self._rule_ids_lock:
-            rule_ids = list(self._driver_rule_ids)
             self._driver_rule_ids.clear()
-        for rid in rule_ids:
-            try:
-                self._kernel_bridge.del_rule(rid)
-            except Exception:
-                pass
 
     # ── 基线建立（私有） ──
 
@@ -909,13 +860,8 @@ _browser_guard: Optional[BrowserGuard] = None
 _browser_guard_lock = threading.Lock()
 
 
-def get_browser_guard(kernel_bridge: Any = None) -> BrowserGuard:
+def get_browser_guard() -> BrowserGuard:
     """获取全局唯一的 BrowserGuard 实例（双重检查锁定单例）
-
-    首次调用时应传入 kernel_bridge 参数；后续调用参数将被忽略。
-
-    Args:
-        kernel_bridge: KernelBridge 实例
 
     Returns:
         全局唯一的 BrowserGuard 实例
@@ -924,7 +870,7 @@ def get_browser_guard(kernel_bridge: Any = None) -> BrowserGuard:
     if _browser_guard is None:
         with _browser_guard_lock:
             if _browser_guard is None:
-                _browser_guard = BrowserGuard(kernel_bridge=kernel_bridge)
+                _browser_guard = BrowserGuard()
     return _browser_guard
 
 
@@ -933,7 +879,7 @@ def get_browser_guard(kernel_bridge: Any = None) -> BrowserGuard:
 # ============================================================
 
 if __name__ == "__main__":
-    guard = BrowserGuard(kernel_bridge=None)
+    guard = BrowserGuard()
 
     print("[browser_guard] 状态:", guard.get_status())
 
