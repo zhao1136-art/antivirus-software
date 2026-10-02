@@ -1,0 +1,5 @@
+﻿=== A: gcc obj -> ld with mingw32+libgcc ===
+F:\winlibs_mingw-16.1.0posix-14.0.0-ucrt-r3\mingw64\bin\ld.exe: F:\winlibs_mingw-16.1.0posix-14.0.0-ucrt-r3\mingw64\x86_64-w64-mingw32\lib/libmingw32.a(lib64_libmingw32_a-gccmain.o):gccmain.c:(.text+0x89): undefined reference to `atexit'
+A exit=1
+=== B: gcc -c -> gcc -o exe (with -nostdlib avoided) ===
+B exit=1

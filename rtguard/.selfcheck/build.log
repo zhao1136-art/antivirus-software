@@ -1,0 +1,7 @@
+﻿=== gcc -S ===
+gcc -S exit=0
+True
+=== as ===
+as exit=0
+=== ld ===
+ld exit=1

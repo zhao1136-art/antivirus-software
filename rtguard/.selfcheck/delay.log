@@ -1,0 +1,9 @@
+dir: C:\Users\Administrator\AppData\Local\Temp\rdcw-delay-6600
+delay=     0ms -> [('ok', 0.0006, 0), ('ok', 0.0007, 0)]
+delay=    20ms -> [('ok', 0.0212, 0), ('ok', 0.0209, 0)]
+delay=    50ms -> [('ok', 0.0515, 0), ('ok', 0.0515, 0)]
+delay=   100ms -> [('ok', 0.103, 0), ('ok', 0.1015, 0)]
+delay=   250ms -> [('ok', 0.2512, 0), ('ok', 0.2512, 0)]
+delay=   500ms -> [('ok', 0.5012, 0), ('ok', 0.5012, 0)]
+delay=  1000ms -> [('ok', 1.0014, 0), ('ok', 1.001, 0)]
+DONE

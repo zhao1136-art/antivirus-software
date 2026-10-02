@@ -1,0 +1,2 @@
+﻿F:\winlibs_mingw-16.1.0posix-14.0.0-ucrt-r3\mingw64\bin\ld.exe: H:\Caelire\rtguard\.selfcheck\rdcwtest.o:rdcwtest.c:(.text+0x4a9): undefined reference to `__main'
+exit=1

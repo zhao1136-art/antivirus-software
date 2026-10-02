@@ -301,6 +301,12 @@ class _RootWorker:
         self._stop_event = None      # 手动复位事件，置位表示要求退出
         self._handle = None          # 目录句柄
         self._handle_lock = threading.Lock()
+        # 诊断计数（debug=True 时也有意义）
+        self.calls = 0               # ReadDirectoryChangesW 调用次数
+        self.immediate = 0           # 调用立即返回（未阻塞）的次数
+        self.zero_bytes = 0          # 返回 0 字节的次数
+        self.blocked = 0             # 阻塞过的次数
+        self.trace = []              # debug 时记录最近若干次调用结果
 
     # -- 生命周期 ---------------------------------------------------------
     def start(self):
@@ -415,6 +421,7 @@ class _RootWorker:
                             return
                         continue
 
+                _t_call = time.monotonic()
                 ok = bool(
                     _k32.ReadDirectoryChangesW(
                         handle,
@@ -427,6 +434,17 @@ class _RootWorker:
                         None,
                     )
                 )
+                if self._watcher.debug:
+                    elapsed = time.monotonic() - _t_call
+                    self.calls += 1
+                    if elapsed < 0.001:
+                        self.immediate += 1
+                    else:
+                        self.blocked += 1
+                    if len(self.trace) < 40:
+                        self.trace.append(
+                            (round(elapsed, 4), bool(ok), bytes_returned.value)
+                        )
 
                 if self._stop_requested():
                     return

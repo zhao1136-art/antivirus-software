@@ -1,0 +1,20 @@
+dir: C:\Users\Administrator\AppData\Local\Temp\rdcw-to-10212
+=== round 0 ===
+    [reuse] call#0 status=ok blocked=0.001s bytes=0
+    [reuse] call#1 status=ok blocked=0.000s bytes=0
+    [reuse] call#2 status=ok blocked=0.000s bytes=0
+    [reuse] got=0 zero=3
+    [fresh] call#0 status=ok blocked=0.001s bytes=0
+    [fresh] call#1 status=ok blocked=0.000s bytes=0
+    [fresh] call#2 status=ok blocked=0.000s bytes=0
+    [fresh] got=0 zero=3
+=== round 1 ===
+    [reuse] call#0 status=ok blocked=0.001s bytes=0
+    [reuse] call#1 status=ok blocked=0.000s bytes=0
+    [reuse] call#2 status=ok blocked=0.000s bytes=0
+    [reuse] got=0 zero=3
+    [fresh] call#0 status=ok blocked=0.001s bytes=0
+    [fresh] call#1 status=ok blocked=0.000s bytes=0
+    [fresh] call#2 status=ok blocked=0.000s bytes=0
+    [fresh] got=0 zero=3
+DONE

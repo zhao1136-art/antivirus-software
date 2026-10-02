@@ -7,10 +7,14 @@
 默认**只告警、不自动隔离**。理由是实测规则集存在误报（notepad.exe 就会命中
 三条 LNK 相关规则），自动处置会误删系统文件。确认规则集可信后再用
 --quarantine-on-detect 打开自动隔离。
+
+CPU 占用由 --level 控制（low 5% / medium 10% / high 15%，指占系统总容量），
+运行时可在本地状态页上改。
 """
 from __future__ import annotations
 
 import argparse
+import collections
 import os
 import queue
 import signal
@@ -22,6 +26,8 @@ from .scanner import Scanner, DEFAULT_EXTENSIONS
 from .watcher import DirWatcher
 from .quarantine import Quarantine
 from .tray import TrayIcon
+from .throttle import Throttle, LEVELS, DEFAULT_LEVEL
+from .ui import StatusServer
 
 DEFAULT_DIRS = [
     os.path.join(os.path.expanduser("~"), "Downloads"),
@@ -29,24 +35,34 @@ DEFAULT_DIRS = [
     os.environ.get("TEMP", ""),
 ]
 
-SEVERITY_RANK = {"clean": 0, "suspicious": 1, "malicious": 2}
+
+def _fmt_bytes(n: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return "%.1f %s" % (n, unit)
+        n /= 1024.0
+    return str(n)
 
 
 class Probe:
-    """有界工作队列 + 固定扫描线程池"""
+    """有界工作队列 + 固定扫描线程池 + 占空比限速"""
 
     def __init__(self, scanner, workers=2, quarantine=None, quarantine_on_detect=False,
-                 verbose=False):
+                 verbose=False, throttle=None):
         self.scanner = scanner
         self.queue: "queue.Queue[str]" = queue.Queue(maxsize=4096)
         self.quarantine = quarantine
         self.auto_quarantine = quarantine_on_detect
         self.verbose = verbose
+        self.throttle = throttle
         self._stop = threading.Event()
         self._threads = []
         self._seen = {}                     # path -> (size, mtime) 去重
         self._lock = threading.Lock()
+        self.started = time.time()
+        self.alerts = collections.deque(maxlen=50)
         self.counts = {"scanned": 0, "malicious": 0, "suspicious": 0, "skipped": 0}
+        self.last_sleep = 0.0
         self._workers = max(1, min(int(workers), 4))
 
     def start(self):
@@ -91,7 +107,13 @@ class Probe:
                 self.queue.task_done()
 
     def _handle(self, path):
+        # 用 process_time 而不是 wall time：I/O 等待不该算进 CPU 预算
+        c0 = time.process_time()
         res = self.scanner.scan_file(path)
+        work = time.process_time() - c0
+        if self.throttle is not None:
+            self.last_sleep = self.throttle.pace(work, self._workers)
+
         if res.verdict == "skipped":
             self.counts["skipped"] += 1
             return
@@ -100,21 +122,53 @@ class Probe:
             if self.verbose:
                 print("[clean] %s (%.1f ms)" % (path, res.elapsed * 1000))
             return
+
         self.counts[res.verdict] = self.counts.get(res.verdict, 0) + 1
-        rules = ", ".join(t["rule"] for t in res.threats[:3])
-        print("[%s] %s  ->  %s" % (res.verdict.upper(), path, rules))
+        rules = [t["rule"] for t in res.threats]
+        print("[%s] %s  ->  %s" % (res.verdict.upper(), path, ", ".join(rules[:3])))
+        self.alerts.appendleft({
+            "time": time.strftime("%H:%M:%S"),
+            "verdict": res.verdict,
+            "path": path,
+            "rules": rules,
+            "sha256": res.sha256[:16],
+        })
 
         if (res.verdict == "malicious" and self.auto_quarantine
                 and self.quarantine is not None):
             try:
                 entry = self.quarantine.add(path, {
-                    "verdict": res.verdict,
-                    "rules": [t["rule"] for t in res.threats],
-                    "sha256": res.sha256,
+                    "verdict": res.verdict, "rules": rules, "sha256": res.sha256,
                 })
                 print("   已隔离: %s (id=%s)" % (path, entry.get("id")))
             except Exception as exc:
                 print("   隔离失败: %s" % exc)
+
+    def status(self, extra=None):
+        st = self.scanner.stats
+        d = {
+            "uptime_h": round((time.time() - self.started) / 3600, 2),
+            "backend": self.scanner.ruleset.backend(),
+            "stats": {
+                "rules": len(self.scanner.ruleset.rules),
+                "scanned": st["scanned"],
+                "skipped": st["skipped"],
+                "suspicious": st["suspicious"],
+                "malicious": st["malicious"],
+                "cache_hits": st["cache_hits"],
+                "quarantine": len(self.quarantine.list()) if self.quarantine else 0,
+                "bytes_h": _fmt_bytes(st["bytes"]),
+                "queue": self.queue.qsize(),
+            },
+            "alerts": list(self.alerts),
+            "throttle": self.throttle.status() if self.throttle else {
+                "level": "off", "label": "未启用", "target_pct": 0, "actual_pct": 0,
+                "cores": 1, "budget_cores": 0, "levels": {},
+            },
+        }
+        if extra:
+            d.update(extra)
+        return d
 
     def stop(self, timeout=3.0):
         self._stop.set()
@@ -123,7 +177,7 @@ class Probe:
         self._threads.clear()
 
 
-def _scan_path(scanner, target, recursive=True):
+def _scan_path(scanner, target, recursive=True, throttle=None):
     """单次扫描模式"""
     targets = []
     if os.path.isdir(target):
@@ -140,7 +194,10 @@ def _scan_path(scanner, target, recursive=True):
     t0 = time.perf_counter()
     total = 0
     for p in targets:
+        c0 = time.process_time()
         r = scanner.scan_file(p)
+        if throttle is not None:
+            throttle.pace(time.process_time() - c0, 1)
         n[r.verdict] = n.get(r.verdict, 0) + 1
         total += r.size
         if r.verdict in ("suspicious", "malicious"):
@@ -167,6 +224,9 @@ def main(argv=None):
         help="隔离区目录")
     ap.add_argument("--workers", type=int, default=2, help="扫描线程数 1~4")
     ap.add_argument("--max-mb", type=int, default=64, help="单文件扫描上限 MB")
+    ap.add_argument("--level", choices=list(LEVELS), default=DEFAULT_LEVEL,
+                    help="CPU 占用上限档位：low 5%% / medium 10%% / high 15%%（占系统总容量）")
+    ap.add_argument("--ui-port", type=int, default=8022, help="本地状态页端口，0 表示不启动")
     ap.add_argument("--quarantine-on-detect", action="store_true",
                     help="检出即隔离（默认关闭：规则集存在误报）")
     ap.add_argument("--no-tray", action="store_true", help="不启动托盘")
@@ -194,13 +254,18 @@ def main(argv=None):
         args.min_literal, scanner.ruleset.dropped))
     print("  匹配后端: %s" % scanner.ruleset.backend())
 
+    throttle = Throttle(args.level)
+    print("  限速档位: %s（上限 %.0f%% 系统 CPU = %.2f 核 / 共 %d 核）" % (
+        throttle.label, throttle.fraction * 100, throttle.budget_cores, throttle.cores))
+
     if args.once:
-        return _scan_path(scanner, args.once)
+        return _scan_path(scanner, args.once, throttle=throttle)
 
     qdir = args.quarantine
     quarantine = Quarantine(qdir)
     probe = Probe(scanner, workers=args.workers, quarantine=quarantine,
-                  quarantine_on_detect=args.quarantine_on_detect, verbose=args.verbose)
+                  quarantine_on_detect=args.quarantine_on_detect,
+                  verbose=args.verbose, throttle=throttle)
 
     def on_event(path, action):
         if action in ("added", "modified", "renamed"):
@@ -218,6 +283,15 @@ def main(argv=None):
     watcher = DirWatcher(on_event, dirs=dirs)
     probe.start()
     watcher.start()
+
+    ui = None
+    if args.ui_port:
+        ui = StatusServer(probe.status, lambda lv: bool(throttle.set_level(lv)))
+        if ui.start():
+            print("  状态页: %s  （低 5%% / 中 10%% / 高 15%%）" % ui.url)
+        else:
+            print("  状态页启动失败（端口 %d 起被占用），继续无界面运行" % args.ui_port)
+            ui = None
 
     stop_ev = threading.Event()
 
@@ -250,10 +324,14 @@ def main(argv=None):
     print("正在停止…")
     watcher.stop()
     probe.stop()
+    if ui is not None:
+        ui.stop()
     if tray is not None:
         tray.stop()
     scanner.close()
     print("统计: %s" % probe.counts)
+    print("限速: 目标 %.0f%% / 实测 %.1f%%" % (
+        throttle.fraction * 100, throttle.actual_fraction() * 100))
     return 0
 
 
