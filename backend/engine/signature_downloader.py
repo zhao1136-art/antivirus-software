@@ -180,3 +180,40 @@ class SignatureDownloader:
     def quick_update(self) -> dict:
         """快速更新 - 各源取少量数据"""
         return self.download_and_import("all", limit=500)
+
+    def check_bingduku_update(self, remote_version_url: str) -> dict:
+        """
+        检查病毒库是否有新版本可用。
+        
+        :param remote_version_url: 远程版本信息 URL（返回 JSON: {version, url, size, date}）
+        :returns: {update_available, current_version, remote_version, ...}
+        """
+        current = self.sig_mgr.get_bingduku_version()
+        try:
+            resp = requests.get(remote_version_url, headers={"User-Agent": UA}, timeout=15)
+            if resp.status_code != 200:
+                return {"update_available": False, "error": f"HTTP {resp.status_code}",
+                        "current_version": current}
+            info = resp.json()
+            remote_ver = info.get("version", "")
+            return {
+                "update_available": (remote_ver != current),
+                "current_version": current,
+                "remote_version": remote_ver,
+                "remote_url": info.get("url", ""),
+                "remote_size": info.get("size", 0),
+                "remote_date": info.get("date", ""),
+            }
+        except Exception as e:
+            return {"update_available": False, "error": str(e),
+                    "current_version": current}
+
+    def incremental_bingduku_import(self, txt_path: str, version: str) -> dict:
+        """
+        增量导入病毒库（优先使用增量更新，自动回退到全量）。
+        
+        :param txt_path: 本地病毒库文件路径
+        :param version: 病毒库版本号
+        :returns: 与 import_md5_incremental 相同的返回格式
+        """
+        return self.sig_mgr.import_md5_incremental(txt_path, version)

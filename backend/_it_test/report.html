@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>文件完整性检测报告</title><style>
+body{font-family:"Microsoft YaHei",Segoe UI,Arial,sans-serif;margin:0;background:#f4f6f9;color:#333}
+.wrap{max-width:960px;margin:24px auto;padding:0 16px}
+h1{font-size:22px;margin:8px 0 4px}
+.meta{color:#777;font-size:13px;margin-bottom:16px}
+.cards{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+.card{flex:1;min-width:120px;background:#fff;border-radius:8px;padding:14px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.card .num{font-size:26px;font-weight:700}
+.card .lbl{font-size:12px;color:#777}
+.ok .num{color:#2e9e5b}.bad .num{color:#d64545}
+table{width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+th,td{padding:8px 12px;text-align:left;font-size:13px;border-bottom:1px solid #eef0f3}
+th{background:#2f3a4c;color:#fff}
+tr.ok td{color:#555}
+tr.modified td,tr.missing td,tr.unreadable td{background:#fff3f3}
+tr.new td{background:#fff9e8}
+.tag{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px}
+.tag.ok{background:#e3f5ea;color:#2e9e5b}.tag.modified,.tag.missing,.tag.unreadable{background:#fde3e3;color:#d64545}
+.tag.new{background:#fdf3d0;color:#b8860b}
+.hash{font-family:Consolas,monospace;font-size:12px;word-break:break-all;color:#888}
+.conclusion{margin-top:16px;padding:14px;border-radius:8px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.conclusion.pass{border-left:4px solid #2e9e5b}
+.conclusion.fail{border-left:4px solid #d64545}
+.footer{color:#aaa;font-size:12px;text-align:center;margin:20px 0}
+</style></head>
+<body><div class="wrap">
+<h1>文件完整性检测报告</h1>
+<div class="meta">生成时间：2026-08-22 16:18:34　|　校验文件：F:\Caelire\backend\_it_test\checksums.sha256　|　根路径：F:\Caelire\backend\_it_test　|　算法：SHA256</div>
+<div class="cards">
+<div class="card"><div class="num">3</div><div class="lbl">总条目</div></div>
+<div class="card ok"><div class="num">1</div><div class="lbl">通过</div></div>
+<div class="card bad"><div class="num">1</div><div class="lbl">篡改</div></div>
+<div class="card bad"><div class="num">1</div><div class="lbl">缺失</div></div>
+<div class="card"><div class="num">3</div><div class="lbl">新增</div></div>
+<div class="card bad"><div class="num">0</div><div class="lbl">无法读取</div></div>
+</div>
+<table><tr><th>状态</th><th>文件</th><th>期望摘要</th><th>说明</th></tr><tr class="modified"><td><span class="tag modified">篡改</span></td><td>a.txt</td><td class="hash">6600cce3a93121e79f93ad2175251d6d4c9b2a1241fbc1a8a45058e94e16ecd2</td><td><div class="hash">期望 6600cce3a93121e79f93ad2175251d6d4c9b2a1241fbc1a8a45058e94e16ecd2</div><div class="hash">实际 3f3d4e621f4d908168cd5b504f7921766adbd8c3668d965c7859ec8184e5f805</div></td></tr><tr class="ok"><td><span class="tag ok">通过</span></td><td>b.bin</td><td class="hash">54087034531a07819d81a7bcc128d5495c4e66c500b21896c42bd692452c71fb</td><td></td></tr><tr class="missing"><td><span class="tag missing">缺失</span></td><td>sub/c.log</td><td class="hash">f08938a85a9a461f870c63b03e8a240aaf2ca5c87fa6495d29955a470b9cee83</td><td></td></tr><tr class="new"><td><span class="tag new">新增</span></td><td>checksums.sha256</td><td class="hash">-</td><td>校验文件中不存在</td></tr><tr class="new"><td><span class="tag new">新增</span></td><td>ignore.tmp</td><td class="hash">-</td><td>校验文件中不存在</td></tr><tr class="new"><td><span class="tag new">新增</span></td><td>new_file.txt</td><td class="hash">-</td><td>校验文件中不存在</td></tr></table>
+<div class="conclusion fail"><b>结论：</b>完整性校验未通过：发现 篡改 1 个, 缺失 1 个, 新增 3 个，文件可能已被篡改。</div>
+<div class="footer">由 file_integrity_checker 生成</div>
+</div></body></html>

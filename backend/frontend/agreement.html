@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>御天 — 用户协议与免责声明</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+            background: linear-gradient(135deg, #0a1628 0%, #1a2a4a 100%);
+            color: #ccd6e0;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            background: rgba(15, 25, 45, 0.95);
+            border: 1px solid rgba(0, 180, 255, 0.2);
+            border-radius: 12px;
+            max-width: 720px;
+            width: 100%;
+            padding: 40px 36px;
+            box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+        }
+        .logo {
+            text-align: center;
+            margin-bottom: 24px;
+        }
+        .logo h1 {
+            font-size: 28px;
+            color: #00b4ff;
+            letter-spacing: 4px;
+        }
+        .logo .subtitle {
+            font-size: 13px;
+            color: #667a99;
+            margin-top: 4px;
+        }
+        .content {
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 8px;
+            padding: 20px 24px;
+            max-height: 400px;
+            overflow-y: auto;
+            background: rgba(0, 0, 0, 0.2);
+            font-size: 14px;
+            line-height: 1.8;
+        }
+        .content::-webkit-scrollbar { width: 5px; }
+        .content::-webkit-scrollbar-thumb { background: #334; border-radius: 3px; }
+        .content h2 {
+            color: #00b4ff;
+            font-size: 16px;
+            margin: 18px 0 8px;
+            padding-bottom: 6px;
+            border-bottom: 1px solid rgba(0, 180, 255, 0.15);
+        }
+        .content h2:first-of-type { margin-top: 0; }
+        .content h3 { color: #00b4ff; font-size: 14px; margin: 12px 0 6px; }
+        .content ul, .content ol { padding-left: 22px; margin: 6px 0; }
+        .content li { margin: 4px 0; color: #a0b4cc; }
+        .content p { margin: 6px 0; color: #a0b4cc; }
+        .content strong { color: #e0e8f0; }
+        .content code { background: rgba(0, 180, 255, 0.1); padding: 1px 5px; border-radius: 3px; font-size: 13px; }
+        .content hr { border: none; border-top: 1px solid rgba(255,255,255,0.06); margin: 12px 0; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="logo">
+        <h1>御 天</h1>
+        <div class="subtitle">用户协议与免责声明 &nbsp;·&nbsp; v1.0.1 &nbsp;·&nbsp; 2026-08-04</div>
+    </div>
+
+    <div class="content">
+        <h2>一、接受条款</h2>
+        <p>安装、复制或以任何方式使用本软件（以下简称"御天"），即表示您已阅读、理解并同意本协议的全部条款。首次启动时，软件将展示本协议并要求您确认同意。如果您不同意本协议的任何条款，请立即停止使用并卸载本软件。</p>
+        <p>本软件目前为个人开发项目，免费提供给用户使用。未来若涉及收费，将另行通知。</p>
+
+        <h2>二、软件许可</h2>
+        <p>1. 御天授予您一份<strong>非独占、不可转让、可撤销</strong>的使用许可，仅限在您个人拥有或合法控制的计算机上安装和使用本软件。</p>
+        <p>2. 您可以：</p>
+        <ul>
+            <li>在任意数量的个人设备上安装和使用本软件</li>
+            <li>将本软件的完整安装包分发给他人，但不得以此牟利</li>
+            <li>查看本软件的源代码，用于学习或提供改进建议</li>
+        </ul>
+        <p>3. 您<strong>不得</strong>：</p>
+        <ul>
+            <li>对本软件进行逆向工程、反编译或反汇编（法律法规另有规定的除外）</li>
+            <li>删除、修改或掩盖本软件中的版权声明、商标标识</li>
+            <li>以本软件的名义进行欺诈、传播恶意软件等非法活动</li>
+        </ul>
+
+        <h2>三、免责声明</h2>
+        <h3>本软件按"现状"提供</h3>
+        <p>1. 御天是一款<strong>用户态</strong>杀毒辅助工具，开发者将尽合理努力确保软件的可用性和安全性，但对于以下情况，开发者不承担超出合理范围的额外责任：</p>
+        <ul>
+            <li>本软件未能检测到或未能清除的病毒、木马、勒索软件等恶意程序（本软件不保证100%检测率，建议配合其他安全措施使用）</li>
+            <li>因误报导致正常文件被隔离或删除而造成的损失</li>
+            <li>因本软件与第三方安全软件冲突导致的系统异常</li>
+        </ul>
+        <p>2. 御天提供的内核驱动（<code>andun_driver</code>）为<strong>实验性功能</strong>，默认不启用。用户自行启用内核驱动前应充分了解其风险，开发者不对因内核驱动导致的系统不稳定、安全漏洞或兼容性问题承担责任。</p>
+        <p>3. 御天使用第三方规则库（YARA 规则、ClamAV 病毒库等），开发者不对第三方规则库的准确性、完整性和时效性做任何保证。</p>
+        <p>4. 本软件不保证：</p>
+        <ul>
+            <li>软件功能完全满足您的需求</li>
+            <li>软件运行不会中断或出现错误</li>
+            <li>所有病毒、恶意软件都能被检测和清除</li>
+        </ul>
+
+        <h2>四、隐私声明</h2>
+        <p>1. 御天<strong>不会</strong>主动收集或上传您的个人信息、文件内容、浏览记录等数据。</p>
+        <p>2. 以下功能可能涉及网络请求，但仅传输必要的数据：</p>
+        <ul>
+            <li><strong>云端扫描</strong>：上传文件哈希值（非文件内容）到第三方威胁情报平台查询</li>
+            <li><strong>特征库更新</strong>：从公开源下载最新的病毒特征库</li>
+            <li><strong>病毒查杀</strong>：可选上传可疑文件到 VirusTotal 等平台进行分析</li>
+        </ul>
+        <p>3. 上述网络功能均需用户手动开启，默认关闭。您可以在设置中随时关闭。</p>
+        <p>4. 本软件在本地生成的扫描日志、威胁报告、隔离文件等数据仅存储在您的设备上，开发者无法访问。</p>
+
+        <h2>五、开源与第三方组件</h2>
+        <p>御天使用了以下开源组件和第三方库，各组件遵循其各自的许可协议：</p>
+        <ul>
+            <li><strong>Python</strong> — PSF License</li>
+            <li><strong>FastAPI</strong> — MIT License</li>
+            <li><strong>PyInstaller</strong> — GPL License（其 bootloader 有独立例外条款，不影响御天自身的许可）</li>
+            <li><strong>YARA</strong> — BSD 3-Clause License</li>
+            <li><strong>ClamAV</strong> — GPL v2 License</li>
+            <li><strong>PE-sieve</strong> — BSD 2-Clause License</li>
+            <li><strong>capa</strong> — Apache 2.0 License</li>
+            <li><strong>Vigil</strong> — MIT License</li>
+            <li>以及 NumPy、LightGBM、LIEF、psutil、pefile 等其他开源库</li>
+        </ul>
+        <p>完整的第三方组件列表及许可证信息，请参见源码目录中的 <code>requirements.txt</code> 及各组件的官方文档。</p>
+
+        <h2>六、责任限制</h2>
+        <p>在适用法律允许的最大范围内，且除因开发者故意或重大过失导致的情形外，开发者对以下情形不承担责任：</p>
+        <p>1. 因使用或无法使用本软件而产生的任何<strong>间接、偶然、特殊、惩罚性或附带损害</strong>，包括但不限于利润损失、业务中断、商誉损失等。</p>
+        <p>2. 即使开发者已被告知此类损害的可能性，本责任限制仍然适用。</p>
+        <p>3. 如果您所在的司法管辖区不允许排除或限制附带或间接损害，上述限制可能不适用于您。在此情况下，开发者的责任将限于法律允许的最低限度。</p>
+
+        <h2>七、协议变更</h2>
+        <p>开发者如需修改本协议，将通过软件更新公告、弹窗提示等合理方式通知用户。用户在收到通知后继续使用本软件，即视为同意修改后的协议。如您不同意修改后的条款，应停止使用本软件。</p>
+
+        <h2>八、适用法律与争议解决</h2>
+        <p>1. 本协议适用<strong>中华人民共和国法律</strong>。</p>
+        <p>2. 因本协议或使用本软件产生的任何争议，双方应首先友好协商解决。协商不成的，任何一方均可向<strong>开发者所在地有管辖权的人民法院</strong>提起诉讼。</p>
+
+        <h2>九、联系方式</h2>
+        <p>如有问题、建议或安全漏洞报告，欢迎通过以下方式联系：</p>
+        <ul>
+            <li>项目地址：查看源码仓库的 Issues 页面</li>
+            <li>安全漏洞：请通过私密渠道报告，勿在公开渠道披露</li>
+        </ul>
+    </div>
+
+</div>
+</body>
+</html>

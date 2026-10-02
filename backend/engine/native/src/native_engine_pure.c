@@ -1,5 +1,5 @@
 /**
- * 安盾 原生引擎 - 纯C实现（零STL依赖，兼容任何Python CRT）
+ * 御天 原生引擎 - 纯C实现（零STL依赖，兼容任何Python CRT）
  * 编译: gcc -O2 -shared -o native_engine.dll native_engine_pure.c 
  *        -ladvapi32 -lws2_32 -liphlpapi -lpsapi -lole32 -static
  */
@@ -116,7 +116,7 @@ __declspec(dllexport) void native_free_string(char* str) {
 
 /* ============== 版本/自检 ============== */
 __declspec(dllexport) char* native_engine_version(void) {
-    return alloc_copy("{\"name\":\"安盾 Native Engine\",\"version\":\"1.0.0\",\"modules\":[\"sha256\",\"pe_parser\",\"heuristic\",\"sys_scanner\",\"quarantine\"]}");
+    return alloc_copy("{\"name\":\"御天 Native Engine\",\"version\":\"1.0.0\",\"modules\":[\"sha256\",\"pe_parser\",\"heuristic\",\"sys_scanner\",\"quarantine\"]}");
 }
 
 __declspec(dllexport) char* native_engine_self_test(void) {

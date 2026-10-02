@@ -1,0 +1,1108 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>引擎启动 - 安盾</title>
+    <!-- 主题预加载：在渲染前根据本地设置切换深/浅色，避免闪烁 -->
+    <script>(function(){try{var s=JSON.parse(localStorage.getItem('安盾_settings')||'{}');if(s.theme==='light')document.documentElement.classList.add('light');}catch(e){}}())</script>
+    <style>
+        /* ============================================================
+           全局设计变量：与全站（index/scan/tools 等）保持一致的品牌基调
+           ============================================================ */
+        :root {
+            --bg-primary: #0a1f2e;
+            --bg-secondary: #0e0e14;
+            --bg-card: #13131c;
+            --bg-hover: #1a1a26;
+            --border: #252536;
+            --border-light: #2f2f44;
+            --text-primary: #f4f4f9;
+            --text-secondary: #8f8fab;
+            --text-muted: #5c5c75;
+            --accent: #00bcd4;
+            --accent-dim: rgba(0, 188, 212, 0.12);
+            --accent-glow: rgba(0, 188, 212, 0.35);
+            --danger: #ff4d6d;
+            --danger-dim: rgba(255, 77, 109, 0.12);
+            --warning: #ffcc00;
+            --success: #00bcd4;
+            /* 360 风格引擎按钮专属绿色系 */
+            --eng-green: #2ee26a;
+            --eng-green-2: #00b16a;
+            --eng-green-dim: rgba(46, 226, 106, 0.14);
+            --eng-green-glow: rgba(46, 226, 106, 0.45);
+            --radius-sm: 10px;
+            --radius-md: 16px;
+            --radius-lg: 24px;
+            --transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        html.light {
+            --bg-primary: #eef2f7;
+            --bg-secondary: #f7f8fc;
+            --bg-card: #ffffff;
+            --bg-hover: #eef1f6;
+            --border: #e2e6ee;
+            --border-light: #d3d9e4;
+            --text-primary: #1d2433;
+            --text-secondary: #5a6478;
+            --text-muted: #9aa3b5;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'DM Sans', 'Microsoft YaHei', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+            opacity: 0;
+            animation: pageFadeIn 0.5s ease forwards;
+        }
+        @keyframes pageFadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+        body::before {
+            content: '';
+            position: fixed; inset: 0;
+            background:
+                radial-gradient(circle at 20% 30%, rgba(0, 188, 212, 0.06) 0%, transparent 40%),
+                radial-gradient(circle at 80% 70%, rgba(46, 226, 106, 0.05) 0%, transparent 40%),
+                linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+            background-size: 100% 100%, 100% 100%, 40px 40px, 40px 40px;
+            pointer-events: none; z-index: 0;
+        }
+
+        .app { display: flex; min-height: 100vh; position: relative; z-index: 1; }
+
+        /* ---------- 侧边导航（沿用全站图标侧栏规范） ---------- */
+        .sidebar {
+            width: 72px;
+            background: rgba(14, 14, 20, 0.85);
+            backdrop-filter: blur(20px);
+            border-right: 1px solid var(--border);
+            display: flex; flex-direction: column; align-items: center;
+            padding: 20px 8px; position: fixed; height: 100vh; z-index: 100;
+        }
+        html.light .sidebar { background: rgba(247, 248, 252, 0.9); }
+        .nav { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 1; width: 100%; }
+        .nav-group { width: 100%; text-align: center; padding: 14px 0 6px; user-select: none; }
+        .nav-group::before { content: ''; display: block; width: 20px; height: 1px; background: var(--border); margin: 0 auto; }
+        .nav-item {
+            display: flex; align-items: center; justify-content: center;
+            width: 44px; height: 44px; border-radius: 12px;
+            color: var(--text-secondary); text-decoration: none; font-size: 0;
+            transition: var(--transition); cursor: pointer;
+            border: 1px solid transparent; position: relative;
+        }
+        .nav-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+        .nav-item.active { background: var(--accent-dim); color: var(--accent); border-color: rgba(0,188,212,0.2); }
+        .nav-item svg { width: 22px; height: 22px; opacity: 0.85; }
+        .nav-item.active svg { opacity: 1; }
+        .nav-item[href="settings.html"] { margin-top: auto; }
+        .nav-item:hover::after {
+            content: attr(data-title);
+            position: absolute; left: 100%; margin-left: 14px;
+            background: var(--bg-card); border: 1px solid var(--border);
+            padding: 6px 12px; border-radius: 6px; font-size: 13px;
+            color: var(--text-primary); white-space: nowrap; z-index: 300;
+            pointer-events: none; box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+        }
+        .nav-item.active:hover::after { border-color: rgba(0,188,212,0.3); color: var(--accent); }
+
+        /* ---------- 主内容区 ---------- */
+        .main { flex: 1; margin-left: 72px; padding: 28px 36px; max-width: calc(100% - 72px); }
+        .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; flex-wrap: wrap; gap: 12px; }
+        .header-title { font-size: 24px; font-weight: 700; }
+        .header-sub { color: var(--text-muted); font-size: 13px; margin-top: 2px; }
+        .header-meta { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+        .status-pill {
+            display: inline-flex; align-items: center; gap: 8px;
+            padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 600;
+            background: var(--accent-dim); color: var(--accent);
+            border: 1px solid rgba(0,188,212,0.25);
+            transition: var(--transition);
+        }
+        .status-pill.off { background: var(--danger-dim); color: var(--danger); border-color: rgba(255,77,109,0.25); }
+        .status-pill.partial { background: rgba(255,204,0,0.12); color: var(--warning); border-color: rgba(255,204,0,0.3); }
+        .status-pill .pulse {
+            width: 8px; height: 8px; border-radius: 50%; background: currentColor;
+            animation: pulseDot 1.8s ease-in-out infinite;
+        }
+        @keyframes pulseDot { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.75); } }
+        .time { color: var(--text-secondary); font-size: 13px; font-variant-numeric: tabular-nums; }
+
+        /* ============================================================
+           核心：引擎启动区（360 风格大按钮，页面视觉中心）
+           ============================================================ */
+        .launch-stage {
+            display: flex; flex-direction: column; align-items: center;
+            padding: 40px 0 8px; gap: 20px; position: relative;
+            animation: fadeInUp 0.5s ease both;
+        }
+        /* 按钮背后的同心圆光晕，强化“启动”聚焦感 */
+        .launch-halo {
+            position: absolute; top: 50%; left: 50%;
+            width: 460px; height: 460px; transform: translate(-50%, -50%);
+            border-radius: 50%; pointer-events: none; z-index: 0;
+            background:
+                radial-gradient(circle, var(--eng-green-dim) 0%, transparent 60%),
+                repeating-radial-gradient(circle, transparent 0 46px, var(--border) 47px 48px);
+            opacity: 0.55;
+        }
+        @keyframes fadeInUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+
+        .engine-btn-wrap { position: relative; display: grid; place-items: center; z-index: 1; }
+        .engine-btn {
+            width: 210px; height: 210px; border-radius: 50%;
+            position: relative; cursor: pointer; border: none;
+            background: var(--bg-hover);
+            box-shadow: 0 12px 32px rgba(0,0,0,0.35), inset 0 0 0 1px var(--border-light);
+            display: grid; place-items: center;
+            transition: transform 0.15s ease, box-shadow 0.4s ease;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .engine-btn:hover { transform: scale(1.03); }
+        .engine-btn:active { transform: scale(0.96); }
+        /* 引擎核心圆盘 */
+        .engine-core {
+            width: 146px; height: 146px; border-radius: 50%;
+            display: grid; place-items: center; position: relative;
+            background: linear-gradient(180deg, #4a4a5c, #2a2a38);
+            color: var(--text-muted);
+            box-shadow: inset 0 4px 14px rgba(0,0,0,0.5);
+            transition: var(--transition);
+        }
+        .engine-core svg { width: 68px; height: 68px; transition: var(--transition); }
+        .engine-core .core-hint {
+            position: absolute; bottom: 14px; font-size: 11px; font-weight: 700;
+            letter-spacing: 2px; transition: var(--transition);
+        }
+        /* 启用态：360 绿色 */
+        .engine-btn.on {
+            box-shadow: 0 0 0 6px var(--eng-green-dim), 0 0 46px var(--eng-green-glow), 0 12px 32px rgba(0,0,0,0.35);
+        }
+        .engine-btn.on .engine-core {
+            background: linear-gradient(180deg, var(--eng-green), var(--eng-green-2));
+            color: #fff;
+            box-shadow: inset 0 4px 12px rgba(0,0,0,0.25), 0 0 24px var(--eng-green-glow);
+        }
+        /* 部分启用态：琥珀色提示 */
+        .engine-btn.partial {
+            box-shadow: 0 0 0 6px rgba(255,204,0,0.12), 0 0 36px rgba(255,204,0,0.3), 0 12px 32px rgba(0,0,0,0.35);
+        }
+        .engine-btn.partial .engine-core {
+            background: linear-gradient(180deg, #ffd75e, #f0a500);
+            color: #fff;
+        }
+        /* 请求中：旋转扫光 */
+        .engine-btn.busy .engine-ring::before { animation: ringSpin 0.9s linear infinite; }
+        .engine-btn.busy .engine-core { filter: saturate(0.7); }
+        /* 外部呼吸光环（仅启用态） */
+        .engine-ring { position: absolute; inset: -14px; border-radius: 50%; pointer-events: none; }
+        .engine-btn.on .engine-ring::before {
+            content: ''; position: absolute; inset: -6px; border-radius: 50%;
+            background: conic-gradient(from 0deg, transparent 0 300deg, var(--eng-green) 360deg);
+            -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 6px), #000 calc(100% - 5px));
+            mask: radial-gradient(farthest-side, transparent calc(100% - 6px), #000 calc(100% - 5px));
+            animation: ringPulse 2.4s ease-in-out infinite;
+        }
+        .engine-btn.partial .engine-ring::before {
+            content: ''; position: absolute; inset: -6px; border-radius: 50%;
+            border: 3px dashed rgba(255,204,0,0.4);
+            animation: ringSpin 12s linear infinite;
+        }
+        @keyframes ringSpin { to { transform: rotate(360deg); } }
+        @keyframes ringPulse { 0%,100% { opacity: 0.55; } 50% { opacity: 1; } }
+        /* 点击涟漪 */
+        .engine-ripple {
+            position: absolute; border-radius: 50%; pointer-events: none;
+            background: rgba(46, 226, 106, 0.35);
+            transform: scale(0); animation: rippleAnim 0.6s ease-out forwards;
+        }
+        @keyframes rippleAnim { to { transform: scale(1); opacity: 0; } }
+        /* 启用瞬间向外扩散的冲击波 */
+        .engine-wave {
+            position: absolute; inset: 0; border-radius: 50%;
+            border: 2px solid var(--eng-green);
+            animation: waveOut 0.8s ease-out forwards; pointer-events: none;
+        }
+        @keyframes waveOut { from { transform: scale(1); opacity: 0.9; } to { transform: scale(1.55); opacity: 0; } }
+
+        /* 按钮下方状态文案 */
+        .engine-status-text { font-size: 24px; font-weight: 800; text-align: center; transition: color 0.3s; z-index: 1; }
+        .engine-status-text.on { color: var(--eng-green); }
+        .engine-status-text.off { color: var(--danger); }
+        .engine-status-text.partial { color: var(--warning); }
+        .engine-sub-text { color: var(--text-secondary); font-size: 13px; margin-top: 6px; text-align: center; z-index: 1; }
+
+        /* ---------- 启动步骤（实时反映引擎状态） ---------- */
+        .launch-steps {
+            display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; z-index: 1; margin-top: 6px;
+        }
+        .step {
+            display: inline-flex; align-items: center; gap: 8px;
+            padding: 8px 16px; border-radius: 20px; font-size: 13px; font-weight: 600;
+            background: var(--bg-hover); border: 1px solid var(--border);
+            color: var(--text-muted); transition: var(--transition);
+        }
+        .step svg { width: 15px; height: 15px; }
+        .step.ready { color: var(--eng-green); border-color: var(--eng-green-dim); background: var(--eng-green-dim); }
+        .step.warn { color: var(--warning); border-color: rgba(255,204,0,0.3); background: rgba(255,204,0,0.1); }
+        .step.danger { color: var(--danger); border-color: var(--danger-dim); background: var(--danger-dim); }
+
+        /* ---------- 防护子模块（动态渲染，紧凑卡片） ---------- */
+        .modules {
+            max-width: 860px; width: 100%; margin: 26px auto 0;
+            background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: var(--radius-lg); padding: 18px 20px;
+            animation: fadeInUp 0.5s 0.1s ease both;
+        }
+        .modules-title { font-size: 14px; color: var(--text-secondary); margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; }
+        .module-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; }
+        .module-chip {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 11px 14px; border-radius: var(--radius-md);
+            background: var(--bg-hover); border: 1px solid var(--border);
+            cursor: pointer; transition: var(--transition); user-select: none;
+        }
+        .module-chip:hover { border-color: var(--border-light); }
+        .module-chip .mc-name { font-size: 13.5px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+        .module-chip .mc-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); transition: background 0.3s; }
+        .module-chip.on .mc-dot { background: var(--eng-green); box-shadow: 0 0 8px var(--eng-green-glow); }
+        .mini-toggle {
+            width: 40px; height: 22px; border-radius: 12px; background: var(--border-light);
+            position: relative; transition: background 0.25s; flex-shrink: 0;
+        }
+        .mini-toggle::after {
+            content: ''; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px;
+            border-radius: 50%; background: #fff; transition: transform 0.25s cubic-bezier(0.4,0,0.2,1);
+        }
+        .module-chip.on .mini-toggle { background: var(--eng-green); }
+        .module-chip.on .mini-toggle::after { transform: translateX(18px); }
+
+        /* ---------- 引擎一览（各引擎状态 + 控制按钮） ---------- */
+        .engines {
+            max-width: 860px; width: 100%; margin: 16px auto 0;
+            background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: var(--radius-lg); padding: 18px 20px;
+            animation: fadeInUp 0.5s 0.12s ease both;
+        }
+        .engine-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(255px, 1fr)); gap: 12px; }
+        .engine-card {
+            display: flex; flex-direction: column; gap: 10px;
+            padding: 16px; border-radius: var(--radius-md);
+            background: var(--bg-hover); border: 1px solid var(--border);
+            transition: var(--transition); position: relative;
+        }
+        .engine-card:hover { border-color: var(--border-light); transform: translateY(-2px); }
+        .ec-head { display: flex; align-items: center; gap: 10px; }
+        .ec-icon {
+            width: 34px; height: 34px; border-radius: 9px;
+            display: grid; place-items: center; flex-shrink: 0;
+            background: var(--accent-dim); color: var(--accent);
+        }
+        .ec-icon svg { width: 17px; height: 17px; }
+        .ec-name { font-size: 14px; font-weight: 700; }
+        .ec-status {
+            margin-left: auto; font-size: 11px; font-weight: 700;
+            padding: 3px 9px; border-radius: 10px; white-space: nowrap;
+        }
+        .ec-status.ok { background: var(--eng-green-dim); color: var(--eng-green); }
+        .ec-status.bad { background: var(--danger-dim); color: var(--danger); }
+        .ec-status.warn { background: rgba(255,204,0,0.12); color: var(--warning); }
+        .ec-status.mute { background: var(--bg-hover); color: var(--text-muted); border: 1px solid var(--border); }
+        .ec-desc { font-size: 12px; color: var(--text-secondary); line-height: 1.5; min-height: 34px; }
+        .ec-actions { display: flex; gap: 8px; margin-top: auto; }
+        .ec-btn {
+            flex: 1; padding: 7px 0; border-radius: 8px; font-size: 12.5px; font-weight: 600;
+            border: 1px solid var(--border-light); background: var(--bg-card); color: var(--text-secondary);
+            cursor: pointer; transition: var(--transition);
+        }
+        .ec-btn:hover { color: var(--accent); border-color: var(--accent); }
+        .ec-btn.primary { background: linear-gradient(135deg, var(--accent), #00b4a6); color: #fff; border: none; }
+        .ec-btn.primary:hover { box-shadow: 0 4px 14px rgba(0,188,212,0.35); color: #fff; }
+        .ec-btn.danger:hover { color: var(--danger); border-color: var(--danger); }
+        .ec-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+        .ec-btn svg { width: 14px; height: 14px; vertical-align: -2px; margin-right: 4px; }
+
+        /* ---------- 最近事件（紧凑，仅 4 条） ---------- */
+        .recent {
+            max-width: 860px; width: 100%; margin: 16px auto 0;
+            background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: var(--radius-lg); padding: 18px 20px;
+            animation: fadeInUp 0.5s 0.15s ease both;
+        }
+        .card-title { font-size: 15px; font-weight: 700; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; }
+        .card-title .refresh-btn {
+            background: none; border: 1px solid var(--border-light); color: var(--text-secondary);
+            border-radius: 8px; padding: 4px 10px; font-size: 12px; cursor: pointer; transition: var(--transition);
+        }
+        .card-title .refresh-btn:hover { color: var(--accent); border-color: var(--accent); }
+        .card-title .refresh-btn.spin svg { animation: ringSpin 0.6s linear; }
+        .refresh-btn svg { width: 14px; height: 14px; vertical-align: -2px; }
+
+        .recent-list { list-style: none; display: flex; flex-direction: column; gap: 8px; }
+        .recent-item {
+            display: flex; align-items: center; gap: 12px;
+            padding: 9px 12px; border-radius: var(--radius-sm);
+            background: var(--bg-hover); border: 1px solid var(--border);
+            animation: fadeInUp 0.35s ease both;
+        }
+        .recent-item .ri-icon { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; flex-shrink: 0; }
+        .recent-item .ri-icon svg { width: 15px; height: 15px; }
+        .recent-item.threat .ri-icon { background: var(--danger-dim); color: var(--danger); }
+        .recent-item.scan .ri-icon { background: var(--accent-dim); color: var(--accent); }
+        .recent-item .ri-body { flex: 1; min-width: 0; }
+        .recent-item .ri-text { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .recent-item .ri-time { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+        .recent-empty { text-align: center; color: var(--text-muted); padding: 20px 0; font-size: 13px; }
+
+        /* ---------- Toast 通知（动态创建） ---------- */
+        .toast-container {
+            position: fixed; top: 20px; right: 20px; z-index: 999;
+            display: flex; flex-direction: column; gap: 10px; max-width: 320px;
+        }
+        .toast {
+            background: var(--bg-card); border: 1px solid var(--border);
+            border-left: 4px solid var(--accent);
+            border-radius: 12px; padding: 12px 16px; font-size: 13.5px;
+            box-shadow: 0 8px 28px rgba(0,0,0,0.35);
+            animation: toastIn 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+        }
+        .toast.success { border-left-color: var(--eng-green); }
+        .toast.error { border-left-color: var(--danger); }
+        .toast.warn { border-left-color: var(--warning); }
+        .toast.leaving { animation: toastOut 0.3s ease forwards; }
+        @keyframes toastIn { from { opacity: 0; transform: translateX(40px); } to { opacity: 1; transform: none; } }
+        @keyframes toastOut { to { opacity: 0; transform: translateX(40px); } }
+
+        .footer { text-align: center; color: var(--text-muted); font-size: 12px; margin: 26px 0 10px; }
+
+        /* ---------- 响应式适配 ---------- */
+        @media (max-width: 1024px) {
+            .main { padding: 22px 20px; }
+            .launch-halo { width: 380px; height: 380px; }
+        }
+        @media (max-width: 640px) {
+            .main { padding: 16px 14px; }
+            .engine-btn { width: 168px; height: 168px; }
+            .engine-core { width: 118px; height: 118px; }
+            .engine-core svg { width: 54px; height: 54px; }
+            .engine-status-text { font-size: 19px; }
+            .launch-halo { width: 300px; height: 300px; }
+            .launch-stage { padding-top: 26px; }
+            .module-grid { grid-template-columns: 1fr 1fr; }
+            .nav-item:hover::after { display: none; }
+        }
+
+        /* 无障碍：减少动效偏好 */
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after { animation: none !important; transition: none !important; }
+        }
+    </style>
+    <style>
+        /* ---------- 统一导航增强：Logo / 移动端汉堡菜单 ---------- */
+        .logo { padding: 0; margin-bottom: 22px; }
+        .logo-icon { color: var(--accent); }
+        .logo-icon svg { width: 26px; height: 26px; }
+        .nav-toggle {
+            display: none; position: fixed; top: 14px; left: 14px; z-index: 200;
+            width: 42px; height: 42px; border-radius: 12px; cursor: pointer;
+            align-items: center; justify-content: center;
+            background: var(--bg-card); border: 1px solid var(--border);
+            color: var(--text-primary); box-shadow: 0 6px 18px rgba(0,0,0,0.3);
+        }
+        .nav-toggle svg { width: 20px; height: 20px; }
+        .nav-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 150; }
+        .nav-overlay.show { display: block; }
+        @media (max-width: 768px) {
+            .nav-toggle { display: flex; }
+            .sidebar { transform: translateX(-100%); transition: transform 0.3s cubic-bezier(0.4,0,0.2,1); }
+            .sidebar.open { transform: translateX(0); box-shadow: 0 0 40px rgba(0,0,0,0.4); }
+            .main { margin-left: 0; max-width: 100%; }
+        }
+    </style>
+</head>
+<body>
+    <div class="app">
+        <!-- ==================== 侧边导航 ==================== -->
+        <aside class="sidebar">
+            <div class="logo" title="安盾安全">
+                <div class="logo-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/><path d="M9 12l2 2 4-4"/></svg>
+                </div>
+            </div>
+            <nav class="nav" aria-label="主导航">
+                <div class="nav-group"></div>
+                <a class="nav-item" href="index.html" data-title="概览">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>概览
+                </a>
+                <a class="nav-item" href="scan.html" data-title="病毒扫描">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="m14.31 8 5.74 9.94M9.69 8h11.48M7.38 12l5.74-9.94M9.69 16 3.95 6.06M14.31 16H2.83M16.62 12l-5.74 9.94"/></svg>病毒扫描
+                </a>
+                <a class="nav-item" href="guard.html" data-title="卫士体检">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                    卫士体检
+                </a>
+                <a class="nav-item" href="clean.html" data-title="垃圾清理">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                    垃圾清理
+                </a>
+                <a class="nav-item" href="optimize.html" data-title="电脑优化">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+                    电脑优化
+                </a>
+                <a class="nav-item" href="history.html" data-title="病毒记忆">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="10"/><path d="M3.05 11a9 9 0 1 1 .5 4"/></svg>病毒记忆
+                </a>
+                <div class="nav-group"></div>
+                <a class="nav-item" href="quarantine.html" data-title="隔离区">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="9" x2="15" y2="15"/><line x1="15" y1="9" x2="9" y2="15"/></svg>隔离区
+                </a>
+                <a class="nav-item" href="logs.html" data-title="日志报告">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>日志报告
+                </a>
+                <div class="nav-group"></div>
+                <a class="nav-item" href="tools.html" data-title="安全工具">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>安全工具
+                </a>
+                <a class="nav-item active" href="engine.html" data-title="引擎启动">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/><path d="M9 12l2 2 4-4"/></svg>引擎启动
+                </a>
+                <div class="nav-group"></div>
+                <a class="nav-item" href="settings.html" data-title="设置">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>设置
+                </a>
+            </nav>
+        </aside>
+
+        <!-- ==================== 主内容 ==================== -->
+        <main class="main">
+            <header class="header">
+                <div>
+                    <h1 class="header-title">引擎启动</h1>
+                    <div class="header-sub">启动 / 停止安盾实时防护引擎</div>
+                </div>
+                <div class="header-meta">
+                    <div class="status-pill" id="protectionPill">
+                        <span class="pulse"></span><span id="protectionPillText">正在检测...</span>
+                    </div>
+                    <span class="time" id="clock">--:--</span>
+                </div>
+            </header>
+
+            <!-- ========== 引擎启动核心区 ========== -->
+            <section class="launch-stage" aria-label="引擎启动控制">
+                <div class="launch-halo" aria-hidden="true"></div>
+                <div class="engine-btn-wrap">
+                    <div class="engine-btn" id="engineBtn" role="switch" aria-checked="true" aria-label="实时防护引擎开关" tabindex="0">
+                        <div class="engine-ring"></div>
+                        <div class="engine-core">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/>
+                                <path d="M9 12l2 2 4-4"/>
+                            </svg>
+                            <span class="core-hint" id="coreHint">启 动</span>
+                        </div>
+                    </div>
+                </div>
+                <div style="text-align:center;z-index:1">
+                    <div class="engine-status-text" id="engineStatusText">加载中...</div>
+                    <div class="engine-sub-text" id="engineSubText">正在同步引擎状态</div>
+                </div>
+                <!-- 启动步骤：随引擎状态实时更新 -->
+                <div class="launch-steps" id="launchSteps">
+                    <div class="step" id="stepCore"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg>引擎核心</div>
+                    <div class="step" id="stepSign"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg>病毒库</div>
+                    <div class="step" id="stepGuard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg>实时防护</div>
+                </div>
+            </section>
+
+            <!-- ========== 实时防护子模块（动态渲染） ========== -->
+            <section class="modules">
+                <div class="modules-title">
+                    <span>实时防护子模块</span>
+                    <span id="moduleSummary" style="font-size:12px">—</span>
+                </div>
+                <div class="module-grid" id="moduleGrid"></div>
+            </section>
+
+            <!-- ========== 引擎一览（各引擎状态 + 控制按钮） ========== -->
+            <section class="engines">
+                <div class="card-title">
+                    <span>引擎一览</span>
+                    <span id="engineSummary" style="font-size:12px;color:var(--text-muted)">—</span>
+                </div>
+                <div class="engine-grid" id="engineGrid"></div>
+            </section>
+
+            <!-- ========== 最近事件（动态列表） ========== -->
+            <section class="recent">
+                <div class="card-title">
+                    <span>最近事件</span>
+                    <button class="refresh-btn" id="btnRefreshRecent" title="刷新" aria-label="刷新最近事件">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
+                    </button>
+                </div>
+                <ul class="recent-list" id="recentList"><li class="recent-empty">加载中...</li></ul>
+            </section>
+
+            <div class="footer">安盾安全 · 引擎启动 · 数据实时同步</div>
+        </main>
+    </div>
+
+    <!-- Toast 容器（动态创建通知） -->
+    <div class="toast-container" id="toastContainer" aria-live="polite"></div>
+
+    <script>
+    'use strict';
+    /* ============================================================
+       引擎启动页 · 模块化脚本
+       模块划分：
+         utils    — 通用工具（时钟、相对时间、DOM 查询）
+         api      — 后端接口封装（统一 API_BASE 约定）
+         toast    — 全局通知（动态创建 DOM）
+         engine   — 360 风格引擎启动按钮 + 启动步骤 + 子模块开关
+         engines  — 各引擎一览（状态徽章 + 启动/停止/验证按钮）
+         recent   — 最近事件（动态列表，增量更新）
+         app      — 初始化与调度器（统一轮询，错峰请求）
+       ============================================================ */
+
+    const API_BASE = ''; // 动态适配当前 origin
+
+    // ------------------------ utils ------------------------
+    const utils = {
+        /** 取 DOM 元素（带存在性检查） */
+        $(id) { return document.getElementById(id); },
+
+        /** 相对时间：刚刚 / N分钟前 / HH:MM */
+        relativeTime(ts) {
+            if (!ts) return '';
+            const t = new Date(ts).getTime();
+            if (isNaN(t)) return String(ts);
+            const diff = Date.now() - t;
+            if (diff < 60e3) return '刚刚';
+            if (diff < 3600e3) return Math.floor(diff / 60e3) + ' 分钟前';
+            const d = new Date(t);
+            return (d.getMonth() + 1) + '月' + d.getDate() + '日 ' +
+                String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+        },
+
+        /** 为步骤元素设置状态 */
+        setStep(el, state, text) {
+            if (!el) return;
+            el.className = 'step ' + (state || '');
+            if (text) {
+                const icon = el.querySelector('svg').outerHTML;
+                el.innerHTML = icon + text;
+            }
+        }
+    };
+
+    // ------------------------ api ------------------------
+    const api = {
+        async get(path) {
+            try {
+                const res = await fetch(API_BASE + path);
+                return await res.json();
+            } catch (e) { console.warn('API 不可用:', path, e.message); return null; }
+        },
+        async post(path, body) {
+            try {
+                const res = await fetch(API_BASE + path, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body || {})
+                });
+                return await res.json();
+            } catch (e) { console.warn('API 不可用:', path, e.message); return null; }
+        }
+    };
+
+    // ------------------------ toast ------------------------
+    const toast = {
+        show(message, type = 'info', duration = 3000) {
+            const box = utils.$('toastContainer');
+            if (!box) return;
+            const el = document.createElement('div');
+            el.className = 'toast ' + type;
+            el.textContent = message;
+            box.appendChild(el);
+            // 限制堆叠数量，避免 DOM 无限增长
+            while (box.children.length > 4) box.removeChild(box.firstChild);
+            setTimeout(() => {
+                el.classList.add('leaving');
+                el.addEventListener('animationend', () => el.remove(), { once: true });
+            }, duration);
+        }
+    };
+
+    // ------------------------ 状态 ------------------------
+    const state = {
+        modules: {},        // 子模块名 -> enabled
+        master: 'loading',  // 'on' | 'off' | 'partial' | 'loading'
+        moduleBusy: false,  // 引擎开关请求中
+        signatures: 0       // 病毒库特征数
+    };
+
+    // 子模块展示配置（name -> 中文名）
+    const MODULE_LABELS = {
+        file_shield: '文件防护',
+        network_shield: '网络防护',
+        behavior_shield: '行为防护',
+        ransomware_shield: '勒索病毒防护',
+        process_guard: '进程防护',
+        file_guard: '文件防篡改'
+    };
+
+    // ------------------------ engine（360 引擎启动按钮） ------------------------
+    const engine = {
+        /** 根据 modules 计算总开关状态 */
+        computeMaster() {
+            const values = Object.values(state.modules);
+            if (!values.length) return 'loading';
+            const on = values.filter(Boolean).length;
+            if (on === values.length) return 'on';
+            if (on === 0) return 'off';
+            return 'partial';
+        },
+
+        /** 更新总开关 UI：按钮外观 + 状态文案 + 启动步骤 + 顶栏徽章 */
+        render() {
+            state.master = engine.computeMaster();
+            const btn = utils.$('engineBtn');
+            const text = utils.$('engineStatusText');
+            const sub = utils.$('engineSubText');
+            const hint = utils.$('coreHint');
+            btn.classList.toggle('on', state.master === 'on');
+            btn.classList.toggle('partial', state.master === 'partial');
+            btn.classList.toggle('off', state.master === 'off');
+            btn.setAttribute('aria-checked', state.master === 'on');
+
+            if (state.master === 'on') {
+                text.textContent = '实时防护已启用';
+                text.className = 'engine-status-text on';
+                sub.textContent = '引擎已启动，全速拦截一切可疑行为';
+                hint.textContent = '已启用';
+            } else if (state.master === 'off') {
+                text.textContent = '实时防护已禁用';
+                text.className = 'engine-status-text off';
+                sub.textContent = '引擎未启动，点击按钮启动防护';
+                hint.textContent = '已停用';
+            } else {
+                text.textContent = '部分防护已启用';
+                text.className = 'engine-status-text partial';
+                sub.textContent = '部分子模块未启动，建议全部启用';
+                hint.textContent = '部分启用';
+            }
+
+            // 顶栏状态徽章
+            const pill = utils.$('protectionPill');
+            const pillText = utils.$('protectionPillText');
+            pill.classList.toggle('off', state.master === 'off');
+            pill.classList.toggle('partial', state.master === 'partial');
+            pillText.textContent = state.master === 'on' ? '实时保护已开启'
+                : state.master === 'off' ? '实时保护已关闭' : '部分保护已开启';
+
+            // 启动步骤
+            utils.setStep(utils.$('stepCore'), 'ready', '引擎核心');
+            utils.setStep(utils.$('stepSign'), state.signatures > 0 ? 'ready' : 'warn',
+                state.signatures > 0 ? '病毒库 ' + state.signatures.toLocaleString() + ' 条' : '病毒库载入中');
+            const guardStep = state.master === 'on' ? 'ready' : (state.master === 'off' ? 'danger' : 'warn');
+            utils.setStep(utils.$('stepGuard'), guardStep,
+                state.master === 'on' ? '实时防护运行中' : (state.master === 'off' ? '实时防护已停止' : '实时防护部分运行'));
+
+            // 子模块网格
+            engine.renderModules();
+            // 统计文案
+            const onCount = Object.values(state.modules).filter(Boolean).length;
+            utils.$('moduleSummary').textContent = onCount + ' / ' + Object.keys(state.modules).length + ' 项已启用';
+        },
+
+        /** 动态创建子模块开关（DOM 动态生成） */
+        renderModules() {
+            const grid = utils.$('moduleGrid');
+            const frag = document.createDocumentFragment();
+            Object.entries(MODULE_LABELS).forEach(([name, label]) => {
+                const enabled = !!state.modules[name];
+                const chip = document.createElement('div');
+                chip.className = 'module-chip' + (enabled ? ' on' : '');
+                chip.dataset.module = name;
+                chip.setAttribute('role', 'switch');
+                chip.setAttribute('aria-checked', String(enabled));
+                chip.innerHTML =
+                    '<span class="mc-name"><span class="mc-dot"></span>' + label + '</span>' +
+                    '<span class="mini-toggle"></span>';
+                frag.appendChild(chip);
+            });
+            grid.replaceChildren(frag);
+        },
+
+        /** 拉取防护状态（实时数据来源 1） */
+        async refresh() {
+            const data = await api.get('/api/v1/protection/status');
+            if (data && data.modules) {
+                state.modules = data.modules;
+                engine.render();
+                return true;
+            }
+            return false;
+        },
+
+        /** 拉取概览（用于病毒库步骤，实时数据来源 2） */
+        async refreshSignatures() {
+            const data = await api.get('/api/v1/stats/overview');
+            if (data) {
+                state.signatures = data.signatures_count || 0;
+                engine.render();
+            }
+        },
+
+        /** 总开关切换：将全部子模块设为统一目标状态 */
+        async toggleMaster() {
+            if (state.moduleBusy) return;
+            const target = state.master !== 'on'; // 非全开 -> 启动；全开 -> 停止
+            state.moduleBusy = true;
+            engine.setBusy(true);
+
+            // 点击涟漪与冲击波动画
+            const btn = utils.$('engineBtn');
+            const rect = btn.getBoundingClientRect();
+            const ripple = document.createElement('span');
+            ripple.className = 'engine-ripple';
+            ripple.style.cssText = 'width:' + Math.max(rect.width, rect.height) +
+                'px;height:' + Math.max(rect.width, rect.height) + 'px;left:0;top:0;';
+            btn.appendChild(ripple);
+            const wave = document.createElement('span');
+            wave.className = 'engine-wave';
+            btn.appendChild(wave);
+            setTimeout(() => { ripple.remove(); wave.remove(); }, 900);
+
+            // 批量下发开关指令（并发出片，减少等待）
+            const tasks = Object.entries(state.modules)
+                .filter(([, enabled]) => enabled !== target)
+                .map(([name]) => api.post('/api/v1/protection/toggle', { module: name, enabled: target }));
+            await Promise.all(tasks);
+
+            await engine.refresh();
+            engine.setBusy(false);
+            state.moduleBusy = false;
+
+            toast.show(target ? '实时防护引擎已启动' : '实时防护引擎已停止',
+                target ? 'success' : 'warn');
+        },
+
+        /** 单个子模块切换 */
+        async toggleModule(name) {
+            const target = !state.modules[name];
+            const data = await api.post('/api/v1/protection/toggle', { module: name, enabled: target });
+            if (data) {
+                state.modules[name] = data.enabled;
+                engine.render();
+                toast.show(MODULE_LABELS[name] + '已' + (data.enabled ? '开启' : '关闭'),
+                    data.enabled ? 'success' : 'info', 2000);
+            } else {
+                toast.show('切换失败，请检查后端服务', 'error');
+            }
+        },
+
+        /** 按钮忙碌态 */
+        setBusy(busy) {
+            utils.$('engineBtn').classList.toggle('busy', busy);
+        }
+    };
+
+    // ------------------------ engines（各引擎一览） ------------------------
+    const engines = {
+        // 引擎配置表：名称 / 描述 / 图标 / 状态读取方式 / 操作类型
+        registry: [
+            { id: 'ml_pe', name: 'ML PE 扫描引擎', icon: 'ml',
+              desc: 'EMBER v2 · 2381 维特征 · PE 恶意软件检测', status: 'static', action: 'none' },
+            { id: 'vigil', name: '洞渊引擎 (Vigil)', icon: 'vigil',
+              desc: '深度行为分析 AI 引擎 · 端口 7331', status: 'vigil', action: 'start' },
+            { id: 'etw', name: 'ETW 事中检测', icon: 'etw',
+              desc: 'Windows 事件追踪 · 实时捕获进程行为', status: 'etw', action: 'toggle' },
+            { id: 'amsi', name: 'AMSI 无文件拦截', icon: 'amsi',
+              desc: 'AMSI Provider · 拦截 PowerShell 等无文件攻击', status: 'amsi', action: 'toggle' },
+            { id: 'andun', name: 'AndunAI 云查杀引擎', icon: 'cloud',
+              desc: '云端海量特征库协同查杀', status: 'andun', action: 'verify' }
+        ],
+        status: {}, // id -> 各引擎原始状态
+        icons: {
+            ml: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>',
+            vigil: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>',
+            etw: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>',
+            amsi: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/><path d="M8 9l2 2-2 2M12 13h4"/></svg>',
+            cloud: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9z"/></svg>'
+        },
+
+        /** 并行拉取各引擎状态（实时数据来源 3） */
+        async refresh() {
+            const [vigil, etw, amsi, andun] = await Promise.all([
+                api.get('/api/v1/vigil/status'),
+                api.get('/api/v1/etw/status'),
+                api.get('/api/v1/amsi/status'),
+                api.get('/api/v1/cloud/andun/status')
+            ]);
+            engines.status = { vigil: vigil, etw: etw, amsi: amsi, andun: andun };
+            engines.render();
+        },
+
+        /** 根据原始状态计算徽章（cls: ok/bad/warn/mute） */
+        statusOf(cfg) {
+            const s = engines.status;
+            switch (cfg.status) {
+                case 'static': return { cls: 'ok', text: '就绪' };
+                case 'vigil': {
+                    const d = s.vigil;
+                    return d && d.running
+                        ? { cls: 'ok', text: '运行中 :' + (d.port || 7331) }
+                        : { cls: 'bad', text: '已停止' };
+                }
+                case 'etw': {
+                    const d = s.etw;
+                    return d && d.running ? { cls: 'ok', text: '运行中' } : { cls: 'bad', text: '已停止' };
+                }
+                case 'amsi': {
+                    const d = s.amsi;
+                    return d && d.registered ? { cls: 'ok', text: '已注册' } : { cls: 'bad', text: '未注册' };
+                }
+                case 'andun': {
+                    const d = s.andun;
+                    if (!d) return { cls: 'mute', text: '未知' };
+                    return d.available ? { cls: 'ok', text: '已连接' } : { cls: 'warn', text: '未连接' };
+                }
+                default: return { cls: 'mute', text: '—' };
+            }
+        },
+
+        /** 动态渲染引擎卡片（DOM 动态生成） */
+        render() {
+            const grid = utils.$('engineGrid');
+            const frag = document.createDocumentFragment();
+            engines.registry.forEach((cfg) => {
+                const st = engines.statusOf(cfg);
+                const card = document.createElement('div');
+                card.className = 'engine-card';
+                card.dataset.id = cfg.id;
+                const actionHtml = engines.actionHtml(cfg);
+                card.innerHTML =
+                    '<div class="ec-head"><span class="ec-icon">' + engines.icons[cfg.icon] + '</span>' +
+                    '<span class="ec-name">' + cfg.name + '</span>' +
+                    '<span class="ec-status ' + st.cls + '">' + st.text + '</span></div>' +
+                    '<div class="ec-desc">' + cfg.desc + '</div>' +
+                    (actionHtml ? '<div class="ec-actions">' + actionHtml + '</div>' : '');
+                frag.appendChild(card);
+            });
+            grid.replaceChildren(frag);
+            // 统计在线数
+            const online = engines.registry.filter((c) => engines.statusOf(c).cls === 'ok').length;
+            utils.$('engineSummary').textContent = online + ' / ' + engines.registry.length + ' 项在线';
+        },
+
+        /** 根据引擎状态生成操作按钮 */
+        actionHtml(cfg) {
+            if (cfg.action === 'none') return '';
+            if (cfg.action === 'start') {
+                return '<button class="ec-btn primary" data-act="start">启动引擎</button>';
+            }
+            if (cfg.action === 'toggle') {
+                const running = (cfg.status === 'etw' && engines.status.etw && engines.status.etw.running) ||
+                    (cfg.status === 'amsi' && engines.status.amsi && engines.status.amsi.registered);
+                return running
+                    ? '<button class="ec-btn danger" data-act="stop">停止</button>'
+                    : '<button class="ec-btn primary" data-act="start">启动</button>';
+            }
+            if (cfg.action === 'verify') {
+                return '<button class="ec-btn" data-act="verify">验证连接</button>';
+            }
+            return '';
+        },
+
+        /** 执行引擎操作 */
+        async act(id, action) {
+            const cfg = engines.registry.find((c) => c.id === id);
+            if (!cfg) return;
+            const btn = document.querySelector('.engine-card[data-id="' + id + '"] .ec-btn');
+            if (btn) btn.disabled = true;
+            let msg = '', type = 'success';
+            switch (id) {
+                case 'vigil': {
+                    const d = await api.post('/api/v1/vigil/start', {});
+                    msg = d && (d.status === 'started' || d.status === 'already_running')
+                        ? '洞渊引擎已启动 ' + (d.url || '') : ((d && d.error) || '启动失败');
+                    if (!d || !(d.status === 'started' || d.status === 'already_running')) type = 'error';
+                    break;
+                }
+                case 'etw': {
+                    const d = action === 'start'
+                        ? await api.post('/api/v1/etw/start', {})
+                        : await api.post('/api/v1/etw/stop', {});
+                    if (d && d.success) {
+                        msg = action === 'start' ? 'ETW 事中检测已启动' : 'ETW 事中检测已停止';
+                    } else { msg = (d && d.error) || '操作失败'; type = 'error'; }
+                    break;
+                }
+                case 'amsi': {
+                    const d = action === 'start'
+                        ? await api.post('/api/v1/amsi/register', {})
+                        : await api.post('/api/v1/amsi/unregister', {});
+                    if (d && d.success) {
+                        msg = action === 'start' ? 'AMSI 无文件拦截已注册' : 'AMSI 已注销';
+                    } else { msg = (d && d.error) || '操作失败'; type = 'error'; }
+                    break;
+                }
+                case 'andun': {
+                    const d = await api.get('/api/v1/cloud/andun/verify');
+                    msg = d && d.ok ? 'AndunAI 云引擎连接正常' : '云引擎连接失败';
+                    if (!d || !d.ok) type = 'error';
+                    break;
+                }
+            }
+            await engines.refresh();
+            if (btn) btn.disabled = false;
+            toast.show(msg, type);
+        }
+    };
+
+    // ------------------------ recent（最近事件） ------------------------
+    const recent = {
+        lastKey: '',
+
+        /** 将日志条目渲染为列表项 */
+        buildItem(item, kind) {
+            const li = document.createElement('li');
+            li.className = 'recent-item ' + kind;
+            const icon = kind === 'threat'
+                ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>'
+                : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/><path d="M8 11l2 2 4-4"/></svg>';
+            const text = kind === 'threat'
+                ? (item.name || item.threat || item.file || item.path || '发现威胁')
+                : (item.event === 'scan_complete' ? '扫描完成 · ' + (item.stats ? (item.stats.files_scanned || 0) + ' 个文件' : '') : '扫描任务');
+            li.innerHTML =
+                '<span class="ri-icon">' + icon + '</span>' +
+                '<span class="ri-body"><div class="ri-text">' + text + '</div>' +
+                '<div class="ri-time">' + utils.relativeTime(item.timestamp) + '</div></span>';
+            return li;
+        },
+
+        /** 刷新事件列表（仅内容变化时重建，减少 DOM 操作） */
+        async refresh(force) {
+            const list = utils.$('recentList');
+            const data = await api.get('/api/v1/stats/activity');
+            if (!data) return;
+            const threats = data.threats || [];
+            const scans = data.scans || [];
+            const key = (threats[0] && threats[0].timestamp || '') + '|' + (scans[0] && scans[0].timestamp || '');
+            if (!force && key === recent.lastKey) return;
+            recent.lastKey = key;
+
+            const frag = document.createDocumentFragment();
+            if (!threats.length && !scans.length) {
+                const empty = document.createElement('li');
+                empty.className = 'recent-empty';
+                empty.textContent = '暂无事件记录';
+                frag.appendChild(empty);
+            } else {
+                // 合并后按时间倒序取最新 4 条
+                const merged = threats.concat(scans)
+                    .filter(i => i && i.timestamp)
+                    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+                    .slice(0, 4);
+                merged.forEach((item) => {
+                    const kind = threats.indexOf(item) >= 0 ? 'threat' : 'scan';
+                    frag.appendChild(recent.buildItem(item, kind));
+                });
+            }
+            list.replaceChildren(frag);
+        }
+    };
+
+    // ------------------------ app（初始化 + 调度器） ------------------------
+    const app = {
+        /** 统一调度器：错峰轮询，避免同一时刻并发请求 */
+        schedulers: {
+            protection: { fn: () => engine.refresh(), interval: 5000, delay: 300 },
+            signatures: { fn: () => engine.refreshSignatures(), interval: 10000, delay: 800 },
+            engines: { fn: () => engines.refresh(), interval: 8000, delay: 1100 },
+            recent: { fn: () => recent.refresh(false), interval: 8000, delay: 1400 }
+        },
+
+        start() {
+            // 1) 事件委托：子模块开关
+            utils.$('moduleGrid').addEventListener('click', (e) => {
+                const chip = e.target.closest('.module-chip');
+                if (chip) engine.toggleModule(chip.dataset.module);
+            });
+
+            // 2) 事件委托：引擎一览操作按钮
+            utils.$('engineGrid').addEventListener('click', (e) => {
+                const btn = e.target.closest('.ec-btn');
+                if (!btn) return;
+                const card = btn.closest('.engine-card');
+                engines.act(card.dataset.id, btn.dataset.act);
+            });
+
+            // 3) 引擎启动按钮（支持键盘回车/空格）
+            const btn = utils.$('engineBtn');
+            btn.addEventListener('click', () => engine.toggleMaster());
+            btn.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); engine.toggleMaster(); }
+            });
+
+            // 4) 最近事件手动刷新
+            const ref = utils.$('btnRefreshRecent');
+            ref.addEventListener('click', async () => {
+                ref.classList.add('spin');
+                await recent.refresh(true);
+                setTimeout(() => ref.classList.remove('spin'), 600);
+            });
+
+            // 5) 时钟
+            setInterval(() => {
+                const d = new Date();
+                utils.$('clock').textContent =
+                    String(d.getHours()).padStart(2, '0') + ':' +
+                    String(d.getMinutes()).padStart(2, '0') + ':' +
+                    String(d.getSeconds()).padStart(2, '0');
+            }, 1000);
+
+            // 6) 首次拉取 + 周期调度
+            Object.values(this.schedulers).forEach(s => {
+                setTimeout(s.fn, s.delay);
+                setInterval(s.fn, s.interval);
+            });
+        }
+    };
+
+    // 页面就绪后启动（脚本位于 body 末尾，DOM 已就绪）
+    app.start();
+    </script>
+
+    <!-- 移动端导航：汉堡按钮 + 遮罩 -->
+    <button class="nav-toggle" id="navToggle" aria-label="打开导航" aria-expanded="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+    </button>
+    <div class="nav-overlay" id="navOverlay"></div>
+    <script>
+    // 移动端汉堡菜单切换：点击按钮展开/收起侧栏，遮罩或 Esc 关闭
+    (function () {
+        var btn = document.getElementById('navToggle');
+        var overlay = document.getElementById('navOverlay');
+        var sidebar = document.querySelector('.sidebar');
+        if (!btn || !sidebar) return;
+        function setOpen(open) {
+            sidebar.classList.toggle('open', open);
+            if (overlay) overlay.classList.toggle('show', open);
+            btn.setAttribute('aria-expanded', String(open));
+        }
+        btn.addEventListener('click', function () { setOpen(!sidebar.classList.contains('open')); });
+        if (overlay) overlay.addEventListener('click', function () { setOpen(false); });
+        document.addEventListener('keydown', function (e) { if (e.key === 'Escape') setOpen(false); });
+    })();
+    </script>
+</body>
+</html>

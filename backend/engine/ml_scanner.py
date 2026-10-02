@@ -1698,12 +1698,29 @@ class RuleBasedScorer:
 # ============================================================
 # scan_pe —— PE 文件扫描入口
 # ============================================================
-def scan_pe(data: bytes) -> dict:
+_EMBER_PREDICTOR_CACHE = None
+_EMBER_PREDICTOR_LOADED = False
+
+
+def _get_ember_predictor():
+    """惰性加载 EMBER 模型；缺失或无模型文件返回 None（安全跳过）。"""
+    from engine.ember_model import find_ember_model, load_ember_model
+    global _EMBER_PREDICTOR_CACHE, _EMBER_PREDICTOR_LOADED
+    if _EMBER_PREDICTOR_LOADED:
+        return _EMBER_PREDICTOR_CACHE
+    _EMBER_PREDICTOR_LOADED = True
+    path = find_ember_model()
+    _EMBER_PREDICTOR_CACHE = load_ember_model(path) if path else None
+    return _EMBER_PREDICTOR_CACHE
+
+
+def scan_pe(data: bytes, sha256: str = "") -> dict:
     """
     扫描 PE 文件，返回判定结果
 
     参数:
         data: PE 文件的原始字节数据
+        sha256: 可选，调用方已算好的 sha256（避免对大缓冲重复哈希）；为空时内部计算
 
     返回:
         {
@@ -1726,7 +1743,7 @@ def scan_pe(data: bytes) -> dict:
         "confidence": 0.0,
         "reasons": [],
         "features": {
-            "sha256": hashlib.sha256(data).hexdigest(),
+            "sha256": sha256 or (hashlib.sha256(data).hexdigest() if data else ""),
             "file_size": len(data),
             "is_pe": False,
             "suspicious_apis": [],
@@ -1797,6 +1814,8 @@ def scan_pe(data: bytes) -> dict:
     result["features"]["pe_info"] = pe_info
 
     # ---- 提取 EMBER 特征向量（可选，用于外部 ML 模型）----
+    ml_status = "no_model"
+    ml_prob = None
     try:
         fv = extractor.feature_vector(data)
         # 特征向量摘要（首尾各 5 维）
@@ -1806,8 +1825,25 @@ def scan_pe(data: bytes) -> dict:
             "tail": fv[-5:],
             "non_zero_count": sum(1 for v in fv if v != 0.0),
         }
+
+        # 真实 LightGBM/EMBER 推理（模型缺失时安全跳过）
+        try:
+            import numpy as _np  # noqa: F401  # 仅 numpy，打包安全
+            pred = _get_ember_predictor()
+            if pred is not None and fv:
+                ml_prob = float(pred.predict_proba(list(fv)))
+                ml_status = "ok"
+            else:
+                ml_status = "no_model"
+        except Exception:
+            ml_status = "error"
+        result["features"]["ml_ember"] = {
+            "status": ml_status,
+            "probability": round(ml_prob, 4) if ml_prob is not None else None,
+        }
     except Exception:
         result["features"]["feature_vector_summary"] = {"error": "特征提取失败"}
+        result["features"]["ml_ember"] = {"status": "error", "probability": None}
 
     # ---- 综合判定 ----
     # 将原始评分归一化到 0.0-1.0 置信度
@@ -1827,5 +1863,25 @@ def scan_pe(data: bytes) -> dict:
             result["confidence"] = min(raw_score / 150.0, 0.3)
         else:
             result["confidence"] = 0.05
+
+    # ---- 融入 EMBER ML 概率（模型可用时）----
+    if ml_prob is not None:
+        if ml_prob >= 0.9:
+            if result["verdict"] != "MALICIOUS":
+                result["verdict"] = "MALICIOUS"
+            result["confidence"] = max(result["confidence"], 0.92)
+            result["reasons"].append(f"EMBER 机器学习判定恶意（概率 {ml_prob:.2f}）")
+        elif ml_prob >= 0.6:
+            if result["verdict"] == "CLEAN":
+                result["verdict"] = "SUSPICIOUS"
+            result["confidence"] = max(result["confidence"], 0.55)
+            result["reasons"].append(f"EMBER 机器学习提示可疑（概率 {ml_prob:.2f}）")
+        elif ml_prob <= 0.15:
+            # 明确安全的样本：压低置信度，作为强清洁信号
+            if result["verdict"] == "CLEAN":
+                result["confidence"] = min(result["confidence"], 0.1)
+            result["reasons"].append(f"EMBER 机器学习判定清洁（概率 {ml_prob:.2f}）")
+        else:
+            result["reasons"].append(f"EMBER 机器学习概率 {ml_prob:.2f}（低置信）")
 
     return result

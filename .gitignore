@@ -46,6 +46,8 @@ deploy-staging/
 # ===== 数据库 / 数据文件 =====
 *.db
 *.sqlite3
+*.db-wal
+*.db-shm
 backend/database/
 
 # ===== 第三方 pip 依赖包（用 requirements.txt 代替）=====
@@ -62,6 +64,9 @@ backend/libs/
 error.png
 error_screenshot.png
 
+# ===== 备份文件 =====
+*.bak
+
 # ===== AI 学习记录（不对外公开）=====
 ai_learning_results/
 
@@ -70,3 +75,14 @@ ai_learning_results/
 Thumbs.db
 .idea/
 .vscode/
+
+# ===== 智能助手 / 工具工作目录 =====
+.trae/
+.lark-slides/
+.dsh-plugins/
+.workbuddy/
+
+# ===== 空目录骨架 / 环境变量未展开产生的路径 =====
+%SystemDrive%/
+_empty_del_temp/
+bingduku/

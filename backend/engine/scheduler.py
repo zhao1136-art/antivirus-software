@@ -5,6 +5,7 @@
 import os
 import uuid
 import time
+import atexit
 import hashlib
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -13,14 +14,27 @@ from engine.local_scanner import LocalScanner
 from engine.cloud_scanner import CloudScanner
 from engine.quarantine import QuarantineManager
 from engine.report_logger import ReportLogger
-from engine.signature_manager import SignatureManager
+from engine.signature_manager import get_signature_manager
 from engine.yara_scanner import YaraScanner
 from engine.history_manager import get_virus_memory
-from config import CLOUD_API_KEY, YARA_RULES_DIR, MAX_WORKERS
+from engine.notification import threat_alert
+from config import (
+    CLOUD_API_KEY, YARA_RULES_DIR, MAX_WORKERS,
+    SCHED_LOOP_SLEEP_SEC, foreground_active,
+    ANDUN_BASE_URL, ANDUN_API_KEY, CLOUD_ENGINE_ORDER,
+)
 
 # 任务 TTL（秒）：完成后保留 1 小时
 TASK_TTL_SECONDS = 3600
-MAX_SCAN_THREADS = max(1, MAX_WORKERS)  # 最多同时扫描线程数
+MAX_SCAN_THREADS = max(1, MAX_WORKERS)  # 最多同时扫描任务数
+# 健康巡检间隔（秒）：后台巡检线程必须休眠，杜绝空转
+SCHED_HEALTH_INTERVAL = 30
+# 任务硬超时（秒）：超过该时长仍 running 的任务视为僵尸，强制标记失败
+TASK_HARD_TIMEOUT = 6 * 3600
+
+# 统一调度线程池：所有扫描任务提交复用，避免每实例/每任务新建线程
+_SCHED_EXECUTOR = ThreadPoolExecutor(max_workers=MAX_SCAN_THREADS, thread_name_prefix="yutian-sched")
+atexit.register(lambda: _SCHED_EXECUTOR.shutdown(wait=False, cancel_futures=True))
 
 
 class ScanTask:
@@ -58,17 +72,60 @@ class Scheduler:
     """扫描任务调度器"""
 
     def __init__(self):
-        self.sig_mgr = SignatureManager()
+        self.sig_mgr = get_signature_manager()  # 全局共享单连接 + 内存索引
         self.yara = YaraScanner(YARA_RULES_DIR)
         self.scanner = LocalScanner(self.sig_mgr, self.yara)
-        self.cloud = CloudScanner(api_key=CLOUD_API_KEY)
+        self.cloud = CloudScanner(
+            api_key=CLOUD_API_KEY,
+            andun_url=ANDUN_BASE_URL,
+            andun_key=ANDUN_API_KEY,
+            engine_order=CLOUD_ENGINE_ORDER,
+        )
         self.quarantine = QuarantineManager()
         self.logger = ReportLogger()
         self.tasks: dict[str, ScanTask] = {}
         self._progress_callbacks: dict[str, callable] = {}
         self._lock = threading.Lock()
-        self._executor = ThreadPoolExecutor(max_workers=MAX_SCAN_THREADS)
         self._active_count = 0
+        self._priority = "normal"   # normal | low（游戏模式/前台繁忙时降权）
+        self._health_started = False
+        self._health_lock = threading.Lock()
+        self._start_health_loop()
+
+    def _start_health_loop(self):
+        """启动后台健康巡检（唯一线程，带休眠防空转）：
+        1. 周期性清理过期任务
+        2. 强杀超时的僵尸 running 任务（防线程/任务堆积）
+        """
+        with self._health_lock:
+            if self._health_started:
+                return
+            self._health_started = True
+
+        def _loop():
+            while True:
+                try:
+                    self._cleanup_expired_tasks()
+                    self._force_expire_stuck_tasks()
+                except Exception:
+                    pass
+                time.sleep(SCHED_HEALTH_INTERVAL)  # 必须休眠，杜绝空转
+
+        threading.Thread(target=_loop, daemon=True, name="yutian-sched-health").start()
+
+    def _force_expire_stuck_tasks(self):
+        """超过硬超时仍处于 running 的任务 → 标记 failed（防僵尸任务堆积）"""
+        now = time.time()
+        with self._lock:
+            for t in self.tasks.values():
+                if t.status == "running" and now - t._created_ts > TASK_HARD_TIMEOUT:
+                    t.status = "failed"
+                    t.error = "扫描任务超时，已强制结束"
+                    t._completed_ts = now
+
+    def set_priority(self, priority: str = "normal"):
+        """设置扫描优先级：low 时任务提交前休眠让出 CPU（供游戏模式/前台降权调用）"""
+        self._priority = priority if priority in ("normal", "low") else "normal"
 
     def _cleanup_expired_tasks(self):
         """清理超过 TTL 的已完成/已取消任务"""
@@ -132,6 +189,10 @@ class Scheduler:
 
         def _do_scan():
             try:
+                # 前台降权（优先级低 或 前台有其他程序）
+                if self._priority == "low" or foreground_active():
+                    time.sleep(SCHED_LOOP_SLEEP_SEC)
+
                 # 1. 本地引擎扫描
                 result = self.scanner.scan_paths(
                     task.paths, task.scan_type,
@@ -172,10 +233,19 @@ class Scheduler:
                 result["cloud_checked"] = cloud_checked
                 result["cloud_hits"] = len(cloud_hits)
                 result["cloud_available"] = self.cloud.available
+                # v2.0: 附加扫描引擎性能统计
+                try:
+                    result["perf_stats"] = self.scanner.get_perf_stats()
+                except Exception:
+                    result["perf_stats"] = {}
                 task.result = result
                 task.status = "completed"
                 task.progress = 100
                 self.logger.log_scan_complete(task_id, result)
+
+                # 5. 系统弹窗通知
+                if all_threats:
+                    threat_alert(all_threats, quarantined)
 
             except Exception as e:
                 task.status = "failed"
@@ -186,48 +256,63 @@ class Scheduler:
             with self._lock:
                 self._active_count = max(0, self._active_count - 1)
 
-        self._executor.submit(_do_scan)
+        _SCHED_EXECUTOR.submit(_do_scan)
 
     def _cloud_verify_scan(self, result: dict, cloud_hits: list) -> int:
-        """对本地扫描结果中的文件做云端补充查询
+        """对本地扫描结果中的文件做云端补充查询（优化：批量查询）
         result 来自 LocalScanner.scan_paths()，其中：
           - files_scanned: int（已扫描文件数）
           - threats: list（检出威胁列表，每个威胁含 path）
         """
-        checked = 0
         threats = result.get("threats", [])
         if not threats:
             return 0
 
-        # 从威胁列表中提取文件路径，去重
+        # 从威胁列表提取文件路径，去重，计算哈希（优先复用扫描期已算好的 sha256）
         seen = set()
-        file_paths = []
+        hash_to_path = {}
+        scanned_hashes = result.get("_scanned_hashes", {})
         for t in threats:
             fpath = t.get("path", "")
-            if fpath and fpath not in seen:
-                seen.add(fpath)
-                file_paths.append(fpath)
-
-        # 此外，也取已扫描文件中 non-threat 的样本做补充查询
-        # 从本地扫描器传入的已扫描文件列表
-        scanned_files = result.get("_scanned_files", [])
-        for fpath in scanned_files:
             if fpath and fpath not in seen and os.path.isfile(fpath):
                 seen.add(fpath)
-                file_paths.append(fpath)
-
-        for fpath in file_paths[:30]:  # 最多查30个文件
-            try:
-                sha256 = self._sha256_file(fpath)
+                sha256 = scanned_hashes.get(fpath) or self._sha256_file(fpath)
                 if sha256:
-                    threat = self.cloud.lookup_hash(sha256=sha256)
-                    if threat:
-                        threat["path"] = fpath
-                        threat["engine"] = "cloud_hash"
-                        cloud_hits.append(threat)
-                    checked += 1
-            except Exception:
-                continue
+                    hash_to_path[sha256] = fpath
+
+        # 也取已扫描文件中 non-threat 的样本做补充查询
+        for fpath in result.get("_scanned_files", []):
+            if fpath and fpath not in seen and os.path.isfile(fpath):
+                seen.add(fpath)
+                sha256 = scanned_hashes.get(fpath) or self._sha256_file(fpath)
+                if sha256:
+                    hash_to_path[sha256] = fpath
+
+        if not hash_to_path:
+            return 0
+
+        # 批量查询云端（一次请求查多个，大幅提升性能）
+        hashes = list(hash_to_path.keys())[:50]  # 最多查50个
+        try:
+            batch_results = self.cloud.lookup_hashes_batch(hashes)
+        except Exception:
+            # 批量查询失败时回退到逐个查询
+            batch_results = {}
+            for h in hashes:
+                try:
+                    result = self.cloud.lookup_hash(sha256=h)
+                    batch_results[h] = result
+                except Exception:
+                    batch_results[h] = None
+
+        checked = 0
+        for h, threat in batch_results.items():
+            if threat:
+                threat["path"] = hash_to_path.get(h, "")
+                threat["engine"] = threat.get("engine", "cloud_hash")
+                cloud_hits.append(threat)
+            checked += 1
+
         return checked
 
     def _sha256_file(self, path: str) -> str:
@@ -255,7 +340,8 @@ class Scheduler:
         return self.tasks.get(task_id)
 
     def get_all_tasks(self) -> list[dict]:
-        return [t.to_dict() for t in self.tasks.values()]
+        with self._lock:
+            return [t.to_dict() for t in self.tasks.values()]
 
     # ---------- 扫描路径 ----------
 

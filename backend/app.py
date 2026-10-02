@@ -1,27 +1,75 @@
 """
-安盾 后端 API 网关 - FastAPI + WebSocket 进度推送
+御天后端 API 网关 - FastAPI + WebSocket 进度推送
 """
 import os
 import sys
 import asyncio
 import json
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, File, UploadFile
+import time
+import traceback
+import logging
+from logging.handlers import RotatingFileHandler
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, File, UploadFile, Body, Request, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
 
+# ── 诊断模式引导（打包版 console=False 吞掉 traceback） ──
+# 必须放在任何引擎/后端导入之前，否则 config.py 等早导入阶段的崩溃仍无法被捕获。
+import threading as _startup_thr
+_STARTUP_LOG = os.path.join(
+    os.environ.get("LOCALAPPDATA", os.path.join(os.path.expanduser("~"), "AppData", "Local")),
+    "Andun", "data", "logs", "startup_traceback.txt"
+)
+
+def _log_startup(msg: str):
+    """把启动阶段信息写入诊断日志（追加模式）"""
+    try:
+        os.makedirs(os.path.dirname(_STARTUP_LOG), exist_ok=True)
+        with open(_STARTUP_LOG, "a", encoding="utf-8") as _f:
+            _f.write(msg + "\n")
+    except Exception:
+        pass
+
+def _mark(step: str):
+    """记录当前执行到的启动步骤，便于定位崩溃位置"""
+    _log_startup(f"[STEP] {step}")
+
+def _startup_excepthook(tp, val, tb):
+    _log_startup("=== STARTUP TRACEBACK ===" + "\n" + "".join(traceback.format_exception(tp, val, tb)))
+    _log_startup("=== END TRACEBACK ===")
+    sys.__excepthook__(tp, val, tb)
+
+sys.excepthook = _startup_excepthook
+
+def _startup_thread_excepthook(args):
+    _log_startup("=== THREAD TRACEBACK ===" + "\n" + "".join(
+        traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback)))
+
+_startup_thr.excepthook = _startup_thread_excepthook
+
+_log_startup(f"=== 御天启动 {time.strftime('%Y-%m-%d %H:%M:%S')} frozen={getattr(sys,'frozen',False)} ===")
+
 # 确保项目根在搜索路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# ── 持久化存储（启动时加载配置、更新守护天数） ──
+from persistence import (
+    load_config_save, save_config_save, save_guard_days,
+    update_guard_days, cache_cleanup
+)
+# 更新守护天数（每日首次启动时自动累计）
+_guard_data = update_guard_days()
+print(f"[御天] 已守护 {_guard_data['accumulated_days']} 天")
+
 from engine.scheduler import Scheduler
 from engine.quarantine import QuarantineManager
-from engine.signature_manager import SignatureManager
+from engine.signature_manager import get_signature_manager
 from engine.report_logger import ReportLogger
 from engine.signature_downloader import SignatureDownloader
-from engine.vuln_database import VulnerabilityDatabase
-from engine.vuln_downloader import VulnerabilityDownloader
+
 from engine.ml_scanner import scan_pe as ml_scan_pe
 
 import threading as _thr
@@ -60,16 +108,193 @@ from engine.history_manager import get_virus_memory
 from engine.tray_icon import TrayIcon
 from engine.game_mode import get_game_mode
 from engine.usb_scanner import get_usb_scanner
+from engine.ransomware_shield import RansomwareShield
+from engine.network_repair import NetworkRepair
+from engine.adblock import AdBlock
+from engine.download_guard import DownloadGuard
+from engine.url_guard import UrlGuard
+from engine.process_guard import ProcessGuard
+from engine.registry_guard import RegistryGuard
+from engine.behavior_block import BehaviorBlock
+from engine.junk_cleaner import JunkCleaner
+from engine.system_optimizer import SystemOptimizer
+from engine.vuln_fix import VulnFix
+from engine.usb_guard import get_usb_guard
+from engine.mail_guard import get_mail_guard
 
 # ---------- 全局实例 ----------
-app = FastAPI(title="安盾 Engine API", version="1.0.0")
-scheduler = Scheduler()
+# 引擎版本号（更新时同步修改此处）
+ENGINE_VERSION = "1.0.1"
+ENGINE_VERSION_NAME = "引擎单次I/O优化版"
+app = FastAPI(title="御天 Engine API", version=ENGINE_VERSION,
+              docs_url=None, redoc_url=None)  # 生产环境关闭 Swagger
+# 串行初始化：先建立共享特征库连接（含内存索引），再启动调度器，避免启动并发冲突 / 重复 SigMgr
+_mark("串行初始化: get_signature_manager")
+try:
+    sig_mgr = get_signature_manager()
+    _mark("串行初始化: sig_mgr 完成")
+    scheduler = Scheduler()  # 内部复用同一个 sig_mgr 共享实例
+    _mark("串行初始化: scheduler 完成")
+except Exception:
+    _log_startup("串行初始化失败:\n" + traceback.format_exc())
+    raise
 quarantine = QuarantineManager()
-sig_mgr = SignatureManager()
 logger = ReportLogger()
 sig_downloader = SignatureDownloader(sig_mgr)
-vuln_db = VulnerabilityDatabase()
-vuln_downloader = VulnerabilityDownloader(vuln_db)
+# 卫士模块：垃圾清理 / 电脑优化（懒加载数据文件，不阻塞启动）
+junk_cleaner = JunkCleaner()
+system_optimizer = SystemOptimizer()
+_mark("串行初始化完成")
+
+# ── 全局异常处理（兜底，防止 500 裸奔） ──
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """全局异常兜底：记录完整堆栈，返回统一错误格式"""
+    tb = traceback.format_exc()
+    logging.getLogger("yutian").error(
+        f"未捕获异常 | {request.method} {request.url.path} | {exc.__class__.__name__}: {exc}\n{tb}"
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "internal_error",
+            "message": str(exc) if not _is_production() else "服务器内部错误",
+            "type": exc.__class__.__name__,
+        },
+    )
+
+def _is_production() -> bool:
+    """判断是否生产环境（打包模式或无 DEBUG 环境变量）"""
+    return getattr(sys, 'frozen', False) or not os.environ.get("YUTIAN_DEBUG")
+
+# ── 日志轮转（RotatingFileHandler，10MB/文件，保留 5 个备份） ──
+def _setup_logging():
+    """初始化日志轮转：主日志 + 错误日志分别轮转"""
+    log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "engine", "data", "logs")
+    os.makedirs(log_dir, exist_ok=True)
+
+    logger = logging.getLogger("yutian")
+    logger.setLevel(logging.INFO)
+
+    if logger.handlers:
+        return  # 已初始化，避免重复
+
+    fmt = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    # 主日志：app.log，10MB/文件，保留 5 个备份
+    app_handler = RotatingFileHandler(
+        os.path.join(log_dir, "app.log"),
+        maxBytes=10 * 1024 * 1024,  # 10MB
+        backupCount=5,
+        encoding="utf-8",
+    )
+    app_handler.setLevel(logging.INFO)
+    app_handler.setFormatter(fmt)
+    logger.addHandler(app_handler)
+
+    # 错误日志：error.log，单独轮转
+    error_handler = RotatingFileHandler(
+        os.path.join(log_dir, "error.log"),
+        maxBytes=5 * 1024 * 1024,  # 5MB
+        backupCount=3,
+        encoding="utf-8",
+    )
+    error_handler.setLevel(logging.ERROR)
+    error_handler.setFormatter(fmt)
+    logger.addHandler(error_handler)
+
+    # 开发模式下同时输出到控制台
+    if not _is_production():
+        console = logging.StreamHandler()
+        console.setLevel(logging.DEBUG)
+        console.setFormatter(fmt)
+        logger.addHandler(console)
+
+    logger.info(f"[御天] 引擎版本 {ENGINE_VERSION} ({ENGINE_VERSION_NAME}) 启动")
+    return logger
+
+_logger = _setup_logging()
+
+# ── 关键错误告警 ──
+def _alert_critical(event: str, detail: str = ""):
+    """
+    关键错误告警：驱动通信失败、签名库损坏、磁盘空间不足等。
+    生产环境写入 error.log 标红，开发环境额外打印到控制台。
+    """
+    msg = f"[CRITICAL] {event}"
+    if detail:
+        msg += f" | {detail}"
+    logging.getLogger("yutian").error(msg)
+    # 磁盘空间不足时额外检查
+    if "disk" in event.lower() or "space" in event.lower():
+        try:
+            import psutil
+            du = psutil.disk_usage(os.path.dirname(sig_mgr.db_path))
+            if du.percent > 95:
+                logging.getLogger("yutian").critical(
+                    f"[CRITICAL] 磁盘空间严重不足: {du.percent}% ({du.free / (1024**3):.1f}GB 可用)"
+                )
+        except Exception:
+            pass
+
+
+# ---------- 本地病毒库自动导入（首次启动，后台线程） ----------
+def _auto_import_bingduku():
+    try:
+        import sqlite3
+        import os as _os
+        import time
+        from config import BINGDUKU_MD5_TXT, BINGDUKU_DAT
+        if not BINGDUKU_MD5_TXT or not _os.path.isfile(BINGDUKU_MD5_TXT):
+            print("[御天] 本地病毒库文件不存在，跳过自动导入")
+            return
+        # 用 signature_meta 做幂等标记：bingduku_20260419_imported
+        need_import = True
+        try:
+            conn = sqlite3.connect(sig_mgr.db_path)
+            row = conn.execute(
+                "SELECT value FROM signature_meta WHERE key='bingduku_20260419_imported'"
+            ).fetchone()
+            conn.close()
+            if row and row[0] == "1":
+                # 已导入过，统计一次总数确认
+                stats = sig_mgr.get_stats()
+                print("[御天] 本地病毒库已导入过，当前特征总数:", stats.get("total_signatures", 0))
+                need_import = False
+        except Exception:
+            need_import = True
+        if need_import:
+            print("[御天] 首次导入本地病毒库，开始...")
+            t0 = time.time()
+            result = sig_mgr.import_md5_text(BINGDUKU_MD5_TXT)
+            dt = int((time.time() - t0) * 1000)
+            # 写入已导入标记
+            try:
+                conn = sqlite3.connect(sig_mgr.db_path)
+                conn.execute(
+                    "INSERT OR REPLACE INTO signature_meta (key, value) VALUES (?, ?)",
+                    ("bingduku_20260419_imported", "1")
+                )
+                conn.execute(
+                    "INSERT OR REPLACE INTO signature_meta (key, value) VALUES (?, ?)",
+                    ("bingduku_dat_path", BINGDUKU_DAT or "")
+                )
+                conn.commit()
+                conn.close()
+            except Exception:
+                pass
+            print("[御天] 本地病毒库导入完成: imported=%s skipped=%s lines=%s duration=%sms" % (
+                result.get("imported"), result.get("skipped"),
+                result.get("total_lines"), result.get("duration_ms", dt)))
+    except Exception as e:
+        print("[御天] 本地病毒库导入失败:", e)
+
+
+_thr.Thread(target=_auto_import_bingduku, daemon=True).start()
+
 
 # 威胁情报引擎改为懒加载（见上方 _get_c2_intel / _get_threat_intel）
 
@@ -78,14 +303,61 @@ ws_connections: dict[str, WebSocket] = {}
 MAX_WS_CONNECTIONS = 50
 _event_loop = None  # 保存事件循环引用，供跨线程广播使用
 
-# CORS
+# CORS：收紧为仅允许本地同源入口，不再全放行“*”。
+# 前端页面由本后端同源托管（API_BASE='' 相对路径），正常访问不受影响；
+# 恶意网页跨源调用被 CORS 屏蔽，配合下方令牌中间件形成双重防护。
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://127.0.0.1:8899", "http://localhost:8899"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ── 本地控制面鉴权（安全产品自身安全加固） ──
+# 修复：后端 API 此前无任何鉴权 + CORS 全放行，用户在浏览器里打开任意恶意网页，
+# 其 JS 即可跨源调用 /api/v1/shutdown、/api/v1/response/kill-process、隔离文件等
+# 破坏性接口（无法读响应，但副作用照常执行）。现通过“HttpOnly + SameSite=Strict
+# 令牌 Cookie”对 /api/* 做鉴权：
+#   - 页面访问（同源）时下发令牌 Cookie，浏览器自动携带，正常功能不受影响；
+#   - HttpOnly 使恶意 JS 无法读取令牌；SameSite=Strict 使跨站请求不携带 Cookie，
+#     配合收紧后的 CORS，恶意页面既写不成也读不到；
+#   - 静态资源、健康检查、WebSocket 进度推送免鉴权。
+from starlette.middleware.base import BaseHTTPMiddleware
+import secrets as _secrets
+
+_LOCAL_TOKEN_COOKIE = "yt_token"
+_LOCAL_TOKEN = _secrets.token_urlsafe(32)
+
+class _LocalAuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        path = request.url.path
+        # 免鉴权：静态资源 / 健康检查 / WebSocket 进度推送
+        if path.startswith("/static/") or path == "/api/health" or path.startswith("/ws/"):
+            return await call_next(request)
+        # API 接口：校验本地令牌（Cookie / Header / query 三选一）
+        if path.startswith("/api/"):
+            token = (
+                request.cookies.get(_LOCAL_TOKEN_COOKIE)
+                or request.headers.get("x-yutian-token")
+                or request.query_params.get("token")
+            )
+            if not token or token != _LOCAL_TOKEN:
+                return JSONResponse({"error": "未授权访问：缺少或错误的本地令牌"}, status_code=401)
+            return await call_next(request)
+        # 页面访问：下发（或续期）令牌 Cookie
+        response = await call_next(request)
+        try:
+            response.set_cookie(
+                key=_LOCAL_TOKEN_COOKIE, value=_LOCAL_TOKEN,
+                httponly=True, samesite="strict", path="/", max_age=7 * 24 * 3600,
+            )
+        except Exception:
+            pass
+        return response
+
+app.add_middleware(_LocalAuthMiddleware)
 
 # 静态文件 - 前端页面
 def _get_frontend_dir():
@@ -99,6 +371,30 @@ def _get_frontend_dir():
 FRONTEND_DIR = _get_frontend_dir()
 if os.path.isdir(FRONTEND_DIR):
     app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
+
+# ── 用户协议确认（首次启动弹窗） ──
+import json as _json
+_AGREEMENT_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))) if not getattr(sys, 'frozen', False) else os.path.dirname(sys.executable), "data", "agreement_accepted.json")
+
+def _is_agreement_accepted():
+    """检查用户是否已同意协议"""
+    try:
+        if os.path.isfile(_AGREEMENT_FILE):
+            with open(_AGREEMENT_FILE, 'r', encoding='utf-8') as f:
+                data = _json.load(f)
+                return data.get("accepted", False)
+    except Exception:
+        pass
+    return False
+
+def _save_agreement():
+    """保存用户同意协议的状态"""
+    os.makedirs(os.path.dirname(_AGREEMENT_FILE), exist_ok=True)
+    with open(_AGREEMENT_FILE, 'w', encoding='utf-8') as f:
+        _json.dump({"accepted": True, "version": ENGINE_VERSION, "timestamp": __import__('datetime').datetime.now().isoformat()}, f)
+
+# 协议页面路径
+_AGREEMENT_PAGE = os.path.join(FRONTEND_DIR, "agreement.html")
 
 
 # ---------- 请求模型 ----------
@@ -130,6 +426,13 @@ _feature_toggles = {
     "tray_icon": True,        # 系统托盘（默认开启）
     "etw_guard": True,        # ETW 事中检测（默认开启，需要 SYSTEM 权限）
     "amsi_provider": True,    # AMSI 无文件拦截（默认开启）
+    "adblock": False,          # 弹窗拦截（默认关闭）
+    "download_guard": False,   # 下载防护（默认关闭）
+    "url_guard": False,        # 网址防护（默认关闭）
+    "vuln_fix": False,         # 漏洞修复（默认关闭）
+    "process_guard_tool": False, # 进程拦截（默认关闭）
+    "registry_guard": False,   # 注册表监控（默认关闭）
+    "behavior_block": False,   # 高危行为阻断（默认关闭）
 }
 
 # ETW/轮询 运行状态
@@ -146,6 +449,139 @@ realtime_guard = RealtimeGuard()
 tray_icon = TrayIcon()
 game_mode = get_game_mode()
 usb_scanner = get_usb_scanner()
+ransomware_shield = RansomwareShield()
+
+# 初始化安全工具模块
+network_repair = NetworkRepair()
+adblock = AdBlock()
+download_guard = DownloadGuard()
+url_guard = UrlGuard()
+vuln_fix = VulnFix()
+usb_guard = get_usb_guard()
+mail_guard = get_mail_guard(url_checker=url_guard.check_url)
+process_guard_tool = ProcessGuard()
+registry_guard = RegistryGuard()
+behavior_block = BehaviorBlock()
+
+# === 企业级安全功能模块（懒加载代理 — 减少启动内存占用） ===
+# 这些模块仅在首次访问时才导入和实例化，避免启动时一次性加载全部模块
+
+class _LazyModule:
+    """懒加载代理：首次访问任意属性时触发模块导入和实例化"""
+    __slots__ = ('_factory', '_instance', '_lock')
+
+    def __init__(self, factory):
+        object.__setattr__(self, '_factory', factory)
+        object.__setattr__(self, '_instance', None)
+        object.__setattr__(self, '_lock', _thr.Lock())
+
+    def __getattr__(self, name):
+        if object.__getattribute__(self, '_instance') is None:
+            with object.__getattribute__(self, '_lock'):
+                if object.__getattribute__(self, '_instance') is None:
+                    object.__setattr__(self, '_instance',
+                                        object.__getattribute__(self, '_factory')())
+        return getattr(object.__getattribute__(self, '_instance'), name)
+
+    def _get_real(self):
+        """获取真实实例（供其他模块工厂函数传递依赖）"""
+        if object.__getattribute__(self, '_instance') is None:
+            with object.__getattribute__(self, '_lock'):
+                if object.__getattribute__(self, '_instance') is None:
+                    object.__setattr__(self, '_instance',
+                                        object.__getattribute__(self, '_factory')())
+        return object.__getattribute__(self, '_instance')
+
+
+def _make_kb():
+    from engine.kernel_bridge import get_kernel_bridge
+    return get_kernel_bridge()
+
+
+def _make_hips():
+    from engine.hips import get_hips
+    from engine.kernel_bridge import get_kernel_bridge
+    return get_hips(get_kernel_bridge())
+
+
+def _make_firewall():
+    from engine.firewall import get_firewall
+    from engine.kernel_bridge import get_kernel_bridge
+    return get_firewall(get_kernel_bridge())
+
+
+def _make_anti_rootkit():
+    from engine.anti_rootkit import get_anti_rootkit
+    from engine.kernel_bridge import get_kernel_bridge
+    return get_anti_rootkit(get_kernel_bridge())
+
+
+def _make_custom_rules():
+    from engine.custom_rules import get_custom_rules
+    from engine.kernel_bridge import get_kernel_bridge
+    from engine.hips import get_hips
+    return get_custom_rules(get_kernel_bridge(), get_hips(get_kernel_bridge()))
+
+
+def _make_honeypot():
+    from engine.honeypot_manager import get_honeypot_manager
+    from engine.kernel_bridge import get_kernel_bridge
+    return get_honeypot_manager(get_kernel_bridge())
+
+
+def _make_browser_guard():
+    from engine.browser_guard import get_browser_guard
+    from engine.kernel_bridge import get_kernel_bridge
+    return get_browser_guard(get_kernel_bridge())
+
+
+def _make_camera_guard():
+    from engine.camera_guard import get_camera_guard
+    from engine.kernel_bridge import get_kernel_bridge
+    return get_camera_guard(get_kernel_bridge())
+
+
+def _make_privacy_shield():
+    from engine.privacy_shield import get_privacy_shield
+    from engine.kernel_bridge import get_kernel_bridge
+    return get_privacy_shield(get_kernel_bridge())
+
+
+def _make_data_recovery():
+    from engine.data_recovery import get_data_recovery
+    return get_data_recovery()
+
+
+def _make_sandbox():
+    from engine.sandbox import get_sandbox
+    return get_sandbox()
+
+
+def _make_self_protect():
+    from engine.self_protect import SelfProtect
+    from engine.kernel_bridge import get_kernel_bridge
+    return SelfProtect(get_kernel_bridge())
+
+
+def _make_response_center():
+    from engine.response_center import ResponseCenter
+    from engine.kernel_bridge import get_kernel_bridge
+    return ResponseCenter(get_kernel_bridge())
+
+
+kernel_bridge = _LazyModule(_make_kb)
+hips = _LazyModule(_make_hips)
+firewall = _LazyModule(_make_firewall)
+anti_rootkit = _LazyModule(_make_anti_rootkit)
+custom_rules = _LazyModule(_make_custom_rules)
+honeypot_manager = _LazyModule(_make_honeypot)
+browser_guard = _LazyModule(_make_browser_guard)
+camera_guard = _LazyModule(_make_camera_guard)
+privacy_shield = _LazyModule(_make_privacy_shield)
+data_recovery = _LazyModule(_make_data_recovery)
+sandbox = _LazyModule(_make_sandbox)
+self_protect = _LazyModule(_make_self_protect)
+response_center = _LazyModule(_make_response_center)
 
 # 启动监控
 def _start_guards():
@@ -179,6 +615,20 @@ def _start_guards():
 
     except Exception:
         pass
+
+    # 启动内核驱动桥接
+    try:
+        if kernel_bridge.connect():
+            print("[御天] 内核驱动连接成功")
+            kernel_bridge.start_event_loop()
+            hips.enable()
+            # 保护御天自身进程
+            import os
+            kernel_bridge.protect_pid(os.getpid())
+        else:
+            print("[御天] 内核驱动未安装，以用户态模式运行")
+    except Exception as e:
+        print(f"[御天] 内核驱动连接失败: {e}")
 
 
 def _init_etw_guard():
@@ -218,10 +668,9 @@ def _init_tray_icon():
             webbrowser.open("http://127.0.0.1:8899")
 
         def on_exit():
-            """退出程序"""
-            import os
-            import signal
-            os._exit(0)
+            """退出程序（Logo 淡出 + 资源释放 + 进程退出）"""
+            import threading
+            threading.Thread(target=_do_exit_with_fadeout, daemon=True).start()
 
         tray_icon.set_callbacks(on_show=on_show, on_exit=on_exit)
         tray_icon.start()
@@ -326,6 +775,36 @@ async def scan_cancel(task_id: str):
     return {"task_id": task_id, "status": "cancelled"}
 
 
+@app.get("/api/v1/scan/perf-stats")
+async def scan_perf_stats():
+    """获取扫描引擎性能统计"""
+    try:
+        stats = scheduler.scanner.get_perf_stats()
+        # 实时监控事件背压队列水位（有界队列深度/丢弃计数）
+        try:
+            stats["realtime_queue"] = realtime_guard.get_queue_stats()
+        except Exception:
+            stats["realtime_queue"] = None
+        # 添加 YARA 索引信息
+        yara_info = {
+            "total_rules": len(scheduler.yara.rules) if scheduler.yara else 0,
+            "pe_rules": len(scheduler.yara._rules_pe) if scheduler.yara else 0,
+            "elf_rules": len(scheduler.yara._rules_elf) if scheduler.yara else 0,
+            "generic_rules": len(scheduler.yara._rules_generic) if scheduler.yara else 0,
+        }
+        stats["yara"] = yara_info
+        stats["config"] = {
+            "max_workers": MAX_WORKERS,
+            "max_file_size_mb": MAX_FILE_SIZE // (1024 * 1024),
+            "buffer_limit_mb": 32,
+            "cache_size": 512,
+            "cache_ttl_seconds": 300,
+        }
+        return stats
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, 500)
+
+
 # ---------- 实时保护 API ----------
 
 @app.get("/api/v1/protection/status")
@@ -353,7 +832,81 @@ async def protection_toggle(req: ToggleRequest):
                 file_guard.enable()
             else:
                 file_guard.disable()
+        elif req.module == "ransomware_shield":
+            if req.enabled:
+                ransomware_shield.enable()
+            else:
+                ransomware_shield.disable()
     return {"module": req.module, "enabled": req.enabled}
+
+
+# ---------- 防勒索 API ----------
+
+@app.get("/api/v1/ransomware/status")
+async def ransomware_status():
+    """防勒索模块状态"""
+    return ransomware_shield.get_status()
+
+
+@app.post("/api/v1/ransomware/auto-kill")
+async def ransomware_auto_kill(req: ToggleRequest):
+    """切换自动终止威胁进程"""
+    ransomware_shield.auto_kill_enabled = req.enabled
+    return {"enabled": req.enabled}
+
+
+@app.get("/api/v1/ransomware/backups")
+async def ransomware_backups():
+    """获取快照备份列表"""
+    return {"backups": ransomware_shield.get_snapshot_backups()}
+
+
+@app.post("/api/v1/ransomware/restore")
+async def ransomware_restore(req: dict):
+    """从快照恢复文件"""
+    path = req.get("path", "")
+    if not path:
+        return {"success": False, "error": "缺少 path 参数"}
+    ok = ransomware_shield.restore_file(path)
+    return {"success": ok}
+
+
+@app.post("/api/v1/ransomware/protected-dir/add")
+async def ransomware_add_dir(req: dict):
+    """添加保护目录"""
+    path = req.get("path", "")
+    if not path:
+        return {"success": False, "error": "缺少 path 参数"}
+    ok = ransomware_shield.add_protected_dir(path)
+    return {"success": ok}
+
+
+@app.post("/api/v1/ransomware/protected-dir/remove")
+async def ransomware_remove_dir(req: dict):
+    """移除保护目录"""
+    path = req.get("path", "")
+    if not path:
+        return {"success": False, "error": "缺少 path 参数"}
+    ok = ransomware_shield.remove_protected_dir(path)
+    return {"success": ok}
+
+
+@app.post("/api/v1/ransomware/whitelist/add")
+async def ransomware_add_whitelist(req: dict):
+    """添加白名单进程"""
+    name = req.get("name", "")
+    if not name:
+        return {"success": False, "error": "缺少 name 参数"}
+    ransomware_shield.add_whitelist(name)
+    return {"success": True}
+
+
+@app.post("/api/v1/ransomware/whitelist/remove")
+async def ransomware_remove_whitelist(req: dict):
+    """移除白名单进程"""
+    name = req.get("name", "")
+    ok = ransomware_shield.remove_whitelist(name)
+    return {"success": ok}
 
 
 # ---------- 开机自启 API ----------
@@ -465,6 +1018,52 @@ async def usb_scan_toggle():
     else:
         usb_scanner.stop()
     return {"enabled": _feature_toggles["usb_scan"]}
+
+
+# ---------- U盘免疫与外设管控 API ----------
+
+@app.get("/api/v1/usb-guard/status")
+async def usb_guard_status():
+    """U盘免疫与外设管控状态"""
+    return usb_guard.get_status()
+
+@app.post("/api/v1/usb-guard/immunize")
+async def usb_guard_immunize(data: dict = None):
+    """对指定盘符（可空=全部可移动盘）执行免疫"""
+    data = data or {}
+    return usb_guard.immunize(data.get("drive"))
+
+@app.post("/api/v1/usb-guard/autorun")
+async def usb_guard_autorun(data: dict):
+    """启用/禁用自动播放"""
+    return usb_guard.set_autorun(bool(data.get("enabled", False)))
+
+@app.post("/api/v1/usb-guard/usb-storage")
+async def usb_guard_usb_storage(data: dict):
+    """启用/禁用 USB 存储设备（外设管控，需管理员）"""
+    return usb_guard.set_usb_storage(bool(data.get("enabled", False)))
+
+
+# ---------- 邮件防护 API ----------
+
+@app.post("/api/v1/mail-guard/scan-text")
+async def mail_guard_scan_text(data: dict):
+    """检测邮件正文/来源文本"""
+    return mail_guard.scan_text(
+        str(data.get("text", "")),
+        display_name=str(data.get("display_name", "")),
+        domain=str(data.get("domain", "")),
+    )
+
+@app.post("/api/v1/mail-guard/scan-urls")
+async def mail_guard_scan_urls(data: dict):
+    """批量检测 URL 列表"""
+    return mail_guard.scan_urls(data.get("urls") or [])
+
+@app.get("/api/v1/mail-guard/status")
+async def mail_guard_status():
+    """邮件防护状态"""
+    return mail_guard.get_status()
 
 
 # ---------- 系统托盘 API ----------
@@ -602,6 +1201,69 @@ async def etw_events():
         return {"events": events, "total": len(events)}
     except Exception as e:
         return {"events": [], "error": str(e)}
+
+
+@app.get("/api/v1/etw/correlations")
+async def etw_correlations():
+    """事件关联引擎：获取攻击链事件（获取后清空）"""
+    try:
+        from engine.native_guard_bridge import get_native_guard
+        guard = get_native_guard()
+        if not guard:
+            return {"correlations": []}
+        result = guard.etw_get_correlations()
+        corrs = result.get("correlations", []) if result else []
+        if corrs:
+            try:
+                from engine.report_logger import log_threat
+                for c in corrs:
+                    log_threat(f"[ETW-链] {c.get('chain')} severity={c.get('severity')} pid={c.get('pid')} {c.get('name', '')}")
+            except Exception:
+                pass
+        return {"correlations": corrs, "total": len(corrs)}
+    except Exception as e:
+        return {"correlations": [], "error": str(e)}
+
+
+@app.get("/api/v1/etw/process-tree")
+async def etw_process_tree(top: int = 20):
+    """进程树行为评分：输出风险分最高的进程及子树聚合分"""
+    try:
+        from engine.native_guard_bridge import get_native_guard
+        guard = get_native_guard()
+        if not guard:
+            return {"processes": [], "total": 0}
+        return guard.etw_process_tree(top)
+    except Exception as e:
+        return {"processes": [], "error": str(e)}
+
+
+@app.get("/api/v1/etw/health")
+async def etw_health():
+    """Provider 健康监控：会话存活 + 事件流动（自保护）"""
+    try:
+        from engine.native_guard_bridge import get_native_guard
+        guard = get_native_guard()
+        if not guard:
+            return {"running": False, "session_active": False, "error": "dll unavailable"}
+        return guard.etw_health()
+    except Exception as e:
+        return {"running": False, "error": str(e)}
+
+
+@app.get("/api/v1/etw/scan-tamper")
+async def etw_scan_tamper():
+    """篡改扫描：AMSI Inline Hook + ETW 自身防篡改 + 会话存活"""
+    try:
+        from engine.native_guard_bridge import get_native_guard
+        guard = get_native_guard()
+        if not guard:
+            return {"amsi": None, "etw": None, "error": "dll unavailable"}
+        amsi = guard.scan_amsi_tamper()
+        etw = guard.scan_etw_tamper()
+        return {"amsi": amsi, "etw": etw}
+    except Exception as e:
+        return {"amsi": None, "etw": None, "error": str(e)}
 
 
 # ---------- AMSI Provider API ----------
@@ -818,14 +1480,113 @@ async def emergency_kill_log():
     return {"log": emergency_kill.get_log()}
 
 
-# ---------- 退出安盾 ----------
+# ---------- 退出御天 ----------
 
 @app.post("/api/v1/shutdown")
 async def shutdown():
-    """关闭安盾（含守护进程）"""
-    import time
-    _thr.Thread(target=lambda: (time.sleep(0.5), os._exit(0)), daemon=True).start()
-    return {"success": True, "message": "安盾即将退出"}
+    """关闭御天（含守护进程）- Logo 淡出动画 + 资源释放 + 进程退出"""
+    _thr.Thread(target=_do_exit_with_fadeout, daemon=True).start()
+    return {"success": True, "message": "御天正在退出，Logo 淡出动画播放中..."}
+
+
+# ---------- 守护天数 API ----------
+
+@app.get("/api/v1/guard-days")
+async def get_guard_days():
+    """获取累计守护天数"""
+    try:
+        from persistence import load_guard_days
+        data = load_guard_days()
+        return {
+            "first_start_date": data.get("first_start_date", ""),
+            "last_start_date": data.get("last_start_date", ""),
+            "accumulated_days": data.get("accumulated_days", 0),
+        }
+    except Exception as e:
+        return {"accumulated_days": 0, "error": str(e)}
+
+
+# ---------- 持久化配置保存 API ----------
+
+@app.get("/api/v1/config-save")
+async def get_config_save():
+    """获取持久化保存的用户配置"""
+    try:
+        from persistence import load_config_save
+        return load_config_save()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/v1/config-save")
+async def save_config_endpoint(data: dict):
+    """保存用户自定义扫描配置到磁盘"""
+    try:
+        from persistence import save_config_save, load_config_save
+        existing = load_config_save()
+        # 递归合并
+        _deep_merge_dict(existing, data)
+        save_config_save(existing)
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/v1/config-save/scan")
+async def get_scan_config():
+    """获取扫描配置"""
+    try:
+        from persistence import load_config_save
+        cfg = load_config_save()
+        return cfg.get("scan", {})
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/v1/config-save/scan")
+async def save_scan_config(data: dict):
+    """保存扫描配置"""
+    try:
+        from persistence import save_config_save, load_config_save
+        cfg = load_config_save()
+        cfg["scan"] = {**cfg.get("scan", {}), **data}
+        save_config_save(cfg)
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def _deep_merge_dict(base: dict, override: dict):
+    """递归合并两个字典"""
+    for k, v in override.items():
+        if k in base and isinstance(base[k], dict) and isinstance(v, dict):
+            _deep_merge_dict(base[k], v)
+        else:
+            base[k] = v
+
+
+# ---------- 扫描缓存 API ----------
+
+@app.get("/api/v1/cache/stats")
+async def cache_stats():
+    """扫描缓存统计"""
+    try:
+        from persistence import cache_stats
+        return cache_stats()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/v1/cache/clear")
+async def cache_clear():
+    """清空扫描缓存"""
+    try:
+        from persistence import cache_clear, cache_cleanup
+        cache_clear()
+        cache_cleanup()
+        return {"success": True, "message": "缓存已清空"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 # ---------- 实时文件监控 API ----------
@@ -971,54 +1732,58 @@ async def signatures_download_status():
     return sig_downloader.status
 
 
-# ---------- 漏洞筛查 API ----------
-
-@app.get("/api/v1/vulnerabilities/search")
-async def vuln_search(keyword: str = "", severity: str = "", source: str = "",
-                       page: int = 1, pagesize: int = 50):
-    """搜索漏洞"""
-    offset = (page - 1) * pagesize
-    results = vuln_db.search(keyword=keyword, severity=severity, source=source,
-                             limit=pagesize, offset=offset)
-    total = vuln_db.search_count(keyword=keyword, severity=severity, source=source)
-    return {"total": total, "page": page, "pagesize": pagesize, "results": results}
-
-
-@app.get("/api/v1/vulnerabilities/stats")
-async def vuln_stats():
-    """漏洞统计"""
-    return vuln_db.get_stats()
-
-
-@app.get("/api/v1/vulnerabilities/recent")
-async def vuln_recent(limit: int = 20):
-    """最近漏洞"""
-    return {"results": vuln_db.get_recent(limit)}
-
-
-@app.post("/api/v1/vulnerabilities/download")
-async def vuln_download(data: dict = None):
-    """下载漏洞数据库"""
-    source = (data or {}).get("source", "community")
+@app.post("/api/v1/signatures/import_local")
+async def signatures_import_local(data: dict = None):
+    """
+    手动导入本地 bingduku 病毒库（MD5 文本文件）。
+    参数: force=true 时忽略已导入标记，强制重新导入。
+    """
+    from config import BINGDUKU_MD5_TXT
+    import os as _os
+    import sqlite3
+    force = (data or {}).get("force", False) in (True, 1, "true", "True", "1", "yes")
+    if not BINGDUKU_MD5_TXT or not _os.path.isfile(BINGDUKU_MD5_TXT):
+        return JSONResponse(status_code=404, content={
+            "status": "error",
+            "error": "本地病毒库文件不存在",
+            "path": BINGDUKU_MD5_TXT
+        })
+    # 清除已导入标记（force）
+    if force:
+        try:
+            conn = sqlite3.connect(sig_mgr.db_path)
+            conn.execute(
+                "DELETE FROM signature_meta WHERE key='bingduku_20260419_imported'"
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
 
     def _do():
-        if source == "cnnvd":
-            vuln_downloader.download_from_cnnvd()
-        elif source == "community":
-            vuln_downloader.download_community_feed(limit=5000)
-        else:
-            vuln_downloader.download_from_nvd(limit=2000)
+        try:
+            import time
+            t0 = time.time()
+            result = sig_mgr.import_md5_text(BINGDUKU_MD5_TXT)
+            try:
+                conn = sqlite3.connect(sig_mgr.db_path)
+                conn.execute(
+                    "INSERT OR REPLACE INTO signature_meta (key, value) VALUES (?, ?)",
+                    ("bingduku_20260419_imported", "1")
+                )
+                conn.commit()
+                conn.close()
+            except Exception:
+                pass
+            result["duration_ms"] = int((time.time() - t0) * 1000)
+            result["stats"] = sig_mgr.get_stats()
+            return result
+        except Exception as e:
+            return {"error": str(e)}
 
-    import threading
-    t = threading.Thread(target=_do, daemon=True)
+    t = _thr.Thread(target=_do, daemon=True)
     t.start()
-    return {"status": "started", "source": source}
-
-
-@app.get("/api/v1/vulnerabilities/download/status")
-async def vuln_download_status():
-    """漏洞下载进度"""
-    return vuln_downloader.status
+    return {"status": "started", "force": force, "source_file": BINGDUKU_MD5_TXT}
 
 
 # ---------- ML 扫描 API ----------
@@ -1114,6 +1879,115 @@ async def malware_family_iocs(name: str = "", limit: int = 100):
     return {"family": name, "ioc_count": len(iocs), "iocs": iocs[:limit]}
 
 
+# ---------- 卫士-垃圾清理 API ----------
+
+class CleanExecuteRequest(BaseModel):
+    """清理执行请求：选中分类 id 列表"""
+    category_ids: list[str] = []
+
+
+@app.post("/api/v1/clean/scan")
+async def clean_scan():
+    """启动垃圾清理扫描（异步，进度经 WebSocket 推送）"""
+    task = junk_cleaner.start_scan(progress_callback=broadcast_progress)
+    return {"task_id": task.task_id, "status": task.status}
+
+
+@app.get("/api/v1/clean/{task_id}/status")
+async def clean_status(task_id: str):
+    """查询清理扫描任务状态"""
+    task = junk_cleaner.get_task(task_id)
+    if not task:
+        return JSONResponse({"error": "任务不存在"}, 404)
+    return task.to_dict()
+
+
+@app.post("/api/v1/clean/execute")
+async def clean_execute(req: CleanExecuteRequest):
+    """执行清理：仅允许白名单分类，返回释放统计"""
+    try:
+        return junk_cleaner.execute_clean(req.category_ids)
+    except Exception as e:
+        return JSONResponse({"error": f"清理失败: {e}"}, 500)
+
+
+@app.get("/api/v1/clean/history")
+async def clean_history(limit: int = 20):
+    """获取清理历史记录（最新在前）"""
+    return {"records": junk_cleaner.get_history(limit)}
+
+
+# ---------- 卫士-电脑优化 API ----------
+
+class StartupToggleRequest(BaseModel):
+    """启动项切换请求"""
+    item_id: str
+    action: str  # disable | enable
+
+
+class ServiceToggleRequest(BaseModel):
+    """服务启动类型切换请求"""
+    name: str
+    action: str  # auto | manual | disabled
+
+
+@app.get("/api/v1/optimize/overview")
+async def optimize_overview():
+    """系统体检报告（评分 + 检查项）"""
+    try:
+        return system_optimizer.overview()
+    except Exception as e:
+        return JSONResponse({"error": f"体检失败: {e}"}, 500)
+
+
+@app.get("/api/v1/optimize/startup")
+async def optimize_startup():
+    """启动项列表（含已禁用项，可还原）"""
+    try:
+        return {"items": system_optimizer.list_startup()}
+    except Exception as e:
+        return JSONResponse({"error": f"读取启动项失败: {e}"}, 500)
+
+
+@app.post("/api/v1/optimize/startup/toggle")
+async def optimize_startup_toggle(req: StartupToggleRequest):
+    """禁用/启用启动项（可逆操作）"""
+    return system_optimizer.toggle_startup(req.item_id, req.action)
+
+
+@app.get("/api/v1/optimize/services")
+async def optimize_services():
+    """服务列表：系统服务只读，第三方服务可管理"""
+    try:
+        return system_optimizer.list_services()
+    except Exception as e:
+        return JSONResponse({"error": f"读取服务列表失败: {e}"}, 500)
+
+
+@app.post("/api/v1/optimize/services/toggle")
+async def optimize_service_toggle(req: ServiceToggleRequest):
+    """修改第三方服务启动类型（auto/manual/disabled）"""
+    return system_optimizer.toggle_service(req.name, req.action)
+
+
+@app.post("/api/v1/optimize/memory")
+async def optimize_memory():
+    """释放内存（收缩空闲进程工作集）"""
+    try:
+        return system_optimizer.release_memory()
+    except Exception as e:
+        return JSONResponse({"error": f"内存释放失败: {e}"}, 500)
+
+
+@app.post("/api/v1/optimize/one-click")
+async def optimize_one_click():
+    """一键优化：临时垃圾清理 + 内存释放 + 启动项建议"""
+    try:
+        return system_optimizer.one_click()
+    except Exception as e:
+        return JSONResponse({"error": f"一键优化失败: {e}"}, 500)
+
+
 # ---------- 统计概览 API ----------
 
 @app.get("/api/v1/stats/overview")
@@ -1126,6 +2000,14 @@ async def stats_overview():
     s["c2_domain_count"] = _get_c2_intel().get_stats().get("domain_count", 0)
     s["malware_families"] = _get_threat_intel().get_stats().get("family_count", 0)
     s["malware_ioc_count"] = _get_threat_intel().get_stats().get("ioc_count", 0)
+    # 累计守护天数
+    try:
+        from persistence import load_guard_days
+        gd = load_guard_days()
+        s["guard_days"] = gd.get("accumulated_days", 0)
+        s["first_start_date"] = gd.get("first_start_date", "")
+    except Exception:
+        s["guard_days"] = 0
     return s
 
 
@@ -1193,30 +2075,467 @@ class CloudConfigRequest(BaseModel):
 async def cloud_status():
     """云端引擎状态"""
     cs = scheduler.cloud
-    return {
-        "available": cs.available,
-        "configured": bool(cs._available),
-        "last_error": cs._last_error,
-        "provider": "ThreatBook (微步在线)"
-    }
+    return cs.get_status()
 
 
 @app.post("/api/v1/cloud/config")
 async def cloud_config(req: CloudConfigRequest):
     """配置云端 API Key"""
     scheduler.cloud.set_api_key(req.api_key)
-    return {
-        "available": scheduler.cloud.available,
-        "configured": bool(req.api_key),
-        "provider": "ThreatBook (微步在线)"
-    }
+    return scheduler.cloud.get_status()
 
 
-# ---------- 深度分析 API ----------
+@app.get("/api/v1/cloud/avic/status")
+async def avic_status():
+    """AVIC 情报中心状态"""
+    try:
+        from engine.avic_client import AVICClient
+        from config import AVIC_API_KEY, AVIC_BASE_URL
+        if not AVIC_API_KEY:
+            return {
+                "ok": False,
+                "degraded": True,
+                "configured": False,
+                "hint": "尚未配置 AVIC API Key，AVIC 情报服务暂不可用，可到「引擎启动」页配置。",
+                "base_url": AVIC_BASE_URL,
+            }
+        avic = AVICClient(base_url=AVIC_BASE_URL, api_key=AVIC_API_KEY, timeout=8)
+        status = avic.status()
+        return {
+            "ok": True,
+            "server": status,
+            "api_key": f"{AVIC_API_KEY[:8]}...",
+            "base_url": AVIC_BASE_URL,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+# ---------- OTX AlienVault 云查杀 + IOC 情报 API ----------
+
+class OTXConfigRequest(BaseModel):
+    otx_api_key: str
+
+
+class OTXHashRequest(BaseModel):
+    md5: Optional[str] = ""
+    sha1: Optional[str] = ""
+    sha256: Optional[str] = ""
+
+
+@app.post("/api/v1/cloud/otx/config")
+async def otx_config(req: OTXConfigRequest):
+    """设置 / 更新 AlienVault OTX API Key"""
+    try:
+        scheduler.cloud.set_otx_key(req.otx_api_key)
+        return {"success": True, "status": scheduler.cloud.get_status().get("otx")}
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, 500)
+
+
+@app.get("/api/v1/cloud/otx/status")
+async def otx_status():
+    """AlienVault OTX 引擎状态（含 Key 验证）"""
+    try:
+        cs = scheduler.cloud
+        status = cs.get_status().get("otx", {})
+        # 若配置了 Key，尝试带用户名信息的验证结果
+        if status.get("configured"):
+            verification = cs.otx_verify_key()
+            status["verification"] = verification
+        return {
+            "ok": True,
+            **status,
+            "last_error": cs.last_error if not status.get("available") else None,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/v1/cloud/otx/hash")
+async def otx_scan_hash(req: OTXHashRequest):
+    """OTX 文件哈希云查杀（MD5/SHA1/SHA256，任一即可）"""
+    if not req.md5 and not req.sha1 and not req.sha256:
+        return JSONResponse({"error": "请至少提供 md5/sha1/sha256 中任一哈希值"}, 400)
+    try:
+        cs = scheduler.cloud
+        result = cs.lookup_hash(md5=req.md5, sha1=req.sha1, sha256=req.sha256)
+        resource = req.sha256 or req.sha1 or req.md5
+        if result is None:
+            return {
+                "found": False,
+                "hash": resource,
+                "classification": "unknown",
+                "threat_level": "clean",
+                "engine": "cloud_otx",
+                "message": "OTX 未命中或不可用",
+            }
+        return {
+            "found": True,
+            "hash": resource,
+            **result,
+        }
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, 500)
+
+
+@app.post("/api/v1/cloud/otx/hash/batch")
+async def otx_scan_batch(data: dict):
+    """OTX 批量哈希云查杀"""
+    hashes = data.get("hashes", [])
+    if not isinstance(hashes, list) or len(hashes) == 0:
+        return JSONResponse({"error": "请提供 hashes 数组"}, 400)
+    try:
+        results = scheduler.cloud.lookup_hashes_batch(hashes)
+        summary = {
+            "total": len(hashes),
+            "hits": sum(1 for v in results.values() if v is not None),
+            "misses": sum(1 for v in results.values() if v is None),
+        }
+        return {"summary": summary, "results": results}
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, 500)
+
+
+@app.get("/api/v1/cloud/otx/ip")
+async def otx_lookup_ip(ip: str = ""):
+    """OTX 查询 IPv4 情报（脉冲数、声誉、地理信息、关联样本）"""
+    if not ip:
+        return JSONResponse({"error": "请提供 ip 参数"}, 400)
+    try:
+        result = scheduler.cloud.otx_lookup_ip(ip)
+        return result
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, 500)
+
+
+@app.get("/api/v1/cloud/otx/domain")
+async def otx_lookup_domain(domain: str = ""):
+    """OTX 查询域名情报（脉冲数、关联样本、Pulse 列表）"""
+    if not domain:
+        return JSONResponse({"error": "请提供 domain 参数"}, 400)
+    try:
+        result = scheduler.cloud.otx_lookup_domain(domain)
+        return result
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, 500)
+
+
+@app.get("/api/v1/cloud/otx/url")
+async def otx_lookup_url(url: str = ""):
+    """OTX 查询 URL 情报"""
+    if not url:
+        return JSONResponse({"error": "请提供 url 参数"}, 400)
+    try:
+        result = scheduler.cloud.otx_lookup_url(url)
+        return result
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, 500)
+
+
+@app.get("/api/v1/cloud/otx/cve")
+async def otx_lookup_cve(cve_id: str = ""):
+    """OTX 查询 CVE 漏洞情报"""
+    if not cve_id:
+        return JSONResponse({"error": "请提供 cve_id 参数 (如 CVE-2024-1234)"}, 400)
+    try:
+        result = scheduler.cloud.otx_lookup_cve(cve_id)
+        return result
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, 500)
+
+
+@app.get("/api/v1/cloud/otx/pulses/subscribed")
+async def otx_subscribed_pulses(page: int = 1, limit: int = 20, modified_since: str = ""):
+    """OTX 已订阅的 Pulse 列表（威胁事件/活动集合）"""
+    try:
+        from engine.otx_client import OTXClient
+        import os
+        key = scheduler.cloud._otx_key if hasattr(scheduler.cloud, "_otx_key") else os.environ.get("OTX_API_KEY", "")
+        if not key:
+            return JSONResponse({"error": "未配置 OTX API Key"}, 400)
+        otx = OTXClient(api_key=key)
+        kwargs = {"page": page, "limit": limit}
+        if modified_since:
+            kwargs["modified_since"] = modified_since
+        result = otx.list_subscribed_pulses(**kwargs) or {}
+        return {
+            "page": page,
+            "limit": limit,
+            "count": result.get("count", 0),
+            "pulses": result.get("results", [])[:limit],
+            "source": "otx",
+        }
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, 500)
+
+
+@app.get("/api/v1/cloud/otx/pulses/search")
+async def otx_search_pulses(query: str = "", page: int = 1, limit: int = 20):
+    """OTX 搜索 Pulse（按关键词）"""
+    if not query:
+        return JSONResponse({"error": "请提供 query 搜索关键词"}, 400)
+    try:
+        from engine.otx_client import OTXClient
+        import os
+        key = scheduler.cloud._otx_key if hasattr(scheduler.cloud, "_otx_key") else os.environ.get("OTX_API_KEY", "")
+        if not key:
+            return JSONResponse({"error": "未配置 OTX API Key"}, 400)
+        otx = OTXClient(api_key=key)
+        result = otx.search_pulses(query, page=page, limit=limit) or {}
+        return {
+            "query": query,
+            "page": page,
+            "count": result.get("count", 0),
+            "pulses": result.get("results", [])[:limit],
+            "source": "otx",
+        }
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, 500)
+
+
+@app.get("/api/v1/cloud/otx/pulses/{pulse_id}")
+async def otx_get_pulse(pulse_id: str):
+    """按 Pulse ID 获取单个 Pulse 详情（含相关 IOC）"""
+    if not pulse_id:
+        return JSONResponse({"error": "缺少 pulse_id"}, 400)
+    try:
+        from engine.otx_client import OTXClient
+        import os
+        key = scheduler.cloud._otx_key if hasattr(scheduler.cloud, "_otx_key") else os.environ.get("OTX_API_KEY", "")
+        if not key:
+            return JSONResponse({"error": "未配置 OTX API Key"}, 400)
+        otx = OTXClient(api_key=key)
+        result = otx.get_pulse(pulse_id) or {}
+        return {"pulse_id": pulse_id, **result, "source": "otx"}
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, 500)
+
+
+# ---------- AndunAI 自建云查杀平台 API ----------
+
+class AndunConfigRequest(BaseModel):
+    url: Optional[str] = ""
+    api_key: Optional[str] = ""
+    engine_order: Optional[list] = None
+
+
+@app.get("/api/v1/cloud/andun/status")
+async def andun_status():
+    """AndunAI 平台状态"""
+    try:
+        cs = scheduler.cloud
+        status = cs.get_status().get("andun", {})
+        return {
+            "ok": True,
+            **status,
+            "last_error": cs.last_error if not status.get("available") else None,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/v1/cloud/andun/config")
+async def andun_config(req: AndunConfigRequest):
+    """配置 AndunAI 平台地址 / 密钥 / 引擎优先级"""
+    try:
+        cs = scheduler.cloud
+        changed = False
+        if req.url:
+            cs.set_andun(url=req.url, api_key=req.api_key or "")
+            changed = True
+        elif req.api_key:
+            cs.set_andun(api_key=req.api_key)
+            changed = True
+        if req.engine_order:
+            cs.set_engine_order(req.engine_order)
+            changed = True
+
+        # 持久化
+        cfg = load_config_save()
+        cloud_cfg = cfg.setdefault("cloud", {})
+        if req.url:
+            cloud_cfg["andun_url"] = req.url
+        if req.api_key:
+            cloud_cfg["andun_api_key"] = req.api_key
+        if req.engine_order:
+            cloud_cfg["engine_order"] = list(req.engine_order)
+        save_config_save(cfg)
+
+        return {"success": True, "changed": changed, "status": cs.get_status()}
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, 500)
+
+
+@app.get("/api/v1/cloud/andun/verify")
+async def andun_verify():
+    """主动验证 AndunAI 连接（同步阻塞）"""
+    try:
+        ok = scheduler.cloud.verify_andun()
+        return {"ok": ok, "status": scheduler.cloud.get_status().get("andun", {})}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+class AndunHashRequest(BaseModel):
+    hash_value: str = ""
+
+
+@app.post("/api/v1/cloud/andun/hash")
+async def andun_scan_hash(req: AndunHashRequest):
+    """AndunAI 哈希云查询（本地库 + 在线情报）"""
+    if not req.hash_value:
+        return JSONResponse({"error": "请提供 hash_value"}, 400)
+    cs = scheduler.cloud
+    if not cs.get_status().get("andun", {}).get("configured"):
+        return JSONResponse({"success": False, "error": "未配置 AndunAI 平台地址，云查功能暂不可用，可到「引擎启动」页配置。", "degraded": True}, 400)
+    try:
+        result = cs._andun.query_hash(req.hash_value.strip())
+        return {"found": bool(result.get("found")) if isinstance(result, dict) else False, **result}
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, 500)
+
+
+@app.post("/api/v1/cloud/andun/scan")
+async def andun_scan_file(file: UploadFile = File(...)):
+    """上传文件到 AndunAI 平台做多层比对扫描"""
+    cs = scheduler.cloud
+    if not cs.get_status().get("andun", {}).get("configured"):
+        return JSONResponse({"success": False, "error": "未配置 AndunAI 平台地址，云查功能暂不可用，可到「引擎启动」页配置。", "degraded": True}, 400)
+    try:
+        import tempfile
+        ext = os.path.splitext(file.filename or "")[1] or ".tmp"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+            content = await file.read()
+            tmp.write(content)
+            tmp_path = tmp.name
+        try:
+            result = scheduler.cloud.andun_scan_file(tmp_path)
+        finally:
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+        if result is None:
+            return JSONResponse({"success": False, "error": "AndunAI 平台不可用或扫描失败"}, 502)
+        return result
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, 500)
+
+
+class AndunSubmitRequest(BaseModel):
+    sha256: Optional[str] = ""
+    threat_name: Optional[str] = ""
+    threat_type: Optional[str] = ""
+    reporter: Optional[str] = "yutian"
+    description: Optional[str] = ""
+    source: Optional[str] = ""
+    tags: Optional[list] = None
+
+
+@app.post("/api/v1/cloud/andun/submit")
+async def andun_submit(req: AndunSubmitRequest):
+    """上报哈希到 AndunAI 平台（仅情报，不含文件）"""
+    if not req.sha256:
+        return JSONResponse({"error": "请提供 sha256"}, 400)
+    try:
+        result = scheduler.cloud.andun_submit_hash(
+            req.sha256, threat_name=req.threat_name or "",
+            threat_type=req.threat_type or "", reporter=req.reporter or "yutian",
+            description=req.description or "", source=req.source or "", tags=req.tags,
+        )
+        if result is None:
+            return JSONResponse({"success": False, "error": "AndunAI 平台不可用"}, 502)
+        return result
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, 500)
+
+
+@app.post("/api/v1/cloud/sample/submit")
+async def cloud_sample_submit(file: UploadFile = File(...),
+                              threat_name: Optional[str] = Form(""),
+                              description: Optional[str] = Form("")):
+    """
+    样本回传闭环：上传一个疑似样本文件 →
+      1) 多引擎哈希比对（天听）
+      2) 若平台无权威结论（疑似/未知），自动上报 AndunAI 回传样本，闭环反馈
+    返回研判报告与上报结果。
+    """
+    cs = scheduler.cloud
+    cs_status = cs.get_status()
+    if not cs_status.get("andun", {}).get("configured"):
+        return JSONResponse({"success": False, "error": "未配置 AndunAI 平台，样本回传不可用，可到「引擎启动」页配置。", "degraded": True}, 400)
+    import tempfile, hashlib
+    ext = os.path.splitext(file.filename or "")[1] or ".tmp"
+    tmp_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+            content = await file.read()
+            tmp.write(content)
+            tmp_path = tmp.name
+        sha256 = hashlib.sha256(content).hexdigest()
+        md5 = hashlib.md5(content).hexdigest()
+
+        # 1) 多引擎比对
+        lookup = cs.lookup_hash(md5=md5, sha256=sha256) or {}
+        known = lookup.get("verdict") in ("malicious", "clean")
+        report = {
+            "sha256": sha256,
+            "md5": md5,
+            "size_bytes": len(content),
+            "filename": file.filename or "",
+        }
+
+        # 2) 无权威结论时，回传样本文件到 AndunAI 闭环
+        submitted = None
+        if not known:
+            try:
+                submitted = cs.andun_submit_file(
+                    tmp_path, threat_name=threat_name or "",
+                    description=description or "",
+                    source="yutian-sample-feedback",
+                )
+            except Exception as e:
+                submitted = {"success": False, "error": str(e)}
+        report["known"] = known
+        report["lookup"] = lookup
+        report["submitted"] = submitted
+        report["loop_closed"] = bool(submitted and submitted.get("success"))
+        return report
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, 500)
+    finally:
+        try:
+            if tmp_path:
+                os.remove(tmp_path)
+        except Exception:
+            pass
+
+
+@app.get("/api/v1/cloud/engines")
+async def cloud_engines():
+    """获取当前云查杀引擎配置与优先级"""
+    try:
+        status = scheduler.cloud.get_status()
+        return {
+            "engine_order": status.get("engine_order", []),
+            "engines": {
+                "andun": status.get("andun", {}),
+                "avic": status.get("avic", {}),
+                "threatbook": status.get("threatbook", {}),
+                "otx": status.get("otx", {}),
+            },
+            "last_error": status.get("last_error"),
+        }
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, 500)
+
+
+# ---------- 洞渊引擎 API ----------
 
 @app.get("/api/v1/deep/engines")
 async def deep_engines_status():
-    """深度分析引擎状态检查"""
+    """洞渊引擎状态检查"""
     try:
         from engine.deep_analyzer import engines_status
         return engines_status()
@@ -1293,7 +2612,7 @@ async def deep_libpeconv():
         return JSONResponse({"error": str(e)})
 
 
-# ---------- Vigil 强力模式 API ----------
+# ---------- 洞渊引擎 (Vigil) 强力模式 API ----------
 
 _vigil_status = {"running": False, "port": 7331}
 
@@ -1311,7 +2630,7 @@ def _check_vigil_alive() -> bool:
 
 @app.get("/api/v1/vigil/status")
 async def vigil_status():
-    """Vigil 强力模式状态"""
+    """洞渊引擎 (Vigil) 强力模式状态"""
     if _vigil_status["running"] and not _check_vigil_alive():
         _vigil_status["running"] = False
     return _vigil_status
@@ -1319,7 +2638,7 @@ async def vigil_status():
 
 @app.post("/api/v1/vigil/start")
 async def vigil_start():
-    """启动 Vigil 强力模式"""
+    """启动洞渊引擎 (Vigil) 强力模式"""
     if _vigil_status["running"] and _check_vigil_alive():
         return {"status": "already_running", "url": f"http://127.0.0.1:{_vigil_status['port']}"}
     try:
@@ -1346,16 +2665,73 @@ async def root():
     if os.path.isfile(index_path):
         return FileResponse(index_path)
     return {
-        "service": "安盾 Engine",
-        "version": "1.0.0",
+        "service": "御天 Engine",
+        "version": ENGINE_VERSION,
         "status": "running"
     }
+
+
+@app.get("/api/v1/version")
+async def get_version():
+    """获取引擎版本信息"""
+    try:
+        perf = scheduler.scanner.get_perf_stats()
+        yara_total = len(scheduler.yara.rules) if scheduler.yara else 0
+        yara_pe = len(scheduler.yara._rules_pe) if scheduler.yara else 0
+        yara_generic = len(scheduler.yara._rules_generic) if scheduler.yara else 0
+        return {
+            "version": ENGINE_VERSION,
+            "name": ENGINE_VERSION_NAME,
+            "api": "1.0.1",
+            "engine": {
+                "total_scans": perf.get("total_scans", 0),
+                "cache_hits": perf.get("cache_hits", 0),
+                "cache_hit_rate": perf.get("cache_hit_rate", 0),
+                "avg_scan_time_ms": perf.get("avg_scan_time_ms", 0),
+            },
+            "yara": {
+                "total_rules": yara_total,
+                "pe_rules": yara_pe,
+                "generic_rules": yara_generic,
+            },
+            "features": ["single-pass-io", "scan-cache", "yara-index", "adaptive-workers", "perf-stats"],
+        }
+    except Exception as e:
+        return {
+            "version": ENGINE_VERSION,
+            "name": ENGINE_VERSION_NAME,
+            "api": "1.0.1",
+        }
+
+
+# ── 用户协议确认 API ──
+
+@app.post("/api/v1/agreement/accept")
+async def agreement_accept():
+    """用户同意协议"""
+    try:
+        _save_agreement()
+        return {"success": True, "message": "协议已确认"}
+    except Exception as e:
+        return JSONResponse({"success": False, "error": f"保存失败: {str(e)}"}, 500)
+
+
+@app.post("/api/v1/agreement/reject")
+async def agreement_reject():
+    """用户拒绝协议（记录日志，前端负责关闭窗口）"""
+    print("[御天] 用户拒绝了用户协议")
+    return {"success": True}
+
+
+@app.get("/api/v1/agreement/status")
+async def agreement_status():
+    """查询协议确认状态"""
+    return {"accepted": _is_agreement_accepted()}
 
 
 @app.get("/{page}.html")
 async def serve_page(page: str):
     """提供前端 HTML 页面"""
-    # 安全检查：防止路径遍历
     if ".." in page or "/" in page or "\\" in page:
         return JSONResponse({"error": "无效的页面名称"}, 400)
     file_path = os.path.join(FRONTEND_DIR, f"{page}.html")
@@ -1505,6 +2881,16 @@ async def get_virus_types():
     """获取所有病毒类型列表"""
     return {"types": virus_memory.get_unique_virus_types()}
 
+@app.get("/api/v1/history/virus-family")
+async def get_virus_family(limit: int = 20):
+    """病毒家族分布 topN（供历史页家族图渲染）"""
+    try:
+        if limit < 1 or limit > 100:
+            limit = 20
+        return {"families": virus_memory.get_family_stats(limit)}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, 500)
+
 @app.post("/api/v1/history/clear")
 async def clear_virus_history():
     """清空病毒记忆记录"""
@@ -1648,11 +3034,11 @@ async def realtime_guard_toggle(data: dict):
         return JSONResponse({"error": str(e)}, 500)
 
 
-# ---------- 原生引擎 API (C++ Native Engine) ----------
+# ---------- 破军引擎 API (C++ Native Engine) ----------
 
 @app.get("/api/v1/native/version")
 async def native_version():
-    """原生引擎版本信息"""
+    """破军引擎版本信息"""
     try:
         from engine.native_bridge import get_native_engine
         eng = get_native_engine()
@@ -1874,7 +3260,8 @@ async def native_quarantine_move(data: dict):
     if not path:
         return JSONResponse({"error": "请提供文件路径"}, 400)
     if not qdir:
-        qdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "engine", "data", "quarantine")
+        from config import QUARANTINE_DIR
+        qdir = QUARANTINE_DIR
     try:
         from engine.native_bridge import get_native_engine
         eng = get_native_engine()
@@ -1926,7 +3313,8 @@ async def native_quarantine_delete(data: dict):
 @app.get("/api/v1/native/quarantine/list")
 async def native_quarantine_list():
     """列出隔离区文件"""
-    qdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "engine", "data", "quarantine")
+    from config import QUARANTINE_DIR
+    qdir = QUARANTINE_DIR
     try:
         from engine.native_bridge import get_native_engine
         eng = get_native_engine()
@@ -1936,6 +3324,295 @@ async def native_quarantine_list():
         return result
     except Exception as e:
         return JSONResponse({"error": str(e)}, 500)
+
+
+# ==================== 安全工具 API ====================
+
+# ── 断网急救 ──
+
+@app.get("/api/v1/network/check")
+async def network_check():
+    """检查网络状态"""
+    return network_repair.check_network()
+
+@app.post("/api/v1/network/repair-hosts")
+async def network_repair_hosts():
+    """修复 HOSTS 文件"""
+    return network_repair.repair_hosts()
+
+@app.post("/api/v1/network/repair-dns")
+async def network_repair_dns():
+    """刷新 DNS 缓存"""
+    return network_repair.repair_dns()
+
+@app.post("/api/v1/network/repair-lsp")
+async def network_repair_lsp():
+    """重置 Winsock/LSP"""
+    return network_repair.repair_lsp()
+
+@app.post("/api/v1/network/repair-all")
+async def network_repair_all():
+    """一键断网急救"""
+    return network_repair.repair_all()
+
+@app.get("/api/v1/network/history")
+async def network_history():
+    """获取修复历史"""
+    return {"history": network_repair.get_history()}
+
+# ── 弹窗拦截 ──
+
+@app.get("/api/v1/adblock/status")
+async def adblock_status():
+    """弹窗拦截状态"""
+    return adblock.get_status()
+
+@app.post("/api/v1/adblock/toggle")
+async def adblock_toggle(data: ToggleRequest):
+    """切换弹窗拦截"""
+    if data.enabled:
+        adblock.enable()
+    else:
+        adblock.disable()
+    return {"enabled": data.enabled}
+
+@app.get("/api/v1/adblock/stats")
+async def adblock_stats():
+    """弹窗拦截统计"""
+    return adblock.get_stats()
+
+@app.post("/api/v1/adblock/strict-mode")
+async def adblock_strict(data: dict):
+    """设置严格模式"""
+    adblock.set_strict_mode(data.get("enabled", False))
+    return {"strict_mode": data.get("enabled", False)}
+
+# ── 下载防护 ──
+
+@app.get("/api/v1/download-guard/status")
+async def download_guard_status():
+    """下载防护状态"""
+    return download_guard.get_status()
+
+@app.post("/api/v1/download-guard/toggle")
+async def download_guard_toggle(data: ToggleRequest):
+    """切换下载防护"""
+    if data.enabled:
+        download_guard.enable()
+    else:
+        download_guard.disable()
+    return {"enabled": data.enabled}
+
+@app.get("/api/v1/download-guard/stats")
+async def download_guard_stats():
+    """下载防护统计"""
+    return download_guard.get_stats()
+
+@app.get("/api/v1/download-guard/dirs")
+async def download_guard_dirs():
+    """获取监控目录"""
+    return {"dirs": download_guard.get_watch_dirs()}
+
+@app.post("/api/v1/download-guard/dir-add")
+async def download_guard_dir_add(data: dict):
+    """添加监控目录"""
+    path = data.get("path", "")
+    ok = download_guard.add_watch_dir(path)
+    return {"success": ok, "dirs": download_guard.get_watch_dirs()}
+
+@app.post("/api/v1/download-guard/dir-remove")
+async def download_guard_dir_remove(data: dict):
+    """移除监控目录"""
+    path = data.get("path", "")
+    download_guard.remove_watch_dir(path)
+    return {"success": True, "dirs": download_guard.get_watch_dirs()}
+
+# ── 网址/网页防护 ──
+
+@app.get("/api/v1/urlguard/status")
+async def urlguard_status():
+    """网址防护状态"""
+    return url_guard.get_status()
+
+@app.post("/api/v1/urlguard/toggle")
+async def urlguard_toggle(data: ToggleRequest):
+    """切换网址防护"""
+    enabled = url_guard.set_enabled(data.enabled)
+    return {"enabled": enabled}
+
+@app.post("/api/v1/urlguard/check")
+async def urlguard_check(data: dict):
+    """检测一条 URL/域名"""
+    result = url_guard.check_url(data.get("url", ""))
+    return result
+
+@app.post("/api/v1/urlguard/block")
+async def urlguard_block(data: dict):
+    """将域名加入阻断名单"""
+    ok = url_guard.block_domain(data.get("url", ""))
+    return {"success": ok, "blocked": url_guard.get_blocked_domains()}
+
+@app.post("/api/v1/urlguard/unblock")
+async def urlguard_unblock(data: dict):
+    """从阻断名单移除"""
+    url_guard.unblock_domain(data.get("url", ""))
+    return {"success": True, "blocked": url_guard.get_blocked_domains()}
+
+@app.get("/api/v1/urlguard/blocked")
+async def urlguard_blocked():
+    """阻断名单"""
+    return {"blocked": url_guard.get_blocked_domains()}
+
+@app.post("/api/v1/urlguard/hosts-sync")
+async def urlguard_hosts_sync(data: dict):
+    """应用/清除 hosts 阻断"""
+    return url_guard.sync_hosts(bool(data.get("enabled", False)))
+
+@app.post("/api/v1/urlguard/whitelist-add")
+async def urlguard_whitelist_add(data: dict):
+    """加入访问白名单"""
+    ok = url_guard.add_whitelist(data.get("url", ""))
+    return {"success": ok, "whitelist": url_guard.get_whitelist()}
+
+@app.post("/api/v1/urlguard/whitelist-remove")
+async def urlguard_whitelist_remove(data: dict):
+    """移出访问白名单"""
+    url_guard.remove_whitelist(data.get("url", ""))
+    return {"success": True, "whitelist": url_guard.get_whitelist()}
+
+@app.get("/api/v1/urlguard/whitelist")
+async def urlguard_whitelist():
+    """访问白名单"""
+    return {"whitelist": url_guard.get_whitelist()}
+
+# ── 系统漏洞修复 ──
+
+@app.post("/api/v1/vulnfix/scan")
+async def vulnfix_scan():
+    """扫描系统漏洞"""
+    return vuln_fix.scan()
+
+@app.get("/api/v1/vulnfix/status")
+async def vulnfix_status():
+    """漏洞修复状态"""
+    return vuln_fix.get_status()
+
+@app.post("/api/v1/vulnfix/open-update")
+async def vulnfix_open_update():
+    """唤起系统更新引导修复"""
+    return vuln_fix.open_windows_update()
+
+@app.post("/api/v1/vulnfix/ignore")
+async def vulnfix_ignore(data: dict):
+    """忽略指定补丁（不再提示）"""
+    ok = vuln_fix.ignore(str(data.get("kb", "")))
+    return {"success": ok, "status": vuln_fix.get_status()}
+
+@app.post("/api/v1/vulnfix/unignore")
+async def vulnfix_unignore(data: dict):
+    """取消忽略指定补丁（恢复提示）"""
+    ok = vuln_fix.unignore(str(data.get("kb", "")))
+    return {"success": ok, "status": vuln_fix.get_status()}
+
+# ── 进程启动拦截 ──
+
+@app.get("/api/v1/process-guard/status")
+async def process_guard_status():
+    """进程拦截状态"""
+    return process_guard_tool.get_status()
+
+@app.post("/api/v1/process-guard/toggle")
+async def process_guard_toggle(data: ToggleRequest):
+    """切换进程拦截"""
+    if data.enabled:
+        process_guard_tool.enable()
+    else:
+        process_guard_tool.disable()
+    return {"enabled": data.enabled}
+
+@app.get("/api/v1/process-guard/stats")
+async def process_guard_stats():
+    """进程拦截统计"""
+    return process_guard_tool.get_stats()
+
+@app.get("/api/v1/process-guard/lists")
+async def process_guard_lists():
+    """获取黑白名单"""
+    return process_guard_tool.get_lists()
+
+@app.post("/api/v1/process-guard/blacklist-add")
+async def process_guard_blacklist_add(data: dict):
+    """添加进程黑名单"""
+    name = data.get("name", "")
+    process_guard_tool.add_to_blacklist(name)
+    return {"success": True}
+
+@app.post("/api/v1/process-guard/blacklist-remove")
+async def process_guard_blacklist_remove(data: dict):
+    """移除进程黑名单"""
+    name = data.get("name", "")
+    process_guard_tool.remove_from_blacklist(name)
+    return {"success": True}
+
+@app.post("/api/v1/process-guard/whitelist-add")
+async def process_guard_whitelist_add(data: dict):
+    """添加进程白名单"""
+    name = data.get("name", "")
+    process_guard_tool.add_to_whitelist(name)
+    return {"success": True}
+
+# ── 注册表监控 ──
+
+@app.get("/api/v1/registry-guard/status")
+async def registry_guard_status():
+    """注册表监控状态"""
+    return registry_guard.get_status()
+
+@app.post("/api/v1/registry-guard/toggle")
+async def registry_guard_toggle(data: ToggleRequest):
+    """切换注册表监控"""
+    if data.enabled:
+        registry_guard.enable()
+    else:
+        registry_guard.disable()
+    return {"enabled": data.enabled}
+
+@app.get("/api/v1/registry-guard/stats")
+async def registry_guard_stats():
+    """注册表监控统计"""
+    return registry_guard.get_stats()
+
+@app.get("/api/v1/registry-guard/changes")
+async def registry_guard_changes():
+    """获取注册表变更记录"""
+    return {"changes": registry_guard.get_changes()}
+
+@app.post("/api/v1/registry-guard/auto-restore")
+async def registry_guard_auto_restore(data: dict):
+    """设置自动恢复"""
+    registry_guard.set_auto_restore(data.get("enabled", True))
+    return {"auto_restore": data.get("enabled", True)}
+
+# ── 高危行为阻断 ──
+
+@app.get("/api/v1/behavior-block/status")
+async def behavior_block_status():
+    """高危行为阻断状态"""
+    return behavior_block.get_status()
+
+@app.post("/api/v1/behavior-block/toggle")
+async def behavior_block_toggle(data: ToggleRequest):
+    """切换高危行为阻断"""
+    if data.enabled:
+        behavior_block.enable()
+    else:
+        behavior_block.disable()
+    return {"enabled": data.enabled}
+
+@app.get("/api/v1/behavior-block/stats")
+async def behavior_block_stats():
+    """高危行为阻断统计"""
+    return behavior_block.get_stats()
 
 
 # ---------- 启动入口 ----------
@@ -2038,15 +3715,860 @@ def _start_self_protection():
     t.start()
 
 
+# ══════════════════════════════════════════════════════════════
+#  Logo 退出流程（淡出动画 + 资源释放 + 进程退出）
+# ══════════════════════════════════════════════════════════════
+
+def _do_exit_with_fadeout():
+    """
+    关闭程序时统一退出流程：
+    1. 保存所有状态（配置、守护天数）
+    2. 显示 Logo 淡出动画
+    3. 动画期间释放引擎资源
+    4. 动画结束后彻底退出进程
+    """
+    # 1. 保存状态
+    print("[御天] 正在保存状态...")
+    try:
+        save_config_save({
+            "protection": _protection_modules,
+            "features": _feature_toggles,
+        })
+    except Exception:
+        pass
+    try:
+        save_guard_days(load_guard_days() if 'load_guard_days' in dir() else _guard_data)
+    except Exception:
+        pass
+    print("[御天] 状态已保存")
+
+    # 2. 显示 Logo 淡出动画 & 释放资源
+    from logo_splash import show_exit_fadeout
+    from engine_loader import release_engine_resources
+
+    def _on_fadeout_done():
+        """淡出动画完成后彻底退出"""
+        print("[御天] 再见")
+        # 写入正常退出标记，防止守护进程误判为崩溃而重启
+        import tempfile
+        clean_exit = os.path.join(tempfile.gettempdir(), ".andun_clean_exit")
+        try:
+            with open(clean_exit, 'w') as f:
+                f.write('1')
+        except Exception:
+            pass
+        os._exit(0)
+
+    # 启动淡出动画（独立线程），同时释放资源
+    show_exit_fadeout(on_complete=_on_fadeout_done)
+    release_engine_resources()
+
+
+# ==================== 内核驱动 ====================
+
+@app.get('/api/v1/kernel/status')
+async def kernel_status():
+    return {'connected': kernel_bridge.is_connected()}
+
+@app.get('/api/v1/kernel/stats')
+async def kernel_stats():
+    return kernel_bridge.get_stats()
+
+@app.get('/api/v1/kernel/events')
+async def kernel_events():
+    return {'events': kernel_bridge.get_events()}
+
+@app.post('/api/v1/kernel/config')
+async def kernel_config(config: dict = Body(...)):
+    kernel_bridge.set_config(config)
+    return {'ok': True}
+
+@app.post('/api/v1/kernel/toggle')
+async def kernel_toggle(data: dict = Body(...)):
+    try:
+        if data.get('enabled'):
+            if not kernel_bridge.is_connected():
+                kernel_bridge.connect()
+        else:
+            kernel_bridge.disconnect()
+    except Exception:
+        pass
+    return {'ok': True, 'enabled': kernel_bridge.is_connected()}
+
+# ==================== HIPS ====================
+
+@app.get('/api/v1/hips/status')
+async def hips_status():
+    return hips.get_status()
+
+@app.post('/api/v1/hips/toggle')
+async def hips_toggle(data: dict = Body(...)):
+    if data.get('enabled'):
+        hips.enable()
+    else:
+        hips.disable()
+    return {'ok': True, 'enabled': hips.is_enabled()}
+
+@app.get('/api/v1/hips/alerts')
+async def hips_alerts(limit: int = 50):
+    return {'alerts': hips.get_alerts(limit)}
+
+@app.post('/api/v1/hips/action')
+async def hips_action(data: dict = Body(...)):
+    hips.respond_to_pending(data.get('event_id', ''), data.get('action', 'allow'))
+    return {'ok': True}
+
+@app.get('/api/v1/hips/stats')
+async def hips_stats():
+    try:
+        alerts = hips.get_alerts(200)
+        return {'enabled': hips.is_enabled(), 'blocked_count': len(alerts), 'recent_alerts': alerts}
+    except Exception:
+        return {'enabled': False, 'blocked_count': 0, 'recent_alerts': []}
+
+# ==================== 防火墙 ====================
+
+@app.get('/api/v1/firewall/status')
+async def firewall_status():
+    return firewall.get_status()
+
+@app.post('/api/v1/firewall/toggle')
+async def firewall_toggle(data: dict = Body(...)):
+    if data.get('enabled'):
+        firewall.enable()
+    else:
+        firewall.disable()
+    return {'ok': True}
+
+@app.get('/api/v1/firewall/rules')
+async def firewall_rules():
+    return {'rules': firewall.get_rules()}
+
+@app.post('/api/v1/firewall/rule/add')
+async def firewall_rule_add(data: dict = Body(...)):
+    if data.get('action') == 'block':
+        rule = firewall.add_block_rule(data.get('ip', '*'), data.get('port', 0), data.get('protocol', 'tcp'), data.get('description', ''))
+    else:
+        rule = firewall.add_allow_rule(data.get('ip', '*'), data.get('port', 0), data.get('protocol', 'tcp'), data.get('description', ''))
+    return {'ok': True, 'rule': rule}
+
+@app.post('/api/v1/firewall/rule/remove')
+async def firewall_rule_remove(data: dict = Body(...)):
+    ok = firewall.remove_rule(data.get('rule_id', 0))
+    return {'ok': ok}
+
+@app.post('/api/v1/firewall/process/block')
+async def firewall_block_process(data: dict = Body(...)):
+    if data.get('action') == 'block':
+        firewall.block_process(data.get('process_name', ''))
+    else:
+        firewall.unblock_process(data.get('process_name', ''))
+    return {'ok': True}
+
+@app.get('/api/v1/firewall/blocked-processes')
+async def firewall_blocked_processes():
+    try:
+        return {'processes': firewall.get_blocked_processes()}
+    except Exception:
+        return {'processes': []}
+
+@app.post('/api/v1/firewall/blocked-processes')
+async def firewall_blocked_processes_add(data: dict = Body(...)):
+    try:
+        firewall.block_process(data.get('name', ''))
+    except Exception:
+        pass
+    return {'ok': True}
+
+@app.post('/api/v1/firewall/blocked-processes/delete')
+async def firewall_blocked_processes_remove(data: dict = Body(...)):
+    try:
+        firewall.unblock_process(data.get('id', ''))
+    except Exception:
+        pass
+    return {'ok': True}
+
+@app.get('/api/v1/firewall/connections')
+async def firewall_connections():
+    return {'connections': firewall.get_connections()}
+
+@app.get('/api/v1/firewall/stats')
+async def firewall_stats():
+    return firewall.get_stats()
+
+# ==================== 健康检查与监控 ====================
+
+# 启动时间（用于计算运行时长）
+_START_TIME = time.time()
+
+@app.get('/api/health')
+async def health_check():
+    """健康检查：驱动状态、签名库版本、引擎版本、运行时长、内存占用"""
+    import psutil
+    import platform
+
+    kb = kernel_bridge._get_real()
+    driver_status = kb.is_driver_ready()
+
+    # 内存占用
+    process = psutil.Process(os.getpid())
+    mem = process.memory_info()
+
+    # 磁盘空间（签名库所在盘）
+    disk_usage = None
+    try:
+        db_dir = os.path.dirname(sig_mgr.db_path)
+        du = psutil.disk_usage(db_dir)
+        disk_usage = {
+            "total_gb": round(du.total / (1024**3), 2),
+            "used_gb": round(du.used / (1024**3), 2),
+            "free_gb": round(du.free / (1024**3), 2),
+            "percent": du.percent,
+        }
+    except Exception:
+        pass
+
+    # 签名库统计
+    sig_stats = sig_mgr.get_stats()
+    sig_version = sig_mgr.get_bingduku_version()
+
+    return {
+        "status": "ok",
+        "uptime_seconds": int(time.time() - _START_TIME),
+        "engine_version": ENGINE_VERSION,
+        "engine_version_name": ENGINE_VERSION_NAME,
+        "python": platform.python_version(),
+        "platform": platform.platform(),
+        "driver": driver_status,
+        "signatures": {
+            "version": sig_version,
+            "total": sig_stats.get("total_signatures", 0),
+            "db_path": sig_mgr.db_path,
+        },
+        "memory": {
+            "rss_mb": round(mem.rss / (1024**2), 2),
+            "vms_mb": round(mem.vms / (1024**2), 2),
+        },
+        "disk": disk_usage,
+        "disk_status": "warning" if (disk_usage and disk_usage["percent"] > 90) else "ok",
+    }
+
+# ==================== 配置热加载 ====================
+
+@app.post('/api/config/reload')
+async def config_reload():
+    """运行时重载配置（无需重启进程）"""
+    try:
+        from persistence import load_config_save
+        _persistent_config = load_config_save()
+
+        # 动态更新 config 模块变量
+        import config as cfg
+
+        _scan_cfg = _persistent_config.get("scan", {})
+        if _scan_cfg.get("max_workers", 0) > 0:
+            cfg.MAX_WORKERS = _scan_cfg["max_workers"]
+        if _scan_cfg.get("single_file_timeout", 0) > 0:
+            cfg.SINGLE_FILE_TIMEOUT = _scan_cfg["single_file_timeout"]
+        if _scan_cfg.get("yara_enabled", True) is False:
+            cfg.YARA_ENABLED = False
+        if _scan_cfg.get("cloud_enabled", True) is False:
+            cfg.CLOUD_ENABLED = False
+
+        _net_cfg = _persistent_config.get("network", {})
+        if _net_cfg.get("monitor_interval", 0) > 0:
+            cfg.NETWORK_MONITOR_INTERVAL = _net_cfg["monitor_interval"]
+
+        _cloud_cfg = _persistent_config.get("cloud", {})
+        if _cloud_cfg.get("engine_order"):
+            cfg.CLOUD_ENGINE_ORDER = list(_cloud_cfg["engine_order"])
+        if _cloud_cfg.get("andun_url"):
+            cfg.ANDUN_BASE_URL = _cloud_cfg["andun_url"]
+        if _cloud_cfg.get("andun_api_key"):
+            cfg.ANDUN_API_KEY = _cloud_cfg["andun_api_key"]
+
+        _policy_cfg = _persistent_config.get("policy", {})
+        if _policy_cfg.get("log_retention_days", 0) > 0:
+            cfg.LOG_RETENTION_DAYS = _policy_cfg["log_retention_days"]
+
+        logging.getLogger("yutian").info("[配置热加载] 配置已刷新")
+        return {
+            "ok": True,
+            "reloaded": {
+                "max_workers": cfg.MAX_WORKERS,
+                "yara_enabled": getattr(cfg, "YARA_ENABLED", True),
+                "cloud_enabled": getattr(cfg, "CLOUD_ENABLED", True),
+                "cloud_engine_order": getattr(cfg, "CLOUD_ENGINE_ORDER", []),
+                "network_monitor_interval": getattr(cfg, "NETWORK_MONITOR_INTERVAL", 0),
+                "log_retention_days": getattr(cfg, "LOG_RETENTION_DAYS", 0),
+            },
+        }
+    except Exception as e:
+        logging.getLogger("yutian").error(f"[配置热加载] 失败: {e}")
+        return {"ok": False, "error": str(e)}
+
+# ==================== 反 Rootkit 引擎 ====================
+
+@app.post('/api/v1/rootkit/scan')
+async def rootkit_scan():
+    result = anti_rootkit.scan()
+    return result
+
+@app.get('/api/v1/rootkit/status')
+async def rootkit_status():
+    return anti_rootkit.get_status()
+
+# ==================== 安全产品自保护 ====================
+
+@app.get('/api/v1/self-protect/status')
+async def self_protect_status():
+    sp = self_protect._get_real()
+    return {
+        "configured": sp._configured if hasattr(sp, '_configured') else False,
+        "install_dir": sp._install_dir if hasattr(sp, '_install_dir') else "",
+        "agent_pid": sp._agent_pid if hasattr(sp, '_agent_pid') else 0,
+    }
+
+@app.post('/api/v1/self-protect/configure')
+async def self_protect_configure(data: dict = Body(...)):
+    sp = self_protect._get_real()
+    result = sp.configure(
+        install_dir=data.get("install_dir", ""),
+        agent_pid=data.get("agent_pid", 0),
+    )
+    return result
+
+@app.get('/api/v1/self-protect/protection-status')
+async def self_protect_protection_status():
+    sp = self_protect._get_real()
+    return {
+        "process": True if (hasattr(sp, '_configured') and sp._configured) else False,
+        "file": True if (hasattr(sp, '_configured') and sp._configured) else False,
+        "registry": True if (hasattr(sp, '_configured') and sp._configured) else False,
+        "service": True if (hasattr(sp, '_configured') and sp._configured) else False,
+    }
+
+# ==================== 检测→响应闭环（处置中心） ====================
+
+@app.get('/api/v1/response/status')
+async def response_status():
+    rc = response_center._get_real()
+    return {
+        "auto_response_enabled": rc._auto_response_enabled if hasattr(rc, '_auto_response_enabled') else False,
+        "history_count": len(rc._history) if hasattr(rc, '_history') else 0,
+        "temp_rules_count": len(rc._temp_rules) if hasattr(rc, '_temp_rules') else 0,
+    }
+
+@app.post('/api/v1/response/auto-response-toggle')
+async def response_auto_toggle(data: dict = Body(...)):
+    rc = response_center._get_real()
+    enabled = data.get("enabled", False)
+    rc._auto_response_enabled = enabled
+    return {"ok": True, "auto_response_enabled": enabled}
+
+@app.post('/api/v1/response/kill-process')
+async def response_kill_process(data: dict = Body(...)):
+    rc = response_center._get_real()
+    result = rc.kill_process(
+        target_pid=data.get("pid", 0),
+        force=data.get("force", False),
+        source=data.get("source", "api_manual"),
+    )
+    return result
+
+@app.post('/api/v1/response/quarantine-file')
+async def response_quarantine_file(data: dict = Body(...)):
+    rc = response_center._get_real()
+    result = rc.quarantine_file(
+        file_path=data.get("file_path", ""),
+        source=data.get("source", "api_manual"),
+    )
+    return result
+
+@app.post('/api/v1/response/block-rule')
+async def response_block_rule(data: dict = Body(...)):
+    rc = response_center._get_real()
+    rule = {
+        "ruleId": data.get("rule_id", 0),
+        "ruleType": data.get("rule_type", 1),
+        "action": data.get("action", 1),
+        "pattern": data.get("pattern", ""),
+        "enabled": 1,
+    }
+    result = rc.block_rule(
+        rule=rule,
+        auto_remove_sec=data.get("auto_remove_sec", 300),
+    )
+    return result
+
+@app.get('/api/v1/response/history')
+async def response_history(limit: int = 50):
+    rc = response_center._get_real()
+    return {"history": rc._history[-limit:] if hasattr(rc, '_history') else []}
+
+@app.post('/api/v1/response/rollback')
+async def response_rollback(data: dict = Body(...)):
+    rc = response_center._get_real()
+    count = rc.rollback_expired_rules()
+    return {"ok": True, "rolled_back": count}
+
+@app.post('/api/v1/response/handle-correlations')
+async def response_handle_correlations(data: dict = Body(...)):
+    """处理 ETW 攻击链事件，自动触发处置"""
+    rc = response_center._get_real()
+    correlations = data.get("correlations", [])
+    results = rc.handle_correlations(correlations)
+    return {"ok": True, "results": results}
+
+# ==================== 签名库增量更新 ====================
+
+@app.get('/api/v1/signatures/version-check')
+async def signatures_version_check():
+    """检查病毒库版本，支持增量更新判断"""
+    current = sig_mgr.get_bingduku_version()
+    return {
+        "current_version": current,
+        "has_version": current is not None,
+    }
+
+@app.post('/api/v1/signatures/import-incremental')
+async def signatures_import_incremental(data: dict = Body(...)):
+    """
+    增量导入病毒库（版本号对比 + 仅导入新签名）。
+    :param file_path: 本地病毒库文件路径
+    :param version: 病毒库版本号（如 bingduku_20260419）
+    """
+    file_path = data.get("file_path", "")
+    version = data.get("version", "")
+    if not file_path or not version:
+        return {"error": "file_path and version are required"}
+    result = sig_mgr.import_md5_incremental(file_path, version)
+    return result
+
+@app.get('/api/v1/signatures/download/check')
+async def signatures_download_check(url: str = ""):
+    """检查远程病毒库是否有更新"""
+    if not url:
+        url = "http://shadu.zh.kg/downloads/bingduku_version.json"
+    result = sig_downloader.check_bingduku_update(url)
+    return result
+
+# ==================== 自定义规则 ====================
+
+@app.get('/api/v1/rules/list')
+async def rules_list(rule_type: str = None):
+    return {'rules': custom_rules.get_rules(rule_type)}
+
+@app.post('/api/v1/rules/add')
+async def rules_add(data: dict = Body(...)):
+    rule = custom_rules.add_rule(data.get('rule_type', 'file'), data.get('action', 'block'), data.get('pattern', ''), data.get('description', ''))
+    return {'ok': True, 'rule': rule}
+
+@app.post('/api/v1/rules/remove')
+async def rules_remove(data: dict = Body(...)):
+    ok = custom_rules.remove_rule(data.get('rule_id', 0))
+    return {'ok': ok}
+
+@app.post('/api/v1/rules/toggle')
+async def rules_toggle(data: dict = Body(...)):
+    custom_rules.toggle_rule(data.get('rule_id', 0), data.get('enabled', True))
+    return {'ok': True}
+
+@app.get('/api/v1/rules/templates')
+async def rules_templates():
+    return {'templates': custom_rules.get_templates()}
+
+@app.post('/api/v1/rules/import')
+async def rules_import(data: dict = Body(...)):
+    custom_rules.import_rules(data.get('rules', []))
+    return {'ok': True}
+
+@app.get('/api/v1/rules/export')
+async def rules_export():
+    return {'rules': custom_rules.export_rules()}
+
+@app.get('/api/v1/rules/stats')
+async def rules_stats():
+    try:
+        rules = custom_rules.get_rules()
+        return {'total_rules': len(rules), 'rules': rules}
+    except Exception:
+        return {'total_rules': 0, 'rules': []}
+
+# ==================== 勒索诱捕 ====================
+
+@app.get('/api/v1/honeypot/status')
+async def honeypot_status():
+    return honeypot_manager.get_status()
+
+@app.post('/api/v1/honeypot/deploy')
+async def honeypot_deploy(data: dict = Body(...)):
+    result = honeypot_manager.deploy(data.get('directories', []))
+    return result
+
+@app.post('/api/v1/honeypot/recall')
+async def honeypot_recall():
+    result = honeypot_manager.recall()
+    return result
+
+@app.get('/api/v1/honeypot/list')
+async def honeypot_list():
+    return {'decoys': honeypot_manager.get_decoys()}
+
+@app.get('/api/v1/honeypot/stats')
+async def honeypot_stats():
+    try:
+        st = honeypot_manager.get_status()
+        decoys = honeypot_manager.get_decoys()
+        return {
+            'enabled': bool(st.get('monitoring', st.get('active', False))),
+            'catch_count': len(decoys),
+            'decoy_files': [d.get('path') if isinstance(d, dict) else d for d in decoys],
+            'recent_catches': [],
+        }
+    except Exception:
+        return {'enabled': False, 'catch_count': 0, 'decoy_files': [], 'recent_catches': []}
+
+@app.post('/api/v1/honeypot/toggle')
+async def honeypot_toggle(data: dict = Body(...)):
+    try:
+        if data.get('enabled'):
+            honeypot_manager.deploy([])
+        else:
+            honeypot_manager.recall()
+    except Exception:
+        pass
+    st = honeypot_manager.get_status()
+    return {'ok': True, 'enabled': bool(st.get('monitoring', st.get('active', False)))}
+
+# ==================== 浏览器保护 ====================
+
+@app.get('/api/v1/browser-guard/status')
+async def browser_guard_status():
+    return browser_guard.get_status()
+
+@app.post('/api/v1/browser-guard/toggle')
+async def browser_guard_toggle(data: dict = Body(...)):
+    if data.get('enabled'):
+        browser_guard.enable()
+    else:
+        browser_guard.disable()
+    return {'ok': True}
+
+@app.get('/api/v1/browser-guard/check')
+async def browser_guard_check():
+    return {'issues': browser_guard.check_browser_integrity()}
+
+@app.get('/api/v1/browser-guard/stats')
+async def browser_guard_stats():
+    try:
+        st = browser_guard.get_status()
+        issues = browser_guard.check_browser_integrity()
+        return {
+            'enabled': bool(st.get('enabled', st.get('active', False))),
+            'blocked_count': len(issues),
+            'recent_blocks': issues,
+        }
+    except Exception:
+        return {'enabled': False, 'blocked_count': 0, 'recent_blocks': []}
+
+# ==================== 摄像头保护 ====================
+
+@app.get('/api/v1/camera/status')
+async def camera_status():
+    return camera_guard.get_camera_status()
+
+@app.post('/api/v1/camera/toggle')
+async def camera_toggle(data: dict = Body(...)):
+    if data.get('enabled'):
+        camera_guard.enable()
+    else:
+        camera_guard.disable()
+    return {'ok': True}
+
+@app.get('/api/v1/camera/list')
+async def camera_list():
+    return {'cameras': camera_guard.get_camera_status()}
+
+@app.get('/api/v1/camera/history')
+async def camera_history():
+    return {'history': camera_guard.get_access_history()}
+
+@app.post('/api/v1/camera/whitelist/add')
+async def camera_whitelist_add(data: dict = Body(...)):
+    camera_guard.add_to_whitelist(data.get('process_name', ''))
+    return {'ok': True}
+
+@app.post('/api/v1/camera/whitelist/remove')
+async def camera_whitelist_remove(data: dict = Body(...)):
+    camera_guard.remove_from_whitelist(data.get('process_name', ''))
+    return {'ok': True}
+
+@app.get('/api/v1/camera/stats')
+async def camera_stats():
+    try:
+        whitelist = camera_guard.get_whitelist()
+        history = camera_guard.get_access_history(100)
+        st = camera_guard.get_camera_status()
+        return {
+            'enabled': bool(st.get('enabled', st.get('active', False))),
+            'blocked_count': len(history),
+            'whitelist': whitelist,
+            'recent_blocks': history,
+        }
+    except Exception:
+        return {'enabled': False, 'blocked_count': 0, 'whitelist': [], 'recent_blocks': []}
+
+# ==================== 隐私保护 ====================
+
+@app.get('/api/v1/privacy/status')
+async def privacy_status():
+    return privacy_shield.get_status()
+
+@app.post('/api/v1/privacy/toggle')
+async def privacy_toggle(data: dict = Body(...)):
+    if data.get('enabled'):
+        privacy_shield.enable()
+    else:
+        privacy_shield.disable()
+    return {'ok': True}
+
+@app.get('/api/v1/privacy/scan')
+async def privacy_scan():
+    return privacy_shield.scan_privacy_traces()
+
+@app.post('/api/v1/privacy/clean')
+async def privacy_clean(data: dict = Body(...)):
+    result = privacy_shield.clean_traces(data.get('categories', []))
+    return result
+
+@app.post('/api/v1/privacy/protect-files')
+async def privacy_protect_files(data: dict = Body(...)):
+    privacy_shield.protect_sensitive_files(data.get('paths', []))
+    return {'ok': True}
+
+@app.get('/api/v1/privacy/access-log')
+async def privacy_access_log():
+    return {'logs': privacy_shield.get_sensitive_file_access_log()}
+
+@app.get('/api/v1/privacy/sensitive-files')
+async def privacy_sensitive_files():
+    try:
+        files = privacy_shield.get_sensitive_files()
+        return {'files': [{'path': p} for p in files]}
+    except Exception:
+        return {'files': []}
+
+@app.post('/api/v1/privacy/sensitive-files')
+async def privacy_sensitive_files_add(data: dict = Body(...)):
+    try:
+        path = data.get('path', '')
+        if path:
+            privacy_shield.protect_sensitive_files([path])
+    except Exception:
+        pass
+    return {'ok': True}
+
+@app.post('/api/v1/privacy/sensitive-files/delete')
+async def privacy_sensitive_files_remove(data: dict = Body(...)):
+    try:
+        ok = privacy_shield.unprotect_sensitive_file(data.get('id', data.get('path', '')))
+    except Exception:
+        ok = False
+    return {'ok': bool(ok)}
+
+@app.get('/api/v1/privacy/stats')
+async def privacy_stats():
+    try:
+        st = privacy_shield.get_status()
+        return {'enabled': bool(st.get('enabled', st.get('active', False))), 'trace_count': 0, 'trace_types': []}
+    except Exception:
+        return {'enabled': False, 'trace_count': 0, 'trace_types': []}
+
+# ==================== 数据恢复 ====================
+
+@app.get('/api/v1/recovery/status')
+async def recovery_status():
+    return data_recovery.get_status()
+
+@app.post('/api/v1/recovery/start')
+async def recovery_start(data: dict = Body(...)):
+    data_recovery.start(data.get('directories', []))
+    return {'ok': True}
+
+@app.post('/api/v1/recovery/stop')
+async def recovery_stop():
+    data_recovery.stop()
+    return {'ok': True}
+
+@app.get('/api/v1/recovery/versions')
+async def recovery_versions(file_path: str = ''):
+    return {'versions': data_recovery.get_versions(file_path)}
+
+@app.post('/api/v1/recovery/restore')
+async def recovery_restore(data: dict = Body(...)):
+    ok = data_recovery.restore_version(data.get('file_path', ''), data.get('version_id', ''))
+    return {'ok': ok}
+
+@app.post('/api/v1/recovery/delete-version')
+async def recovery_delete_version(data: dict = Body(...)):
+    ok = data_recovery.delete_version(data.get('file_path', ''), data.get('version_id', ''))
+    return {'ok': ok}
+
+@app.get('/api/v1/recovery/stats')
+async def recovery_stats():
+    return data_recovery.get_recovery_stats()
+
+@app.get('/api/v1/recovery/files')
+async def recovery_files():
+    try:
+        return {'files': data_recovery.get_files()}
+    except Exception:
+        return {'files': []}
+
+@app.get('/api/v1/recovery/settings')
+async def recovery_settings_get():
+    try:
+        return data_recovery.get_settings()
+    except Exception:
+        return {}
+
+@app.post('/api/v1/recovery/settings')
+async def recovery_settings_save(data: dict = Body(...)):
+    try:
+        retain = int(data.get('retain_days') or 0)
+        limit = int(data.get('storage_limit') or 0)
+        return data_recovery.save_settings(retain, limit)
+    except Exception:
+        return {'ok': False}
+
+@app.post('/api/v1/recovery/watch-dirs')
+async def recovery_watch_dirs_add(data: dict = Body(...)):
+    try:
+        ok = data_recovery.add_watch_dir(data.get('dir', ''))
+    except Exception:
+        ok = False
+    return {'ok': bool(ok), 'watch_dirs': data_recovery.get_settings().get('watch_dirs', [])}
+
+@app.post('/api/v1/recovery/watch-dirs/delete')
+async def recovery_watch_dirs_remove(data: dict = Body(...)):
+    dirs = data_recovery.get_settings().get('watch_dirs', [])
+    target = data.get('dir', '')
+    if not target:
+        idx = data.get('index')
+        if isinstance(idx, int) and 0 <= idx < len(dirs):
+            target = dirs[idx]
+    try:
+        ok = data_recovery.remove_watch_dir(target) if target else False
+    except Exception:
+        ok = False
+    return {'ok': bool(ok)}
+
+# ==================== 沙箱分析 ====================
+
+@app.post('/api/v1/sandbox/analyze')
+async def sandbox_analyze(data: dict = Body(...)):
+    result = sandbox.analyze_file(data.get('file_path', ''), data.get('timeout', 30))
+    return result
+
+@app.get('/api/v1/sandbox/status')
+async def sandbox_status():
+    return sandbox.get_status()
+
+@app.get('/api/v1/sandbox/history')
+async def sandbox_history():
+    return {'history': sandbox.get_history()}
+
+@app.get('/api/v1/sandbox/stats')
+async def sandbox_stats():
+    try:
+        history = sandbox.get_history(50)
+        st = sandbox.get_status()
+        return {'enabled': bool(st.get('enabled', st.get('active', False))), 'analysis_count': len(history), 'recent_reports': history}
+    except Exception:
+        return {'enabled': False, 'analysis_count': 0, 'recent_reports': []}
+
+
 if __name__ == "__main__":
     import sys
+    # 冻结窗口程序下 stdout/stderr 为 None, uvicorn 日志访问 .isatty() 会崩溃
+    if sys.stdout is None:
+        import os, io as _io
+        sys.stdout = _io.open(os.devnull, "w")
+    if sys.stderr is None:
+        import os, io as _io
+        sys.stderr = _io.open(os.devnull, "w")
+    _mark("__main__ 入口")
     # --watchdog 模式：极简启动，不走任何重型导入
     if '--watchdog' in sys.argv:
+        _mark("进入 watchdog 模式")
         ret = _run_watchdog_mode()
         sys.exit(ret if ret else 0)
 
+    import atexit
     import os
     import threading
+    import time
+
+    # ── Logo 启动画面 + 引擎后台并行加载 ──
+    _mark("导入 logo_splash / engine_loader / webview")
+    from logo_splash import LogoSplash, get_splash_html, FADE_OUT_MS
+    from engine_loader import load_engine_resources
+    import webview as _wv
+
+    splash = LogoSplash()
+
+    # 后台线程加载引擎资源（与 Logo 动画并行）
+    _engine_thread = threading.Thread(
+        target=load_engine_resources,
+        args=(splash.set_status, splash.mark_engine_loaded),
+        daemon=True
+    )
+    _engine_thread.start()
+
+    # 创建 splash 窗口（在 webview.start 前创建，start 后自动显示）
+    splash_window = _wv.create_window(
+        title="御天",
+        html=get_splash_html(),
+        width=340,
+        height=380,
+        resizable=False,
+        frameless=True,
+        easy_drag=False,
+        on_top=True,
+    )
+
+    def _on_splash_loaded():
+        """splash 页面加载完成后标记淡入完成"""
+        threading.Timer(0.6, splash._fade_in_done.set).start()
+    splash_window.events.loaded += _on_splash_loaded
+
+    # 让 splash 对象引用窗口（用于 set_status 更新状态文字）
+    splash.set_window(splash_window)
+
+    # ── 注册退出钩子：程序退出时保存所有状态 ──
+    @atexit.register
+    def _on_exit_save_all():
+        """程序退出时自动保存配置、守护天数、清理缓存"""
+        try:
+            # 保存防护模块状态
+            save_config_save({
+                "protection": _protection_modules,
+                "features": _feature_toggles,
+            })
+        except Exception:
+            pass
+        try:
+            # 保存当前守护天数
+            save_guard_days(load_guard_days() if 'load_guard_days' in dir() else _guard_data)
+        except Exception:
+            pass
+        try:
+            # 清理过期缓存
+            cache_cleanup()
+        except Exception:
+            pass
+        print("[御天] 状态已保存")
 
     # 开发模式：添加 libs 目录到搜索路径
     if not getattr(sys, 'frozen', False):
@@ -2064,7 +4586,7 @@ if __name__ == "__main__":
     server_thread = threading.Thread(target=run_server, daemon=True)
     server_thread.start()
 
-    # Vigil 强力模式默认不启动，用户可在设置页手动启用（/api/v1/vigil/start）
+    # 洞渊引擎 (Vigil) 强力模式默认不启动，用户可在设置页手动启用
 
     # 后台启动网络监控
     try:
@@ -2082,37 +4604,75 @@ if __name__ == "__main__":
     except Exception:
         pass
 
-    # 初始化原生引擎状态
+    # 初始化破军引擎状态
     try:
         from engine.native_bridge import get_native_engine
         native_eng = get_native_engine()
         if native_eng.available():
             ver = native_eng.version()
-            print(f"[NativeEngine] 原生引擎已加载: {ver.get('version', 'unknown')}")
+            print(f"[破军引擎] 破军引擎已加载: {ver.get('version', 'unknown')}")
         else:
-            print("[NativeEngine] 原生引擎DLL未找到，使用Python回退方案")
+            print("[破军引擎] 破军引擎DLL未找到，使用Python回退方案")
     except Exception as e:
-        print(f"[NativeEngine] 初始化失败: {e}")
+        print(f"[破军引擎] 初始化失败: {e}")
 
     # 启动双进程互保（自保护）
+    _mark("启动自保护 watchdog")
     _start_self_protection()
+    _mark("自保护已启动")
 
-    # 内置浏览器窗口
-    window = webview.create_window(
-        title="安盾 安全中心",
-        url="http://127.0.0.1:8899",
-        width=1100,
-        height=700,
-        min_size=(900, 600),
-        resizable=True,
-    )
+    # ── 启动流程：webview.start 后在 func 线程中完成 splash → 主窗口切换 ──
 
-    # 拦截窗口关闭 → 最小化到托盘（托盘图标由 _init_tray_icon 启动）
-    def _on_closing():
-        window.hide()
-        return False  # 返回 False 取消实际关闭
+    def _startup_func():
+        """webview.start 后在后台线程执行：等引擎加载 → 创建主窗口 → 淡出 splash"""
+        # 等待引擎加载完成
+        splash.wait_until_ready()
 
-    window.events.closing += _on_closing
+        # 等待 FastAPI 服务器就绪
+        import urllib.request
+        for _ in range(30):
+            try:
+                urllib.request.urlopen("http://127.0.0.1:8899", timeout=1)
+                break
+            except Exception:
+                time.sleep(0.3)
+
+        # 先创建主窗口（确保 splash 销毁时仍有窗口存在，防止 webview 退出）
+        main_window = _wv.create_window(
+            title="御天 安全中心",
+            url="http://127.0.0.1:8899",
+            width=1100,
+            height=700,
+            min_size=(900, 600),
+            resizable=True,
+        )
+
+        # 拦截窗口关闭 → 退出流程
+        def _on_closing():
+            threading.Thread(target=_do_exit_with_fadeout, daemon=True).start()
+            return False
+        main_window.events.closing += _on_closing
+
+        # 等主窗口加载完成后再淡出并销毁 splash
+        time.sleep(1.0)
+        try:
+            splash_window.evaluate_js('fadeOut()')
+        except Exception:
+            pass
+        time.sleep(FADE_OUT_MS / 1000.0 + 0.2)
+
+        # 销毁 splash 窗口（此时主窗口已存在，不会触发退出）
+        try:
+            splash_window.destroy()
+        except Exception:
+            pass
 
     # 主线程：webview 消息循环（pywebview 要求必须在主线程）
-    webview.start()
+    # 强制使用 EdgeChromium 后端, 跳过 WinForms/pythonnet/.NET 依赖
+    _mark("调用 webview.start")
+    try:
+        webview.start(gui='edgechromium', func=_startup_func)
+        _mark("webview.start 正常返回")
+    except Exception:
+        _log_startup("webview.start 异常:\n" + traceback.format_exc())
+        raise

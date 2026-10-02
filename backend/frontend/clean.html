@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>垃圾清理 - 御天</title><script>(function(){try{var s=JSON.parse(localStorage.getItem('安盾_settings')||'{}');if(s.theme==='light')document.documentElement.classList.add('light');}catch(e){}}())</script>
+    <style>
+        :root {
+            --bg-primary: #0a1f2e;
+            --bg-secondary: #0e0e14;
+            --bg-card: #13131c;
+            --bg-hover: #1a1a26;
+            --border: #252536;
+            --border-light: #2f2f44;
+            --text-primary: #f4f4f9;
+            --text-secondary: #8f8fab;
+            --text-muted: #5c5c75;
+            --accent: #00bcd4;
+            --accent-dim: rgba(0, 188, 212, 0.12);
+            --accent-glow: rgba(0, 188, 212, 0.35);
+            --danger: #ff4d6d;
+            --danger-dim: rgba(255, 77, 109, 0.12);
+            --warning: #ffcc00;
+            --radius-sm: 10px;
+            --radius-md: 16px;
+            --radius-lg: 24px;
+            --transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'DM Sans', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+        body::before {
+            content: '';
+            position: fixed; inset: 0;
+            background:
+                radial-gradient(circle at 20% 30%, rgba(0, 188, 212, 0.06) 0%, transparent 40%),
+                radial-gradient(circle at 80% 70%, rgba(0, 110, 255, 0.05) 0%, transparent 40%),
+                linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
+            background-size: 100% 100%, 100% 100%, 40px 40px, 40px 40px;
+            pointer-events: none; z-index: 0;
+        }
+        .app { display: flex; min-height: 100vh; position: relative; z-index: 1; }
+        .sidebar {
+            width: 72px; background: rgba(14, 14, 20, 0.85);
+            backdrop-filter: blur(20px); border-right: 1px solid var(--border);
+            display: flex; flex-direction: column; align-items: center;
+            padding: 20px 8px; position: fixed; height: 100vh; z-index: 100;
+        }
+        .logo { display: flex; flex-direction: column; align-items: center; gap: 0; padding: 0; margin-bottom: 24px; }
+        .logo-icon {
+            width: 40px; height: 40px; border-radius: 12px; overflow: hidden;
+            display: grid; place-items: center;
+            box-shadow: 0 8px 24px rgba(0, 188, 212, 0.25);
+        }
+        .logo-icon svg { width: 100%; height: 100%; fill: var(--accent); }
+        .nav { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 1; width: 100%; }
+        .nav-item {
+            display: flex; align-items: center; justify-content: center;
+            width: 44px; height: 44px; border-radius: 12px;
+            color: var(--text-muted); text-decoration: none;
+            position: relative; transition: var(--transition);
+        }
+        .nav-item svg { width: 22px; height: 22px; }
+        .nav-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+        .nav-item.active { background: var(--accent-dim); color: var(--accent); }
+        .nav-item:hover::after {
+            content: attr(data-title);
+            position: absolute; left: 100%; margin-left: 14px;
+            background: var(--bg-card); border: 1px solid var(--border);
+            padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 500;
+            color: var(--text-primary); white-space: nowrap; z-index: 300;
+            pointer-events: none; box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+        }
+        .nav-item.active:hover::after { border-color: rgba(0, 188, 212, 0.3); color: var(--accent); }
+        .nav-group { width: 100%; text-align: center; padding: 14px 0 6px; font-size: 0; user-select: none; }
+        .nav-group::before {
+            content: ''; display: block; width: 20px; height: 1px;
+            background: var(--border); margin: 0 auto;
+        }
+        .nav-item[href="settings.html"] { margin-top: auto; }
+        .main { flex: 1; margin-left: 72px; padding: 32px 40px; max-width: calc(100% - 72px); }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 36px; }
+        .header-title { font-family: 'Syne', sans-serif; font-size: 28px; font-weight: 700; }
+        .status-pill {
+            display: flex; align-items: center; gap: 8px; padding: 8px 16px;
+            background: var(--accent-dim); border: 1px solid rgba(0, 188, 212, 0.2);
+            border-radius: 30px; font-size: 13px; font-weight: 600; color: var(--accent);
+        }
+        .pulse { width: 8px; height: 8px; background: var(--accent); border-radius: 50%; box-shadow: 0 0 0 0 rgba(0, 188, 212, 0.7); animation: pulse 2s infinite; }
+        @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(0, 188, 212, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(0, 188, 212, 0); } 100% { box-shadow: 0 0 0 0 rgba(0, 188, 212, 0); } }
+        .card {
+            background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: var(--radius-lg); padding: 28px; transition: var(--transition);
+        }
+        .card:hover { border-color: var(--border-light); transform: translateY(-2px); }
+        .card-title {
+            font-family: 'Syne', sans-serif; font-size: 15px; font-weight: 600;
+            color: var(--text-secondary); text-transform: uppercase;
+            letter-spacing: 0.5px; margin-bottom: 24px;
+        }
+        .btn {
+            display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+            padding: 12px 24px; border: none; border-radius: var(--radius-sm);
+            font-size: 14px; font-weight: 600; cursor: pointer; transition: var(--transition);
+        }
+        .btn-primary { background: linear-gradient(135deg, var(--accent), #00b4a6); color: #000; }
+        .btn-primary:hover { box-shadow: 0 6px 20px var(--accent-glow); transform: translateY(-1px); }
+        .btn-outline { background: transparent; border: 1px solid var(--border-light); color: var(--text-primary); }
+        .btn-outline:hover { border-color: var(--accent); color: var(--accent); }
+        .btn-danger { background: var(--danger); color: #fff; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none !important; }
+
+        /* ── 扫描控制条 ── */
+        .scan-bar { display: flex; align-items: center; gap: 20px; margin-bottom: 24px; }
+        .progress-wrap { flex: 1; }
+        .progress-track { height: 8px; background: var(--bg-hover); border-radius: 6px; overflow: hidden; }
+        .progress-fill {
+            height: 100%; width: 0;
+            background: linear-gradient(90deg, var(--accent), #00b4a6);
+            border-radius: 6px; transition: width 0.3s ease;
+        }
+        .progress-meta { display: flex; justify-content: space-between; margin-top: 8px; font-size: 12px; color: var(--text-secondary); }
+
+        /* ── 分类列表 ── */
+        .category-list { display: flex; flex-direction: column; gap: 12px; margin-bottom: 24px; }
+        .category-item {
+            display: flex; align-items: center; gap: 16px;
+            background: var(--bg-secondary); border: 1px solid var(--border);
+            border-radius: var(--radius-md); padding: 16px 18px;
+        }
+        .category-item.disabled { opacity: 0.45; }
+        .category-check { accent-color: var(--accent); width: 17px; height: 17px; cursor: pointer; flex-shrink: 0; }
+        .category-icon {
+            width: 38px; height: 38px; border-radius: 10px; flex-shrink: 0;
+            background: var(--accent-dim); color: var(--accent);
+            display: grid; place-items: center;
+        }
+        .category-icon svg { width: 19px; height: 19px; }
+        .category-body { flex: 1; min-width: 0; }
+        .category-name { font-size: 14px; font-weight: 600; margin-bottom: 3px; }
+        .category-desc { font-size: 12px; color: var(--text-secondary); }
+        .category-stat { text-align: right; flex-shrink: 0; }
+        .category-size { font-family: 'Syne', sans-serif; font-size: 16px; font-weight: 700; color: var(--accent); }
+        .category-count { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+        .category-toggle { font-size: 12px; color: var(--text-muted); cursor: pointer; margin-top: 4px; text-decoration: none; }
+        .category-toggle:hover { color: var(--accent); }
+        .category-detail {
+            grid-column: 1 / -1; margin-top: -6px;
+            background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: var(--radius-sm); padding: 12px 14px;
+            max-height: 200px; overflow-y: auto; font-size: 12px;
+            color: var(--text-secondary); line-height: 1.9;
+            display: none;
+        }
+        .category-detail.open { display: block; }
+
+        /* ── 结果汇总 ── */
+        .result-banner {
+            display: flex; align-items: center; gap: 24px;
+            background: linear-gradient(145deg, var(--bg-card), rgba(14, 14, 20, 0.6));
+            border: 1px solid var(--border-light); border-radius: var(--radius-lg);
+            padding: 28px 32px; margin-bottom: 24px;
+        }
+        .result-icon { width: 52px; height: 52px; border-radius: 14px; background: var(--accent-dim); color: var(--accent); display: grid; place-items: center; flex-shrink: 0; }
+        .result-icon svg { width: 26px; height: 26px; }
+        .result-info { flex: 1; }
+        .result-title { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+        .result-sub { font-size: 13px; color: var(--text-secondary); }
+        .result-stat { text-align: right; flex-shrink: 0; }
+        .result-num { font-family: 'Syne', sans-serif; font-size: 24px; font-weight: 700; color: var(--accent); }
+        .result-label { font-size: 12px; color: var(--text-muted); }
+
+        .history-list { display: flex; flex-direction: column; gap: 10px; }
+        .history-item {
+            display: flex; align-items: center; gap: 14px;
+            background: var(--bg-secondary); border: 1px solid var(--border);
+            border-radius: var(--radius-sm); padding: 14px 16px; font-size: 13px;
+        }
+        .history-time { color: var(--text-muted); font-family: 'Syne', sans-serif; width: 150px; flex-shrink: 0; }
+        .history-cats { flex: 1; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .history-freed { color: var(--accent); font-weight: 700; flex-shrink: 0; }
+        .empty { color: var(--text-muted); text-align: center; padding: 30px 0; font-size: 13px; }
+        .spinner {
+            width: 18px; height: 18px; border: 2px solid rgba(0, 188, 212, 0.25);
+            border-top-color: var(--accent); border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .toast {
+            position: fixed; top: 24px; right: 24px; z-index: 999;
+            background: var(--bg-card); border: 1px solid var(--border-light);
+            border-left: 3px solid var(--accent); border-radius: var(--radius-sm);
+            padding: 14px 20px; font-size: 13px; box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+            transform: translateX(120%); transition: transform 0.3s ease; max-width: 360px;
+        }
+        .toast.show { transform: translateX(0); }
+    </style>
+</head>
+<body>
+<div class="app">
+    <aside class="sidebar">
+        <div class="logo" title="御天卫士">
+            <div class="logo-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/><path d="M9 12l2 2 4-4"/></svg>
+            </div>
+        </div>
+        <nav class="nav">
+            <div class="nav-group"></div>
+            <a class="nav-item" href="index.html" data-title="概览">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+            </a>
+            <a class="nav-item" href="scan.html" data-title="病毒扫描">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="m14.31 8 5.74 9.94M9.69 8h11.48M7.38 12l5.74-9.94M9.69 16 3.95 6.06M14.31 16H2.83M16.62 12l-5.74 9.94"/></svg>
+            </a>
+            <a class="nav-item" href="guard.html" data-title="卫士体检">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+            </a>
+            <a class="nav-item active" href="clean.html" data-title="垃圾清理">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            </a>
+            <a class="nav-item" href="optimize.html" data-title="电脑优化">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+            </a>
+            <div class="nav-group"></div>
+            <a class="nav-item" href="history.html" data-title="病毒记忆">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="10"/><path d="M3.05 11a9 9 0 1 1 .5 4"/></svg>
+            </a>
+            <a class="nav-item" href="quarantine.html" data-title="隔离区">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="9" x2="15" y2="15"/><line x1="15" y1="9" x2="9" y2="15"/></svg>
+            </a>
+            <a class="nav-item" href="logs.html" data-title="日志报告">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+            </a>
+            <a class="nav-item" href="tools.html" data-title="安全工具">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+            </a>
+            <a class="nav-item" href="engine.html" data-title="引擎启动">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/><path d="M9 12l2 2 4-4"/></svg>
+            </a>
+            <div class="nav-group"></div>
+            <a class="nav-item" href="settings.html" data-title="设置">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            </a>
+        </nav>
+    </aside>
+
+    <main class="main">
+        <header class="header">
+            <h1 class="header-title">垃圾清理</h1>
+            <div class="status-pill"><span class="pulse"></span>清理引擎就绪</div>
+        </header>
+
+        <!-- 扫描控制 -->
+        <div class="card" style="margin-bottom:24px">
+            <div class="scan-bar">
+                <button class="btn btn-primary" id="btnScan" onclick="startScan()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                    开始扫描
+                </button>
+                <div class="progress-wrap">
+                    <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+                    <div class="progress-meta">
+                        <span id="progressText">点击「开始扫描」查找系统中的垃圾文件</span>
+                        <span id="progressPct">0%</span>
+                    </div>
+                </div>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
+                <span style="font-size:12px;color:var(--text-muted)">仅扫描明确安全的垃圾目录，占用中的文件将自动跳过</span>
+                <span>
+                    <button class="btn btn-outline" style="padding:8px 16px;font-size:12px" onclick="selectAll(true)">全选</button>
+                    <button class="btn btn-outline" style="padding:8px 16px;font-size:12px" onclick="selectAll(false)">清空</button>
+                </span>
+            </div>
+        </div>
+
+        <!-- 扫描结果 -->
+        <div class="card" id="resultCard" style="display:none;margin-bottom:24px">
+            <h3 class="card-title">扫描结果 <span id="resultSummary" style="text-transform:none;color:var(--text-secondary)"></span></h3>
+            <div class="category-list" id="categoryList"></div>
+            <div style="display:flex;justify-content:flex-end">
+                <button class="btn btn-danger" id="btnClean" onclick="executeClean()" disabled>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                    立即清理
+                </button>
+            </div>
+        </div>
+
+        <!-- 清理结果 -->
+        <div class="result-banner" id="resultBanner" style="display:none">
+            <div class="result-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></div>
+            <div class="result-info">
+                <div class="result-title" id="resultTitle">清理完成</div>
+                <div class="result-sub" id="resultSub"></div>
+            </div>
+            <div class="result-stat">
+                <div class="result-num" id="resultNum">0 B</div>
+                <div class="result-label">已释放空间</div>
+            </div>
+        </div>
+
+        <!-- 清理历史 -->
+        <div class="card">
+            <h3 class="card-title">清理历史</h3>
+            <div class="history-list" id="historyList">
+                <div class="empty">暂无清理记录</div>
+            </div>
+        </div>
+    </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API_BASE = '';
+let toastTimer = null;
+let currentTaskId = null;
+let pollTimer = null;
+let categories = [];
+let ws = null;
+
+function showToast(msg, isError) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.style.borderLeftColor = isError ? 'var(--danger)' : 'var(--accent)';
+    t.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.classList.remove('show'), 3500);
+}
+
+async function apiGet(path) {
+    try { const res = await fetch(`${API_BASE}${path}`); return await res.json(); }
+    catch (e) { console.warn('API 不可用:', e.message); return null; }
+}
+async function apiPost(path, body) {
+    try {
+        const res = await fetch(`${API_BASE}${path}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body || {})
+        });
+        return await res.json();
+    } catch (e) { console.warn('API 不可用:', e.message); return null; }
+}
+
+function connectWebSocket() {
+    if (ws && ws.readyState === WebSocket.OPEN) return;
+    try {
+        ws = new WebSocket(`ws://${window.location.host}/ws/progress`);
+        ws.onmessage = (ev) => {
+            try {
+                const msg = JSON.parse(ev.data);
+                if (currentTaskId && msg.task_id === currentTaskId) {
+                    updateProgress(msg.progress || 0, msg.current_file || '');
+                }
+            } catch (e) {}
+        };
+    } catch (e) {}
+}
+
+async function startScan() {
+    const btn = document.getElementById('btnScan');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> 扫描中…';
+    resetScanUI();
+    const data = await apiPost('/api/v1/clean/scan');
+    if (!data || !data.task_id) {
+        btn.disabled = false;
+        btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg> 开始扫描';
+        showToast('扫描任务启动失败', true);
+        return;
+    }
+    currentTaskId = data.task_id;
+    connectWebSocket();
+    pollTimer = setInterval(pollStatus, 800);
+}
+
+function resetScanUI() {
+    document.getElementById('resultCard').style.display = 'none';
+    document.getElementById('resultBanner').style.display = 'none';
+    document.getElementById('progressFill').style.width = '0%';
+    document.getElementById('progressPct').textContent = '0%';
+    categories = [];
+}
+
+function updateProgress(pct, item) {
+    document.getElementById('progressFill').style.width = pct + '%';
+    document.getElementById('progressPct').textContent = pct + '%';
+    document.getElementById('progressText').textContent = item ? `正在扫描：${item}` : '正在扫描…';
+}
+
+async function pollStatus() {
+    if (!currentTaskId) return;
+    const data = await apiGet(`/api/v1/clean/${currentTaskId}/status`);
+    if (!data) return;
+    if (data.status === 'running') {
+        updateProgress(data.progress || 0, data.current_item || '');
+    } else if (data.status === 'completed') {
+        clearInterval(pollTimer);
+        pollTimer = null;
+        renderResult(data.result);
+    } else if (data.status === 'failed') {
+        clearInterval(pollTimer);
+        pollTimer = null;
+        finishScanButton();
+        showToast('扫描失败：' + (data.error || '未知错误'), true);
+    }
+}
+
+function finishScanButton() {
+    const btn = document.getElementById('btnScan');
+    btn.disabled = false;
+    btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg> 重新扫描';
+}
+
+function renderResult(result) {
+    finishScanButton();
+    if (!result || !result.categories) return;
+    categories = result.categories;
+    document.getElementById('resultCard').style.display = 'block';
+    document.getElementById('resultSummary').textContent =
+        `共发现 ${result.total_files} 个文件，可释放 ${formatSize(result.total_bytes)}`;
+    document.getElementById('progressFill').style.width = '100%';
+    document.getElementById('progressPct').textContent = '100%';
+    document.getElementById('progressText').textContent = '扫描完成';
+
+    const list = document.getElementById('categoryList');
+    list.innerHTML = '';
+    categories.forEach((cat, i) => {
+        const hasItems = cat.file_count > 0 || cat.id === 'recycle_bin';
+        const item = document.createElement('div');
+        item.className = 'category-item' + (hasItems ? '' : ' disabled');
+        item.innerHTML = `
+            <input type="checkbox" class="category-check" id="ck_${i}" ${hasItems ? '' : 'disabled'} checked>
+            <div class="category-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${catIcon(cat.id)}</svg></div>
+            <div class="category-body">
+                <div class="category-name">${cat.name}</div>
+                <div class="category-desc">${cat.desc}</div>
+                ${cat.items && cat.items.length ? `<a class="category-toggle" onclick="toggleDetail(${i}, this)">查看明细 (${cat.items.length})</a>` : ''}
+            </div>
+            <div class="category-stat">
+                <div class="category-size">${cat.id === 'recycle_bin' ? '可清空' : cat.size_text || '0 B'}</div>
+                <div class="category-count">${cat.id === 'recycle_bin' ? '清空回收站' : cat.file_count + ' 个文件'}</div>
+            </div>
+            <div class="category-detail" id="detail_${i}"></div>`;
+        if (cat.items && cat.items.length) {
+            const detail = item.querySelector(`#detail_${i}`);
+            detail.innerHTML = cat.items.map(it =>
+                `<div style="display:flex;justify-content:space-between;gap:12px"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${it.path}</span><span style="flex-shrink:0;color:var(--text-muted)">${it.size_text}</span></div>`
+            ).join('');
+        }
+        item.querySelector('.category-check').addEventListener('change', updateCleanButton);
+        list.appendChild(item);
+    });
+    updateCleanButton();
+}
+
+function catIcon(id) {
+    const icons = {
+        temp_files: '<path d="M20 12v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8"/><path d="M2 7h20v5a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7z"/><polyline points="12 22 12 15 15 18 9 18 12 15"/>',
+        browser_cache: '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
+        thumbnail_cache: '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>',
+        recycle_bin: '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+        crash_dumps: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><polyline points="12 18 12 12"/><polyline points="9 15 12 18 15 15"/>',
+        update_cache: '<polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>'
+    };
+    return icons[id] || '<circle cx="12" cy="12" r="10"/>';
+}
+
+function formatSize(num) {
+    num = Number(num || 0);
+    if (num < 1024) return num + ' B';
+    const units = ['KB', 'MB', 'GB', 'TB'];
+    let i = -1;
+    do { num /= 1024; i++; } while (num >= 1024 && i < units.length - 1);
+    return num.toFixed(1) + ' ' + units[i];
+}
+
+function toggleDetail(idx, el) {
+    const d = document.getElementById('detail_' + idx);
+    d.classList.toggle('open');
+    el.textContent = d.classList.contains('open') ? '收起明细' : `查看明细 (${categories[idx].items.length})`;
+}
+
+function selectAll(checked) {
+    document.querySelectorAll('.category-check').forEach(cb => { cb.checked = checked; });
+    updateCleanButton();
+}
+
+function updateCleanButton() {
+    const checked = Array.from(document.querySelectorAll('.category-check:checked'));
+    const btn = document.getElementById('btnClean');
+    btn.disabled = checked.length === 0;
+    const selectedBytes = categories.reduce((sum, c, i) => {
+        const cb = document.getElementById('ck_' + i);
+        if (cb && cb.checked) return sum + (c.total_bytes || 0);
+        return sum;
+    }, 0);
+    btn.textContent = `立即清理 (${checked.length} 项，约 ${formatSize(selectedBytes)})`;
+}
+
+async function executeClean() {
+    const checked = Array.from(document.querySelectorAll('.category-check:checked'))
+        .map(cb => categories[parseInt(cb.id.replace('ck_', ''))].id);
+    if (!checked.length) return;
+    const btn = document.getElementById('btnClean');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> 清理中…';
+    const data = await apiPost('/api/v1/clean/execute', { category_ids: checked });
+    btn.disabled = false;
+    if (!data || !data.success) {
+        btn.textContent = '立即清理';
+        showToast((data && data.error) || '清理失败', true);
+        return;
+    }
+    // 展示结果
+    const banner = document.getElementById('resultBanner');
+    banner.style.display = 'flex';
+    document.getElementById('resultTitle').textContent = '清理完成';
+    document.getElementById('resultNum').textContent = data.freed_text;
+    const failInfo = data.failed_count ? `（${data.failed_count} 项占用中已跳过）` : '';
+    document.getElementById('resultSub').textContent =
+        `共清理 ${data.cleaned_files} 个文件${failInfo}，已写入清理历史`;
+    if (data.failed_count) showToast(`有 ${data.failed_count} 个文件被占用，已安全跳过`, true);
+    else showToast(`清理完成，释放 ${data.freed_text}`);
+    // 重新扫描以更新列表
+    startScan();
+    loadHistory();
+}
+
+async function loadHistory() {
+    const data = await apiGet('/api/v1/clean/history');
+    const list = document.getElementById('historyList');
+    if (!data || !data.records || !data.records.length) {
+        list.innerHTML = '<div class="empty">暂无清理记录</div>';
+        return;
+    }
+    list.innerHTML = '';
+    data.records.forEach(r => {
+        const item = document.createElement('div');
+        item.className = 'history-item';
+        const cats = (r.categories || []).map(c => c.name).join('、') || '未知分类';
+        const time = (r.timestamp || '').replace('T', ' ').slice(0, 16);
+        item.innerHTML = `
+            <span class="history-time">${time}</span>
+            <span class="history-cats">${cats}（${r.cleaned_files || 0} 项）</span>
+            <span class="history-freed">${r.freed_text || '0 B'}</span>`;
+        list.appendChild(item);
+    });
+}
+
+loadHistory();
+</script>
+</body>
+</html>

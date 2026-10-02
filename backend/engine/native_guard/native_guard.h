@@ -1,9 +1,16 @@
 /**
- * 安盾 原生防护引擎 - 公共定义
+ * 御天 原生防护引擎 - 公共定义
  * 编译: g++ -O2 -shared -o native_guard.dll *.cpp -ladvapi32 -lws2_32 -liphlpapi -lpsapi -lole32 -lwintrust -ldbghelp -lwbemuuid -static-libgcc -static-libstdc++
  * 调用: Python ctypes.CDLL 直接加载
  */
 #pragma once
+
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0602   // Windows 8+：启用 EnableTraceEx2 / OpenTraceW 等 API
+#endif
+#ifndef WINVER
+#define WINVER 0x0602
+#endif
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX

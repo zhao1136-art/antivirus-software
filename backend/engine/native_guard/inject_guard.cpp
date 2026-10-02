@@ -239,12 +239,12 @@ extern "C" __declspec(dllexport) char* guard_inject_scan_all() {
                     if (!first) json += ",";
                     first = false;
                     std::string pname = wide_to_utf8(pe.szExeFile);
-                    char buf[512];
-                    snprintf(buf, sizeof(buf),
-                        "{\"pid\":%lu,\"name\":\"%s\",\"risk\":\"%s\",\"detail\":%s}",
-                        pe.th32ProcessID, json_escape(pname).c_str(), risk.c_str(),
-                        memResult ? memResult : "{}");
-                    json += buf;
+                    // 直接拼接，避免 snprintf 固定缓冲截断内嵌的 detail（内存扫描 JSON 常超 512B）
+                    json += "{\"pid\":" + std::to_string(pe.th32ProcessID);
+                    json += ",\"name\":\""; json += json_escape(pname); json += "\"";
+                    json += ",\"risk\":\""; json += risk; json += "\"";
+                    json += ",\"detail\":"; json += (memResult ? memResult : "{}");
+                    json += "}";
                     if (risk == "high") totalHigh++;
                 }
                 guard_free_string(memResult);

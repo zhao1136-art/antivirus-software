@@ -14,12 +14,18 @@ class QuarantineManager:
     """管理隔离区：隔离样本、还原、删除"""
 
     def __init__(self):
-        os.makedirs(QUARANTINE_DIR, exist_ok=True)
+        try:
+            os.makedirs(QUARANTINE_DIR, exist_ok=True)
+        except Exception:
+            pass
+        self._db_ok = True
         self._init_db()
 
     def _init_db(self):
-        with sqlite3.connect(SIGNATURES_DB) as conn:
-            conn.execute("""
+        # 磁盘I/O/锁不可用时降级为空库, 不阻塞启动(与 SignatureManager 容错一致)
+        try:
+            with sqlite3.connect(SIGNATURES_DB) as conn:
+                conn.execute("""
                 CREATE TABLE IF NOT EXISTS quarantine (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     original_path TEXT NOT NULL,
@@ -33,7 +39,11 @@ class QuarantineManager:
                     original_mtime REAL
                 )
             """)
-            conn.commit()
+                conn.commit()
+        except Exception:
+            self._db_ok = False
+            import logging
+            logging.getLogger("yutian").warning("隔离区数据库不可用, 降级为空库运行", exc_info=True)
 
     def quarantine_file(self, file_path: str, threat_name: str = "Unknown",
                         threat_level: str = "medium", file_hash: str = "",

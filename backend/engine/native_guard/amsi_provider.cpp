@@ -1,5 +1,5 @@
 /**
- * 安盾 AMSI Provider (升级一：无文件攻击事中拦截)
+ * 御天 AMSI Provider (升级一：无文件攻击事中拦截)
  *
  * 注册为 Windows AMSI Provider 后，PowerShell / VBS / 宏 / JScript
  * 在执行脚本内容前会调用本 DLL 的 Scan() 方法。

@@ -81,12 +81,12 @@ def register() -> bool:
         if not _reg_create_key(HKEY_CLASSES_ROOT, key_path):
             ok = False
             continue
-        if not _reg_write(HKEY_CLASSES_ROOT, key_path, None, "使用安盾扫描"):
+        if not _reg_write(HKEY_CLASSES_ROOT, key_path, None, "使用御天扫描"):
             ok = False
         if not _reg_write(HKEY_CLASSES_ROOT, key_path, "Icon",
                           os.path.join(getattr(sys, '_MEIPASS',
                                               os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-                                       "andun_icon.ico")):
+                                       "御天图标.ico")):
             pass  # icon 不是必须的
         # 创建 command 子键
         cmd_key = key_path + r"\command"
@@ -136,10 +136,4 @@ def is_registered() -> bool:
 def status() -> dict:
     return {"registered": is_registered()}
 
-if __name__ == "__main__":
-    print(f"右键菜单状态: {'已注册' if is_registered() else '未注册'}")
-    action = input("注册(r)/移除(u): ").strip().lower()
-    if action == 'r':
-        print("注册结果:", register())
-    elif action == 'u':
-        print("移除结果:", unregister())
+

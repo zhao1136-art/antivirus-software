@@ -1,5 +1,5 @@
 """
-安盾 实时守护 Python 接口
+御天 实时守护 Python 接口
 与 C++ file_guard.exe 通过命名管道通信
 """
 import os
@@ -23,6 +23,13 @@ class FileGuardClient:
     def start(self, watch_dirs: list[str] = None):
         """启动守护进程"""
         if self._running:
+            return
+        # 原生 native_guard 层默认禁用（同 native_guard_bridge）：其实时守护子进程
+        # file_guard.exe 属于同一原生对抗层，在加载/运行阶段存在致命 0xC0000005
+        # 访问违规风险，会拖垮主进程。除非显式 YUTIAN_NATIVE_GUARD=1 启用，
+        # 否则不拉起，实时文件保护交由稳定运行的内置 file_guard 引擎承担。
+        if os.environ.get("YUTIAN_NATIVE_GUARD", "").strip() != "1":
+            print("[Guard] 原生 file_guard.exe 已禁用（未启用 YUTIAN_NATIVE_GUARD=1），使用内置实时防护")
             return
         if not os.path.isfile(GUARD_EXE):
             print(f"[Guard] 守护进程未找到: {GUARD_EXE}")

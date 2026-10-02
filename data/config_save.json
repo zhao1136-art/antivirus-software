@@ -1,0 +1,26 @@
+{
+  "protection": {
+    "file_shield": true,
+    "network_shield": true,
+    "behavior_shield": true,
+    "ransomware_shield": true,
+    "process_guard": true,
+    "file_guard": true
+  },
+  "features": {
+    "auto_start": false,
+    "shell_menu": false,
+    "game_mode": true,
+    "usb_scan": true,
+    "tray_icon": true,
+    "etw_guard": true,
+    "amsi_provider": true,
+    "adblock": false,
+    "download_guard": false,
+    "url_guard": false,
+    "vuln_fix": false,
+    "process_guard_tool": false,
+    "registry_guard": false,
+    "behavior_block": false
+  }
+}

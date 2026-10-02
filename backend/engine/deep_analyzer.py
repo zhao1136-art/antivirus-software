@@ -1,5 +1,5 @@
 """
-安盾深度分析引擎 - 整合 capa / PE-sieve / ClamAV / yarGen / libpeconv
+御天洞渊引擎 - 整合 capa / PE-sieve / ClamAV / yarGen / libpeconv（深察渊底，剖析毫芒）
 对可疑文件进行行为分析、内存扫描、多引擎查杀、YARA规则生成
 """
 import os
@@ -324,11 +324,11 @@ def libpeconv_info() -> dict:
     return info
 
 
-# ===================== 6. 综合深度分析 =====================
+# ===================== 6. 洞渊综合分析 =====================
 
 def deep_scan(file_path: str, engines: list = None) -> dict:
     """
-    综合深度分析 - 串联所有可用引擎
+    洞渊综合分析 - 串联所有可用引擎
     engines: ["capa", "clamav", "yara"]
     """
     _STATUS["scanning"] = True

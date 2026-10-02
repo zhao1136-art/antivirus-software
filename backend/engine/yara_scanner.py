@@ -5,6 +5,67 @@ YARA 规则扫描引擎 - 纯 Python 实现
 import os
 import re
 import fnmatch
+from collections import deque
+
+
+class _AhoCorasick:
+    """多模式字节匹配自动机（Aho-Corasick）。
+    用于一次性扫描出所有字符串模式是否命中，避免逐规则逐字符串 `in` 匹配。
+    """
+
+    def __init__(self):
+        self._children = [{}]   # node -> {byte(int): next_node}
+        self._fail = [0]        # node -> fail link
+        self._output = [[]]     # node -> payload list
+
+    def add(self, pattern: bytes, payload):
+        if not pattern:
+            return
+        node = 0
+        for b in pattern:
+            nxt = self._children[node].get(b)
+            if nxt is None:
+                nxt = len(self._children)
+                self._children[node][b] = nxt
+                self._children.append({})
+                self._fail.append(0)
+                self._output.append([])
+            node = nxt
+        self._output[node].append(payload)
+
+    def build(self):
+        """BFS 构建失配链接并合并输出。无模式时安全。"""
+        if len(self._children) == 1 and not self._children[0]:
+            return
+        q = deque()
+        for node in self._children[0].values():
+            self._fail[node] = 0
+            q.append(node)
+        while q:
+            cur = q.popleft()
+            for b, nxt in self._children[cur].items():
+                q.append(nxt)
+                f = self._fail[cur]
+                while f and b not in self._children[f]:
+                    f = self._fail[f]
+                f = self._children[f].get(b, 0)
+                self._fail[nxt] = f
+                if self._output[f]:
+                    self._output[nxt] = self._output[nxt] + self._output[f]
+
+    def find(self, data: bytes) -> list:
+        """一次遍历 data，返回全部命中的 payload（允许重复，交由调用方去重）。"""
+        if not data or (len(self._children) == 1 and not self._children[0]):
+            return []
+        node = 0
+        hits = []
+        for b in data:
+            while node and b not in self._children[node]:
+                node = self._fail[node]
+            node = self._children[node].get(b, 0)
+            if self._output[node]:
+                hits.extend(self._output[node])
+        return hits
 
 
 class YaraRule:
@@ -34,18 +95,29 @@ class YaraRule:
 
 
 class YaraScanner:
-    """YARA 规则扫描器"""
+    """YARA 规则扫描器（v2.0 按文件类型索引优化版）"""
 
     def __init__(self, rules_dir: str = None):
         self.rules: list[YaraRule] = []
         self._rules_dir = rules_dir or ""
+        # v2.0: 规则按文件类型索引，减少无效匹配
+        self._rules_pe: list[YaraRule] = []       # 需要 MZ 头检查的规则
+        self._rules_elf: list[YaraRule] = []      # 需要 ELF 头检查的规则
+        self._rules_generic: list[YaraRule] = []  # 无文件类型限制的规则
+        self._rules_filesize: list[tuple[YaraRule, str, int]] = []  # 带文件大小条件的规则
+        self._ac: tuple[_AhoCorasick, _AhoCorasick] | None = None  # (ascii, wide) 懒构建
         if self._rules_dir:
             self.load_rules(self._rules_dir)
 
     def load_rules(self, directory: str):
-        """加载目录下所有 .yar 文件"""
+        """加载目录下所有 .yar 文件并构建文件类型索引"""
         self._rules_dir = directory
         self.rules = []
+        self._rules_pe = []
+        self._rules_elf = []
+        self._rules_generic = []
+        self._rules_filesize = []
+        self._ac = None  # 规则变更后失效，下次扫描重建
         loaded = 0
         for root, _, files in os.walk(directory):
             for fname in files:
@@ -55,26 +127,94 @@ class YaraScanner:
                         with open(path, "r", encoding="utf-8", errors="ignore") as f:
                             content = f.read()
                         parsed = self._parse_rules(content, path)
+                        for rule in parsed:
+                            self._index_rule(rule)
                         self.rules.extend(parsed)
                         loaded += len(parsed)
-                    except Exception as e:
+                    except Exception:
                         pass
         return loaded
 
+    def _index_rule(self, rule: YaraRule):
+        """按文件类型将规则索引到对应的分类中"""
+        cond = rule.condition_raw.lower()
+        cond_type = rule.condition_type
+
+        # 检查是否包含 MZ 头条件（PE 文件专用规则）
+        has_mz = ("uint16" in cond and "0x5a4d" in cond) or cond_type == "mz_check"
+        # 检查是否包含 ELF 头条件
+        has_elf = ("uint32" in cond and "0x464c457f" in cond) or cond_type == "elf_check"
+        # 检查是否有文件大小限制
+        has_filesize = "filesize" in cond
+
+        if has_filesize:
+            # 提取文件大小条件（op, value）
+            fs_match = re.search(r'filesize\s*([<>!=]+)\s*(\d+)(KB|MB)?', cond, re.IGNORECASE)
+            if fs_match:
+                op = fs_match.group(1)
+                val = int(fs_match.group(2))
+                unit = fs_match.group(3) or ""
+                if unit.upper() == "KB":
+                    val *= 1024
+                elif unit.upper() == "MB":
+                    val *= 1024 * 1024
+                self._rules_filesize.append((rule, op, val))
+            # 有 filesize 条件的也放入对应类型（冗余保障）
+            if has_mz:
+                self._rules_pe.append(rule)
+            elif has_elf:
+                self._rules_elf.append(rule)
+            else:
+                self._rules_generic.append(rule)
+        elif has_mz:
+            self._rules_pe.append(rule)
+        elif has_elf:
+            self._rules_elf.append(rule)
+        else:
+            self._rules_generic.append(rule)
+
+    def _get_rules_for_file(self, file_path: str = "", content: bytes = b"",
+                             file_size: int = 0) -> list[YaraRule]:
+        """根据文件类型选择匹配的规则子集，大幅减少无效匹配"""
+        has_mz = len(content) >= 2 and content[:2] == b"MZ"
+        has_elf = len(content) >= 4 and content[:4] == b"\x7fELF"
+
+        if has_mz:
+            candidate = list(self._rules_pe)
+        elif has_elf:
+            candidate = list(self._rules_elf)
+        else:
+            candidate = []
+
+        # 通用规则总是添加
+        candidate.extend(self._rules_generic)
+
+        # 带文件大小条件的规则：前置过滤
+        for rule, op, val in self._rules_filesize:
+            if file_size > 0:
+                ok = False
+                if op == '<': ok = file_size < val
+                elif op == '>': ok = file_size > val
+                elif op == '<=': ok = file_size <= val
+                elif op == '>=': ok = file_size >= val
+                elif op == '==': ok = file_size == val
+                if ok and rule not in candidate:
+                    candidate.append(rule)
+
+        return candidate
+
     def scan_file(self, file_path: str) -> list[dict]:
         """
-        扫描单个文件，返回匹配的规则列表
-        每条结果: {rule, description, malware_type, source_file, matched_patterns}
+        扫描单个文件，返回匹配的规则列表（v2.0 使用文件类型索引）
         """
         results = []
         try:
             size = os.path.getsize(file_path)
-            if size == 0 or size > 200 * 1024 * 1024:  # 跳过 >200MB 文件
+            if size == 0 or size > 200 * 1024 * 1024:
                 return results
         except Exception:
             return results
 
-        # 读取文件内容（最多 16MB 用于模式匹配，覆盖更多恶意代码）
         content = b""
         try:
             with open(file_path, "rb") as f:
@@ -82,24 +222,54 @@ class YaraScanner:
         except Exception:
             return results
 
-        for rule in self.rules:
-            matched = self._match_rule(rule, content, file_path)
-            if matched:
-                results.append({
-                    "rule": rule.name,
-                    "description": rule.description,
-                    "malware_type": rule.malware_type,
-                    "source_file": rule.source_file,
-                    "matched_patterns": matched,
-                    "meta": rule.meta
-                })
-        return results
+        return self._scan_with_rules(content, file_path, size)
 
     def scan_content(self, content: bytes, file_path: str = "") -> list[dict]:
-        """扫描内存中的内容"""
+        """扫描内存中的内容（v2.0 使用索引优化）"""
+        return self._scan_with_rules(content, file_path, len(content))
+
+    def scan_content_typed(self, content: bytes, file_path: str = "",
+                            file_size: int = 0) -> list[dict]:
+        """扫描内存内容（传入文件实际大小做前置过滤）"""
+        return self._scan_with_rules(content, file_path, file_size or len(content))
+
+    def _ensure_ac(self) -> tuple[_AhoCorasick, _AhoCorasick]:
+        """懒构建 ascii / wide 两套多模式自动机（含构建后再失效）。"""
+        if self._ac is None:
+            ac_ascii = _AhoCorasick()
+            ac_wide = _AhoCorasick()
+            for rule in self.rules:
+                rid = id(rule)
+                for name, value, typ in rule.strings:
+                    if typ == 'wide':
+                        ac_wide.add(value, (rid, name))
+                    else:
+                        ac_ascii.add(value, (rid, name))
+            ac_ascii.build()
+            ac_wide.build()
+            self._ac = (ac_ascii, ac_wide)
+        return self._ac
+
+    def _scan_with_rules(self, content: bytes, file_path: str,
+                          file_size: int) -> list[dict]:
+        """核心扫描：按文件类型索引选择规则子集，大幅减少无效匹配。
+        先用 Aho-Corasick 一次遍历命中全部字符串模式，再评估各规则条件。
+        """
         results = []
-        for rule in self.rules:
-            matched = self._match_rule(rule, content, file_path)
+        rules_subset = self._get_rules_for_file(file_path, content, file_size)
+
+        # 多模式一次遍历，得到 rule_id -> 命中字符串名集合
+        rule_pre: dict = {}
+        ac_ascii, ac_wide = self._ensure_ac()
+        for rid, name in ac_ascii.find(content):
+            rule_pre.setdefault(rid, set()).add(name)
+        for rid, name in ac_wide.find(content):
+            rule_pre.setdefault(rid, set()).add(name)
+
+        for rule in rules_subset:
+            # 未命中任何字符串时传空集合（而非 None），保证走 AC 结果、避免回退逐条扫描
+            pre = rule_pre.get(id(rule)) or set()
+            matched = self._match_rule(rule, content, file_path, pre)
             if matched:
                 results.append({
                     "rule": rule.name,
@@ -347,23 +517,32 @@ class YaraScanner:
 
     # ==================== 模式匹配 ====================
 
-    def _match_rule(self, rule: YaraRule, content: bytes, file_path: str) -> list[str]:
-        """匹配单条规则，返回匹配到的模式名列表。支持丰富条件表达式。"""
+    def _match_rule(self, rule: YaraRule, content: bytes, file_path: str,
+                    pre_matched: set | None = None) -> list[str]:
+        """匹配单条规则，返回匹配到的模式名列表。支持丰富条件表达式。
+        pre_matched: 由 Aho-Corasick 预计算的该规则命中的字符串名集合（含 $ 前缀）；
+                     为 None 时回退为逐字符串 `in` 扫描（兼容外部直接调用）。
+        """
         matched = []
 
         # 调试：记录规则和条件
         # print(f"  Rule: {rule.name}, cond={rule.condition_type}, raw={rule.condition_raw[:60]}")
 
         # 匹配字符串模式
-        for name, value, typ in rule.strings:
-            if typ == 'wide':
-                if self._search_bytes(content, value):
-                    if name not in matched:
-                        matched.append(name)
-            else:
-                if value in content:
-                    if name not in matched:
-                        matched.append(name)
+        if pre_matched is not None:
+            for name, _value, _typ in rule.strings:
+                if name in pre_matched and name not in matched:
+                    matched.append(name)
+        else:
+            for name, value, typ in rule.strings:
+                if typ == 'wide':
+                    if self._search_bytes(content, value):
+                        if name not in matched:
+                            matched.append(name)
+                else:
+                    if value in content:
+                        if name not in matched:
+                            matched.append(name)
 
         # 匹配十六进制模式（带通配符搜索）
         for name, mask, pattern in rule.hex_patterns:

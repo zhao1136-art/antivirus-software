@@ -1,5 +1,5 @@
 /**
- * 安盾 原生防护引擎 DLL - 主入口
+ * 御天 原生防护引擎 DLL - 主入口
  * 聚合 inject_guard, fileless_guard, persist_guard, net_guard 四大模块
  *
  * 编译: g++ -O2 -shared -o native_guard.dll *.cpp -ladvapi32 -lws2_32 -liphlpapi -lpsapi -lole32 -lntdll -lwintrust -static-libgcc -static-libstdc++
@@ -12,7 +12,7 @@
 // ========================================================================
 
 extern "C" __declspec(dllexport) char* guard_version() {
-    return alloc_str("{\"name\":\"安盾 Native Guard\",\"version\":\"1.1.0\","
+    return alloc_str("{\"name\":\"御天 Native Guard\",\"version\":\"1.1.0\","
                      "\"modules\":[\"inject_guard\",\"fileless_guard\",\"persist_guard\",\"net_guard\",\"etw_guard\",\"amsi_provider\"],"
                      "\"arch\":\"native_guard.dll\",\"calling\":\"ctypes\"}");
 }

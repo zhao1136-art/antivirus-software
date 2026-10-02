@@ -1,5 +1,5 @@
 /**
- * 安盾 原生引擎 - 公共定义
+ * 御天 原生引擎 - 公共定义
  * 编译: g++ -O2 -shared -o native_engine.dll *.cpp -ladvapi32 -lws2_32 -liphlpapi -lpsapi -lole32 -static-libgcc -static-libstdc++
  */
 #pragma once

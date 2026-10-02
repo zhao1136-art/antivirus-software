@@ -209,7 +209,7 @@ def _run_visitor(args):
     """运行访问端"""
     print()
     print("=" * 55)
-    print("   安盾 P2P 内网穿透 - 访问端 (服务消费方)")
+    print("   御天 P2P 内网穿透 - 访问端 (服务消费方)")
     print("=" * 55)
 
     # 输入参数
@@ -303,7 +303,7 @@ def _run_interactive(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="安盾 P2P 内网穿透 - 端口转发演示",
+        description="御天 P2P 内网穿透 - 端口转发演示",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:

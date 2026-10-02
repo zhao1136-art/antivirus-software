@@ -1,5 +1,5 @@
 /**
- * 安盾 实时文件守护进程 (Native C++)
+ * 御天 实时文件守护进程 (Native C++)
  * 使用 ReadDirectoryChangesW 监控文件变更，通过命名管道与 Python 后端通信
  * 
  * 编译: g++ -O2 -static -o file_guard.exe file_guard.cpp -lole32 -luuid -ladvapi32

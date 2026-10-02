@@ -1,0 +1,14 @@
+{
+  "blocked": {
+    "bad-site.test": {
+      "time": "2026-08-23T16:55:45.816656",
+      "reason": "手动添加"
+    }
+  },
+  "whitelist": [
+    "baidu.com"
+  ],
+  "enabled": false,
+  "checked_count": 3,
+  "blocked_count": 3
+}

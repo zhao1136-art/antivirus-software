@@ -174,9 +174,9 @@ class TrayIcon:
 
             # 加载图标
             base = getattr(sys, '_MEIPASS', os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            icon_path = os.path.join(base, "andun_icon.ico")
+            icon_path = os.path.join(base, "御天图标.ico")
             if not os.path.isfile(icon_path):
-                icon_path = os.path.join(base, "安盾图标.ico")
+                icon_path = os.path.join(base, "御天图标.ico")
             if os.path.isfile(icon_path):
                 self._icon_handle = user32.LoadImageW(
                     0, icon_path, IMAGE_ICON, 32, 32, LR_LOADFROMFILE
@@ -190,7 +190,7 @@ class TrayIcon:
             nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP
             nid.uCallbackMessage = WM_USER + 1
             nid.hIcon = self._icon_handle or user32.LoadIconW(0, 32512)  # IDI_APPLICATION
-            nid.szTip = "安盾 安全中心"
+            nid.szTip = "御天 安全中心"
 
             shell32.Shell_NotifyIconW(NIM_ADD, ctypes.byref(nid))
 

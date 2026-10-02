@@ -46,6 +46,12 @@ SCAN_THREADS = 2           # 扫描线程数
 BUFFER_SIZE = 65536        # ReadDirectoryChangesW 缓冲区
 MAX_FILE_SIZE_MB = 50      # 最大扫描文件(MB)，超过跳过
 WATCH_SUBTREE = True
+# 事件背压队列上限：生产者(监控线程)→消费者(扫描线程)之间的有界队列。
+# 防止磁盘大量变更时积压无界事件，避免内存暴涨（超出即丢弃并计数，消费者侧优先取舍）。
+RT_EVENT_QUEUE_MAX = 10000
+# 防抖缓存上限：超过后裁剪过期项，避免无限增长的内存泄漏
+_DEBOUNCE_CACHE_MAX = 50000
+_DEBOUNCE_TTL = DEBOUNCE_MS / 1000 * 4  # 超过 4 倍防抖窗口的条目视为过期
 
 # 默认监控路径
 DEFAULT_WATCH_DIRS = [
@@ -109,7 +115,8 @@ class RealtimeGuard:
         self._running = False
         self._monitor_threads: list[threading.Thread] = []
         self._scan_threads: list[threading.Thread] = []
-        self._event_queue: queue.Queue[dict] = queue.Queue()
+        self._event_queue: queue.Queue[dict] = queue.Queue(maxsize=RT_EVENT_QUEUE_MAX)
+        self._dropped_events = 0  # 背压丢弃计数（队列满时 put_nowait 抛 Full）
         self._debounce_cache: dict[str, float] = {}  # filepath → last_event_time
         self._debounce_lock = threading.Lock()
         self._stats = {
@@ -174,6 +181,21 @@ class RealtimeGuard:
     @property
     def enabled(self) -> bool:
         return self._enabled
+
+    def get_queue_stats(self) -> dict:
+        """返回事件背压队列与防抖缓存的实时水位（线程安全快照）"""
+        try:
+            qsize = self._event_queue.qsize()
+        except Exception:
+            qsize = 0
+        return {
+            "queue_depth": max(0, qsize),
+            "queue_max": RT_EVENT_QUEUE_MAX,
+            "dropped_events": self._dropped_events,
+            "debounce_cache_size": len(self._debounce_cache),
+            "debounce_cache_max": _DEBOUNCE_CACHE_MAX,
+            "scan_threads": len(self._scan_threads),
+        }
 
     def enable(self):
         self._enabled = True
@@ -306,8 +328,20 @@ class RealtimeGuard:
             if now - last < DEBOUNCE_MS / 1000:
                 return
             self._debounce_cache[path] = now
+            # 有界裁剪：超出上限时移除过期项，仍超则清空（最坏情况退化为全量重建）
+            if len(self._debounce_cache) > _DEBOUNCE_CACHE_MAX:
+                stale = [p for p, ts in self._debounce_cache.items()
+                         if now - ts > _DEBOUNCE_TTL]
+                for p in stale:
+                    del self._debounce_cache[p]
+                if len(self._debounce_cache) > _DEBOUNCE_CACHE_MAX:
+                    self._debounce_cache.clear()
 
-        self._event_queue.put({"path": path, "time": now})
+        # 有界背压入队：满则丢弃并计数，绝不阻塞监控线程
+        try:
+            self._event_queue.put_nowait({"path": path, "time": now})
+        except queue.Full:
+            self._dropped_events += 1
 
     # ── 扫描线程 ──
 
@@ -315,14 +349,14 @@ class RealtimeGuard:
         """从队列取文件，调用本地引擎扫描"""
         from engine.local_scanner import LocalScanner
         from engine.quarantine import QuarantineManager
-        from engine.signature_manager import SignatureManager
+        from engine.signature_manager import get_signature_manager
         from engine.yara_scanner import YaraScanner
 
-        # 如果外部注入则使用，否则自建
+        # 如果外部注入则使用，否则自建（复用全局共享特征库实例，避免重复连接/索引）
         scanner = self._scanner
         quarantine = self._quarantine
         if scanner is None:
-            sm = SignatureManager()
+            sm = get_signature_manager()
             y = YaraScanner(os.path.join(os.path.dirname(__file__), "yara_rules"))
             scanner = LocalScanner(sm, y)
         if quarantine is None:

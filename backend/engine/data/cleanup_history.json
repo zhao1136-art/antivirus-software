@@ -1,0 +1,44 @@
+[
+  {
+    "timestamp": "2026-08-23T14:24:31.051476",
+    "categories": [
+      {
+        "id": "temp_files",
+        "name": "系统临时文件",
+        "freed_bytes": 0,
+        "cleaned_files": 0
+      },
+      {
+        "id": "crash_dumps",
+        "name": "崩溃转储",
+        "freed_bytes": 0,
+        "cleaned_files": 0
+      },
+      {
+        "id": "update_cache",
+        "name": "Windows 更新缓存",
+        "freed_bytes": 0,
+        "cleaned_files": 0
+      }
+    ],
+    "total_freed": 0,
+    "freed_text": "0 B",
+    "cleaned_files": 0,
+    "failed_count": 6
+  },
+  {
+    "timestamp": "2026-08-23T14:24:28.383310",
+    "categories": [
+      {
+        "id": "temp_files",
+        "name": "系统临时文件",
+        "freed_bytes": 2073889585,
+        "cleaned_files": 1755
+      }
+    ],
+    "total_freed": 2073889585,
+    "freed_text": "1.9 GB",
+    "cleaned_files": 1755,
+    "failed_count": 6
+  }
+]

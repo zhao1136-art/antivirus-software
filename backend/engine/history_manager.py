@@ -212,6 +212,36 @@ class VirusMemory:
         finally:
             conn.close()
 
+    def get_family_stats(self, limit: int = 20) -> list[dict]:
+        """病毒家族分布：按病毒类型(virus_type 作为家族近似)聚类计数，返回 topN。
+
+        威胁的规范化"家族"名称以 category/signature 为准（add_threat 已写入 virus_type）。
+        返回 ["family", "count", "ratio"] 列表，供前端渲染家族分布图。
+        """
+        if limit < 1:
+            limit = 1
+        conn = self._connect()
+        try:
+            cursor = conn.execute("""
+                SELECT COALESCE(virus_type, 'unknown') AS family, COUNT(*) AS counts
+                FROM virus_memory
+                GROUP BY family
+                ORDER BY counts DESC
+                LIMIT ?
+            """, (limit,))
+            rows = cursor.fetchall()
+            total = self.get_total_count()
+            return [
+                {
+                    "family": r[0] or "unknown",
+                    "count": r[1],
+                    "ratio": round(r[1] / total * 100, 1) if total else 0.0,
+                }
+                for r in rows
+            ]
+        finally:
+            conn.close()
+
     def get_unique_virus_types(self) -> list[str]:
         """获取所有出现过的病毒类型列表"""
         conn = self._connect()

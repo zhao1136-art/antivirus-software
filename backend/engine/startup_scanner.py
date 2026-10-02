@@ -1,5 +1,5 @@
 """
-安盾 启动项扫描模块
+御天 启动项扫描模块
 扫描注册表Run键、计划任务、启动文件夹、服务，排查持久化木马
 """
 import os
@@ -301,7 +301,4 @@ def scan_all() -> dict:
     return results
 
 
-if __name__ == "__main__":
-    import json
-    data = scan_all()
-    print(json.dumps(data, indent=2, ensure_ascii=False))
+

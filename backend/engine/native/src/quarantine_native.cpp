@@ -1,5 +1,5 @@
 /**
- * 安盾 原生引擎 - 隔离区管理模块
+ * 御天 原生引擎 - 隔离区管理模块
  * 加密移动可疑文件到隔离区，支持恢复和永久删除
  * 使用 XOR 简单加密 + 元数据存储
  */
@@ -201,7 +201,7 @@ extern "C" __declspec(dllexport) char* quarantine_list(const char* quarantine_di
                      fileSize, timeBuf);
             json += buf;
 
-        } while (FindNextFileW(hFind, &fd) && !first); // first 用于防止无限循环
+        } while (FindNextFileW(hFind, &fd));
         FindClose(hFind);
     }
 

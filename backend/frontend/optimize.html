@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>电脑优化 - 御天</title><script>(function(){try{var s=JSON.parse(localStorage.getItem('安盾_settings')||'{}');if(s.theme==='light')document.documentElement.classList.add('light');}catch(e){}}())</script>
+    <style>
+        :root {
+            --bg-primary: #0a1f2e;
+            --bg-secondary: #0e0e14;
+            --bg-card: #13131c;
+            --bg-hover: #1a1a26;
+            --border: #252536;
+            --border-light: #2f2f44;
+            --text-primary: #f4f4f9;
+            --text-secondary: #8f8fab;
+            --text-muted: #5c5c75;
+            --accent: #00bcd4;
+            --accent-dim: rgba(0, 188, 212, 0.12);
+            --accent-glow: rgba(0, 188, 212, 0.35);
+            --danger: #ff4d6d;
+            --danger-dim: rgba(255, 77, 109, 0.12);
+            --warning: #ffcc00;
+            --radius-sm: 10px;
+            --radius-md: 16px;
+            --radius-lg: 24px;
+            --transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'DM Sans', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+        body::before {
+            content: '';
+            position: fixed; inset: 0;
+            background:
+                radial-gradient(circle at 20% 30%, rgba(0, 188, 212, 0.06) 0%, transparent 40%),
+                radial-gradient(circle at 80% 70%, rgba(0, 110, 255, 0.05) 0%, transparent 40%),
+                linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
+            background-size: 100% 100%, 100% 100%, 40px 40px, 40px 40px;
+            pointer-events: none; z-index: 0;
+        }
+        .app { display: flex; min-height: 100vh; position: relative; z-index: 1; }
+        .sidebar {
+            width: 72px; background: rgba(14, 14, 20, 0.85);
+            backdrop-filter: blur(20px); border-right: 1px solid var(--border);
+            display: flex; flex-direction: column; align-items: center;
+            padding: 20px 8px; position: fixed; height: 100vh; z-index: 100;
+        }
+        .logo { display: flex; flex-direction: column; align-items: center; gap: 0; padding: 0; margin-bottom: 24px; }
+        .logo-icon {
+            width: 40px; height: 40px; border-radius: 12px; overflow: hidden;
+            display: grid; place-items: center;
+            box-shadow: 0 8px 24px rgba(0, 188, 212, 0.25);
+        }
+        .logo-icon svg { width: 100%; height: 100%; fill: var(--accent); }
+        .nav { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 1; width: 100%; }
+        .nav-item {
+            display: flex; align-items: center; justify-content: center;
+            width: 44px; height: 44px; border-radius: 12px;
+            color: var(--text-muted); text-decoration: none;
+            position: relative; transition: var(--transition);
+        }
+        .nav-item svg { width: 22px; height: 22px; }
+        .nav-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+        .nav-item.active { background: var(--accent-dim); color: var(--accent); }
+        .nav-item:hover::after {
+            content: attr(data-title);
+            position: absolute; left: 100%; margin-left: 14px;
+            background: var(--bg-card); border: 1px solid var(--border);
+            padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 500;
+            color: var(--text-primary); white-space: nowrap; z-index: 300;
+            pointer-events: none; box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+        }
+        .nav-item.active:hover::after { border-color: rgba(0, 188, 212, 0.3); color: var(--accent); }
+        .nav-group { width: 100%; text-align: center; padding: 14px 0 6px; font-size: 0; user-select: none; }
+        .nav-group::before {
+            content: ''; display: block; width: 20px; height: 1px;
+            background: var(--border); margin: 0 auto;
+        }
+        .nav-item[href="settings.html"] { margin-top: auto; }
+        .main { flex: 1; margin-left: 72px; padding: 32px 40px; max-width: calc(100% - 72px); }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 36px; }
+        .header-title { font-family: 'Syne', sans-serif; font-size: 28px; font-weight: 700; }
+        .status-pill {
+            display: flex; align-items: center; gap: 8px; padding: 8px 16px;
+            background: var(--accent-dim); border: 1px solid rgba(0, 188, 212, 0.2);
+            border-radius: 30px; font-size: 13px; font-weight: 600; color: var(--accent);
+        }
+        .pulse { width: 8px; height: 8px; background: var(--accent); border-radius: 50%; box-shadow: 0 0 0 0 rgba(0, 188, 212, 0.7); animation: pulse 2s infinite; }
+        @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(0, 188, 212, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(0, 188, 212, 0); } 100% { box-shadow: 0 0 0 0 rgba(0, 188, 212, 0); } }
+        .card {
+            background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: var(--radius-lg); padding: 28px; transition: var(--transition);
+        }
+        .card:hover { border-color: var(--border-light); transform: translateY(-2px); }
+        .card-title {
+            font-family: 'Syne', sans-serif; font-size: 15px; font-weight: 600;
+            color: var(--text-secondary); text-transform: uppercase;
+            letter-spacing: 0.5px; margin-bottom: 24px;
+        }
+        .btn {
+            display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+            padding: 12px 24px; border: none; border-radius: var(--radius-sm);
+            font-size: 14px; font-weight: 600; cursor: pointer; transition: var(--transition);
+        }
+        .btn-primary { background: linear-gradient(135deg, var(--accent), #00b4a6); color: #000; }
+        .btn-primary:hover { box-shadow: 0 6px 20px var(--accent-glow); transform: translateY(-1px); }
+        .btn-outline { background: transparent; border: 1px solid var(--border-light); color: var(--text-primary); }
+        .btn-outline:hover { border-color: var(--accent); color: var(--accent); }
+        .btn-danger { background: var(--danger); color: #fff; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none !important; }
+
+        /* ── Tab 导航 ── */
+        .tabs { display: flex; gap: 8px; margin-bottom: 24px; }
+        .tab {
+            padding: 10px 22px; border-radius: var(--radius-sm); cursor: pointer;
+            background: var(--bg-card); border: 1px solid var(--border);
+            color: var(--text-secondary); font-size: 14px; font-weight: 600;
+            transition: var(--transition);
+        }
+        .tab:hover { border-color: var(--border-light); color: var(--text-primary); }
+        .tab.active { background: var(--accent-dim); border-color: rgba(0, 188, 212, 0.35); color: var(--accent); }
+        .tab-panel { display: none; }
+        .tab-panel.active { display: block; }
+
+        /* ── 体检 ── */
+        .report-grid { display: grid; grid-template-columns: 300px 1fr; gap: 24px; margin-bottom: 24px; }
+        .score-card { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 28px; }
+        .score-ring { position: relative; width: 170px; height: 170px; }
+        .score-ring svg { transform: rotate(-90deg); width: 100%; height: 100%; }
+        .score-ring-bg { fill: none; stroke: var(--bg-hover); stroke-width: 10; }
+        .score-ring-progress { fill: none; stroke-width: 10; stroke-linecap: round; stroke-dasharray: 440; stroke-dashoffset: 0; transition: stroke-dashoffset 1s ease; }
+        .score-ring-content { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        .score-num { font-family: 'Syne', sans-serif; font-size: 46px; font-weight: 700; line-height: 1; }
+        .score-label { color: var(--text-secondary); font-size: 12px; margin-top: 8px; }
+        .check-list { display: flex; flex-direction: column; gap: 12px; }
+        .check-item {
+            display: flex; align-items: center; gap: 14px;
+            background: var(--bg-secondary); border: 1px solid var(--border);
+            border-radius: var(--radius-md); padding: 14px 16px;
+        }
+        .check-icon { width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; flex-shrink: 0; }
+        .check-icon svg { width: 17px; height: 17px; }
+        .check-icon.ok { background: var(--accent-dim); color: var(--accent); }
+        .check-icon.warn { background: rgba(255, 204, 0, 0.12); color: var(--warning); }
+        .check-icon.danger { background: var(--danger-dim); color: var(--danger); }
+        .check-body { flex: 1; min-width: 0; }
+        .check-name { font-size: 14px; font-weight: 600; margin-bottom: 3px; }
+        .check-detail { font-size: 12px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+        /* ── 列表项（启动项/服务） ── */
+        .item-list { display: flex; flex-direction: column; gap: 10px; }
+        .item-row {
+            display: flex; align-items: center; gap: 14px;
+            background: var(--bg-secondary); border: 1px solid var(--border);
+            border-radius: var(--radius-sm); padding: 14px 16px;
+        }
+        .item-name { font-size: 14px; font-weight: 600; margin-bottom: 3px; }
+        .item-path { font-size: 12px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 560px; }
+        .item-body { flex: 1; min-width: 0; }
+        .switch { position: relative; width: 42px; height: 24px; flex-shrink: 0; cursor: pointer; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .switch-track {
+            position: absolute; inset: 0; border-radius: 20px;
+            background: var(--bg-hover); border: 1px solid var(--border-light);
+            transition: var(--transition);
+        }
+        .switch-track::before {
+            content: ''; position: absolute; top: 2px; left: 2px;
+            width: 18px; height: 18px; border-radius: 50%;
+            background: var(--text-muted); transition: var(--transition);
+        }
+        .switch input:checked + .switch-track { background: var(--accent-dim); border-color: rgba(0, 188, 212, 0.4); }
+        .switch input:checked + .switch-track::before { transform: translateX(18px); background: var(--accent); box-shadow: 0 2px 8px var(--accent-glow); }
+        .switch input:disabled + .switch-track { opacity: 0.4; cursor: not-allowed; }
+        .badge {
+            font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 6px; flex-shrink: 0;
+        }
+        .badge.enabled { background: var(--accent-dim); color: var(--accent); }
+        .badge.disabled { background: rgba(255, 77, 109, 0.12); color: var(--danger); }
+        .badge.auto { background: var(--accent-dim); color: var(--accent); }
+        .badge.manual { background: rgba(255, 204, 0, 0.12); color: var(--warning); }
+        .badge.ro { background: var(--bg-hover); color: var(--text-muted); }
+        .select {
+            background: var(--bg-card); color: var(--text-primary);
+            border: 1px solid var(--border-light); border-radius: 8px;
+            padding: 6px 10px; font-size: 12px; cursor: pointer; flex-shrink: 0;
+        }
+        .section-title { font-size: 13px; font-weight: 700; color: var(--text-secondary); margin: 20px 0 12px; }
+        .empty { color: var(--text-muted); text-align: center; padding: 30px 0; font-size: 13px; }
+        .spinner {
+            width: 18px; height: 18px; border: 2px solid rgba(0, 188, 212, 0.25);
+            border-top-color: var(--accent); border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .toast {
+            position: fixed; top: 24px; right: 24px; z-index: 999;
+            background: var(--bg-card); border: 1px solid var(--border-light);
+            border-left: 3px solid var(--accent); border-radius: var(--radius-sm);
+            padding: 14px 20px; font-size: 13px; box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+            transform: translateX(120%); transition: transform 0.3s ease; max-width: 380px;
+        }
+        .toast.show { transform: translateX(0); }
+        .mem-bar-wrap { margin-top: 14px; }
+        .mem-bar { height: 10px; background: var(--bg-hover); border-radius: 6px; overflow: hidden; margin-top: 8px; }
+        .mem-bar-fill { height: 100%; background: linear-gradient(90deg, var(--accent), #00b4a6); border-radius: 6px; transition: width 0.5s ease; }
+        .mem-stats { display: flex; gap: 28px; margin-top: 16px; }
+        .mem-stat .num { font-family: 'Syne', sans-serif; font-size: 20px; font-weight: 700; color: var(--accent); }
+        .mem-stat .label { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+    </style>
+</head>
+<body>
+<div class="app">
+    <aside class="sidebar">
+        <div class="logo" title="御天卫士">
+            <div class="logo-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/><path d="M9 12l2 2 4-4"/></svg>
+            </div>
+        </div>
+        <nav class="nav">
+            <div class="nav-group"></div>
+            <a class="nav-item" href="index.html" data-title="概览">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+            </a>
+            <a class="nav-item" href="scan.html" data-title="病毒扫描">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="m14.31 8 5.74 9.94M9.69 8h11.48M7.38 12l5.74-9.94M9.69 16 3.95 6.06M14.31 16H2.83M16.62 12l-5.74 9.94"/></svg>
+            </a>
+            <a class="nav-item" href="guard.html" data-title="卫士体检">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+            </a>
+            <a class="nav-item" href="clean.html" data-title="垃圾清理">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            </a>
+            <a class="nav-item active" href="optimize.html" data-title="电脑优化">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+            </a>
+            <div class="nav-group"></div>
+            <a class="nav-item" href="history.html" data-title="病毒记忆">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="10"/><path d="M3.05 11a9 9 0 1 1 .5 4"/></svg>
+            </a>
+            <a class="nav-item" href="quarantine.html" data-title="隔离区">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="9" x2="15" y2="15"/><line x1="15" y1="9" x2="9" y2="15"/></svg>
+            </a>
+            <a class="nav-item" href="logs.html" data-title="日志报告">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+            </a>
+            <a class="nav-item" href="tools.html" data-title="安全工具">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+            </a>
+            <a class="nav-item" href="engine.html" data-title="引擎启动">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/><path d="M9 12l2 2 4-4"/></svg>
+            </a>
+            <div class="nav-group"></div>
+            <a class="nav-item" href="settings.html" data-title="设置">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            </a>
+        </nav>
+    </aside>
+
+    <main class="main">
+        <header class="header">
+            <h1 class="header-title">电脑优化</h1>
+            <div class="status-pill"><span class="pulse"></span>优化引擎就绪</div>
+        </header>
+
+        <div class="tabs">
+            <div class="tab active" data-tab="oneclick" onclick="switchTab('oneclick')">一键优化</div>
+            <div class="tab" data-tab="startup" onclick="switchTab('startup')">启动项管理</div>
+            <div class="tab" data-tab="service" onclick="switchTab('service')">服务优化</div>
+            <div class="tab" data-tab="memory" onclick="switchTab('memory')">内存释放</div>
+        </div>
+
+        <!-- Tab1 一键优化 -->
+        <div class="tab-panel active" id="panel-oneclick">
+            <div class="report-grid">
+                <div class="card score-card">
+                    <div class="score-ring">
+                        <svg viewBox="0 0 160 160">
+                            <circle class="score-ring-bg" cx="80" cy="80" r="70"></circle>
+                            <circle class="score-ring-progress" id="scoreCircle" cx="80" cy="80" r="70"
+                                    stroke="#00bcd4" stroke-dashoffset="440"></circle>
+                        </svg>
+                        <div class="score-ring-content">
+                            <div class="score-num" id="scoreNum">--</div>
+                            <div class="score-label">健康评分</div>
+                        </div>
+                    </div>
+                    <button class="btn btn-outline" style="width:100%" onclick="loadOverview()">刷新体检</button>
+                </div>
+                <div class="card">
+                    <h3 class="card-title">检查结果</h3>
+                    <div class="check-list" id="checkList">
+                        <div class="empty">正在获取体检数据…</div>
+                    </div>
+                </div>
+            </div>
+            <div class="card" style="display:flex;align-items:center;justify-content:space-between">
+                <div>
+                    <div style="font-size:15px;font-weight:700;margin-bottom:4px">一键优化</div>
+                    <div style="font-size:13px;color:var(--text-secondary)">清理临时垃圾、释放内存，并给出启动项优化建议（不自动禁用）</div>
+                </div>
+                <button class="btn btn-primary" id="btnOneClick" onclick="runOneClick()">开始优化</button>
+            </div>
+            <div class="card" id="recommendCard" style="display:none;margin-top:24px">
+                <h3 class="card-title">启动项优化建议</h3>
+                <div class="item-list" id="recommendList"></div>
+            </div>
+        </div>
+
+        <!-- Tab2 启动项管理 -->
+        <div class="tab-panel" id="panel-startup">
+            <div class="card">
+                <h3 class="card-title">启动项管理 <span style="text-transform:none;color:var(--text-muted)">关闭后可在「已禁用」中重新启用</span></h3>
+                <div class="item-list" id="startupList">
+                    <div class="empty">正在加载启动项…</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab3 服务优化 -->
+        <div class="tab-panel" id="panel-service">
+            <div class="card">
+                <h3 class="card-title">服务优化 <span style="text-transform:none;color:var(--text-muted)">仅允许调整第三方服务，系统服务为只读保护</span></h3>
+                <div class="section-title">第三方服务（可管理）</div>
+                <div class="item-list" id="serviceList">
+                    <div class="empty">正在加载服务列表…</div>
+                </div>
+                <div class="section-title">系统服务（只读）</div>
+                <div class="item-list" id="systemServiceList">
+                    <div class="empty">正在加载…</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab4 内存释放 -->
+        <div class="tab-panel" id="panel-memory">
+            <div class="card" style="max-width:640px">
+                <h3 class="card-title">内存释放</h3>
+                <div class="mem-stats">
+                    <div class="mem-stat"><div class="num" id="memUsed">--</div><div class="label">已用内存</div></div>
+                    <div class="mem-stat"><div class="num" id="memTotal">--</div><div class="label">总内存</div></div>
+                    <div class="mem-stat"><div class="num" id="memPct">--</div><div class="label">占用率</div></div>
+                </div>
+                <div class="mem-bar-wrap">
+                    <div style="font-size:12px;color:var(--text-secondary)">内存占用</div>
+                    <div class="mem-bar"><div class="mem-bar-fill" id="memBar" style="width:0%"></div></div>
+                </div>
+                <div style="margin-top:24px;display:flex;justify-content:space-between;align-items:center">
+                    <div style="font-size:12px;color:var(--text-muted)">通过收缩空闲进程工作集释放内存，不影响运行中程序</div>
+                    <button class="btn btn-primary" id="btnMemory" onclick="releaseMemory()">立即释放</button>
+                </div>
+                <div id="memResult" style="display:none;margin-top:16px;padding:14px 16px;border-radius:var(--radius-sm);background:var(--accent-dim);color:var(--accent);font-size:13px"></div>
+            </div>
+        </div>
+    </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API_BASE = '';
+let toastTimer = null;
+let overviewData = null;
+
+function showToast(msg, isError) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.style.borderLeftColor = isError ? 'var(--danger)' : 'var(--accent)';
+    t.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.classList.remove('show'), 3500);
+}
+
+async function apiGet(path) {
+    try { const res = await fetch(`${API_BASE}${path}`); return await res.json(); }
+    catch (e) { console.warn('API 不可用:', e.message); return null; }
+}
+async function apiPost(path, body) {
+    try {
+        const res = await fetch(`${API_BASE}${path}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body || {})
+        });
+        return await res.json();
+    } catch (e) { console.warn('API 不可用:', e.message); return null; }
+}
+
+function switchTab(name) {
+    document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
+    if (name === 'startup' && !document.getElementById('startupList').dataset.loaded) loadStartup();
+    if (name === 'service' && !document.getElementById('serviceList').dataset.loaded) loadServices();
+    if (name === 'memory' && !document.getElementById('memTotal').dataset.loaded) loadMemoryInfo();
+}
+
+function levelColor(score) {
+    if (score >= 85) return '#00bcd4';
+    if (score >= 60) return '#ffcc00';
+    return '#ff4d6d';
+}
+
+const CHECK_ICONS = {
+    ok: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>',
+    warn: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+    danger: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>'
+};
+
+async function loadOverview() {
+    const data = await apiGet('/api/v1/optimize/overview');
+    if (!data || data.error) {
+        document.getElementById('checkList').innerHTML = '<div class="empty">体检数据获取失败</div>';
+        return;
+    }
+    overviewData = data;
+    const score = data.score;
+    const color = levelColor(score);
+    document.getElementById('scoreNum').textContent = score;
+    const circle = document.getElementById('scoreCircle');
+    circle.setAttribute('stroke', color);
+    setTimeout(() => circle.setAttribute('stroke-dashoffset', 440 - 440 * score / 100), 100);
+    const list = document.getElementById('checkList');
+    list.innerHTML = '';
+    data.checks.forEach(c => {
+        const item = document.createElement('div');
+        item.className = 'check-item';
+        item.innerHTML = `
+            <div class="check-icon ${c.status}">${CHECK_ICONS[c.status] || CHECK_ICONS.ok}</div>
+            <div class="check-body">
+                <div class="check-name">${c.name}</div>
+                <div class="check-detail">${c.detail}</div>
+            </div>`;
+        list.appendChild(item);
+    });
+}
+
+async function runOneClick() {
+    const btn = document.getElementById('btnOneClick');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> 优化中…';
+    const data = await apiPost('/api/v1/optimize/one-click');
+    btn.disabled = false;
+    btn.textContent = '开始优化';
+    if (!data || data.error) { showToast((data && data.error) || '一键优化失败', true); return; }
+    const parts = [];
+    if (data.clean && data.clean.success) parts.push(`清理释放 ${data.clean.freed_text}`);
+    if (data.memory && data.memory.success) parts.push(`内存释放 ${data.memory.released_text}`);
+    showToast('优化完成：' + parts.join('，'));
+    loadOverview();
+    if (data.recommendations && data.recommendations.length) {
+        document.getElementById('recommendCard').style.display = 'block';
+        const list = document.getElementById('recommendList');
+        list.innerHTML = '';
+        data.recommendations.forEach(r => {
+            const row = document.createElement('div');
+            row.className = 'item-row';
+            row.innerHTML = `
+                <div class="item-body">
+                    <div class="item-name">${r.name}</div>
+                    <div class="item-path" title="${r.source}">${r.source}</div>
+                </div>
+                <button class="btn btn-outline" style="padding:8px 16px;font-size:12px"
+                        onclick="disableStartup('${r.item_id}', this)">禁用</button>`;
+            list.appendChild(row);
+        });
+    } else {
+        document.getElementById('recommendCard').style.display = 'none';
+    }
+    document.querySelector('.tab[data-tab="startup"]').dataset.loaded = '';
+}
+
+// ── 启动项管理 ──
+async function loadStartup() {
+    const list = document.getElementById('startupList');
+    list.dataset.loaded = '1';
+    list.innerHTML = '<div class="empty">正在加载启动项…</div>';
+    const data = await apiGet('/api/v1/optimize/startup');
+    if (!data || data.error) {
+        list.innerHTML = '<div class="empty">启动项加载失败</div>';
+        return;
+    }
+    if (!data.items.length) {
+        list.innerHTML = '<div class="empty">未发现启动项</div>';
+        return;
+    }
+    list.innerHTML = '';
+    data.items.forEach(item => {
+        const row = document.createElement('div');
+        row.className = 'item-row';
+        const enabled = item.status === 'enabled';
+        row.innerHTML = `
+            <div class="item-body">
+                <div class="item-name">${item.name} <span class="badge ${enabled ? 'enabled' : 'disabled'}">${enabled ? '已启用' : '已禁用'}</span></div>
+                <div class="item-path" title="${item.source}">${item.source}</div>
+            </div>
+            <label class="switch">
+                <input type="checkbox" ${enabled ? 'checked' : ''} onchange="toggleStartup('${item.item_id}', this)">
+                <span class="switch-track"></span>
+            </label>`;
+        list.appendChild(row);
+    });
+}
+
+async function toggleStartup(itemId, el) {
+    el.disabled = true;
+    const action = el.checked ? 'enable' : 'disable';
+    const data = await apiPost('/api/v1/optimize/startup/toggle', { item_id: itemId, action });
+    if (!data || !data.success) {
+        el.checked = !el.checked;
+        showToast((data && data.error) || '操作失败', true);
+    } else {
+        showToast(data.message || '操作成功');
+        document.querySelector('.tab[data-tab="startup"]').dataset.loaded = '';
+        loadStartup();
+        return;
+    }
+    el.disabled = false;
+}
+
+async function disableStartup(itemId, btn) {
+    btn.disabled = true;
+    const data = await apiPost('/api/v1/optimize/startup/toggle', { item_id: itemId, action: 'disable' });
+    btn.disabled = false;
+    if (!data || !data.success) { showToast((data && data.error) || '禁用失败', true); return; }
+    showToast(data.message || '已禁用');
+    const list = document.getElementById('recommendList');
+    if (btn.parentElement) btn.parentElement.remove();
+    if (!list.children.length) document.getElementById('recommendCard').style.display = 'none';
+}
+
+// ── 服务优化 ──
+const START_LABELS = { auto: '自动', manual: '手动', disabled: '禁用' };
+
+async function loadServices() {
+    const list = document.getElementById('serviceList');
+    const sysList = document.getElementById('systemServiceList');
+    list.dataset.loaded = '1';
+    list.innerHTML = '<div class="empty">正在加载服务列表…</div>';
+    sysList.innerHTML = '<div class="empty">正在加载…</div>';
+    const data = await apiGet('/api/v1/optimize/services');
+    if (!data || data.error) {
+        list.innerHTML = '<div class="empty">服务列表加载失败</div>';
+        sysList.innerHTML = '';
+        return;
+    }
+    list.innerHTML = data.manageable_count ? '' : '<div class="empty">未发现可管理的第三方服务</div>';
+    data.manageable.forEach(svc => list.appendChild(serviceRow(svc, false)));
+    sysList.innerHTML = data.readonly_count ? '' : '<div class="empty">未发现系统服务</div>';
+    data.readonly.slice(0, 30).forEach(svc => sysList.appendChild(serviceRow(svc, true)));
+}
+
+function serviceRow(svc, readonly) {
+    const row = document.createElement('div');
+    row.className = 'item-row';
+    const startLabel = START_LABELS[svc.start_type] || svc.start_type;
+    const options = ['auto', 'manual', 'disabled'].map(v =>
+        `<option value="${v}" ${v === svc.start_type ? 'selected' : ''}>${START_LABELS[v]}</option>`).join('');
+    row.innerHTML = `
+        <div class="item-body">
+            <div class="item-name">${svc.display} <span class="badge ${readonly ? 'ro' : svc.start_type === 'disabled' ? 'disabled' : svc.start_type === 'auto' ? 'auto' : 'manual'}">${readonly ? '系统只读' : startLabel}</span></div>
+            <div class="item-path" title="${svc.image_path}">${svc.image_path || svc.name}</div>
+        </div>
+        ${readonly
+            ? '<span style="color:var(--text-muted);font-size:12px">受保护</span>'
+            : `<select class="select" onchange="toggleService('${svc.name}', this)">${options}</select>`}`;
+    return row;
+}
+
+async function toggleService(name, sel) {
+    const old = sel.dataset.old || sel.value;
+    const data = await apiPost('/api/v1/optimize/services/toggle', { name, action: sel.value });
+    if (!data || !data.success) {
+        sel.value = old;
+        showToast((data && data.error) || '服务设置失败', true);
+    } else {
+        showToast(data.message || '服务设置成功');
+        document.getElementById('serviceList').dataset.loaded = '';
+        loadServices();
+    }
+}
+
+// ── 内存释放 ──
+function formatSize(num) {
+    num = Number(num || 0);
+    if (num < 1024) return num + ' B';
+    const units = ['KB', 'MB', 'GB', 'TB'];
+    let i = -1;
+    do { num /= 1024; i++; } while (num >= 1024 && i < units.length - 1);
+    return num.toFixed(1) + ' ' + units[i];
+}
+
+async function loadMemoryInfo() {
+    const data = await apiGet('/api/v1/optimize/overview');
+    if (!data || !data.memory) return;
+    document.getElementById('memTotal').dataset.loaded = '1';
+    const m = data.memory;
+    document.getElementById('memUsed').textContent = m.used_text;
+    document.getElementById('memTotal').textContent = m.total_text;
+    const pct = Math.round(m.used_percent);
+    document.getElementById('memPct').textContent = pct + '%';
+    document.getElementById('memBar').style.width = pct + '%';
+}
+
+async function releaseMemory() {
+    const btn = document.getElementById('btnMemory');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> 释放中…';
+    const data = await apiPost('/api/v1/optimize/memory');
+    btn.disabled = false;
+    btn.textContent = '立即释放';
+    const box = document.getElementById('memResult');
+    if (!data || !data.success) {
+        box.style.display = 'block';
+        box.style.background = 'var(--danger-dim)';
+        box.style.color = 'var(--danger)';
+        box.textContent = '内存释放失败：' + ((data && data.error) || '未知错误');
+        return;
+    }
+    box.style.display = 'block';
+    box.style.background = 'var(--accent-dim)';
+    box.style.color = 'var(--accent)';
+    box.textContent = `已处理 ${data.processed} 个进程，释放内存 ${data.released_text}`;
+    showToast(`内存释放完成：${data.released_text}`);
+    setTimeout(() => loadMemoryInfo(), 600);
+}
+
+// 初始化
+loadOverview();
+</script>
+</body>
+</html>

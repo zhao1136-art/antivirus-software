@@ -1,11 +1,11 @@
 /**
- * 安盾 原生引擎 DLL - 主入口
+ * 御天 原生引擎 DLL - 主入口
  */
 #include "native_common.h"
 
 // 版本信息
 extern "C" __declspec(dllexport) char* native_engine_version() {
-    return alloc_str("{\"name\":\"安盾 Native Engine\",\"version\":\"1.0.0\",\"modules\":[\"sha256\",\"pe_parser\",\"heuristic\",\"sys_scanner\",\"quarantine\"]}");
+    return alloc_str("{\"name\":\"御天 Native Engine\",\"version\":\"1.0.0\",\"modules\":[\"sha256\",\"pe_parser\",\"heuristic\",\"sys_scanner\",\"quarantine\"]}");
 }
 
 // 释放字符串（Python ctypes 调用）

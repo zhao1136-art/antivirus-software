@@ -1,5 +1,5 @@
 """
-安盾 进程联网监控模块
+御天 进程联网监控模块
 监控进程外联连接，匹配 C2 威胁情报黑名单，检测可疑网络行为
 """
 import os
@@ -201,12 +201,4 @@ def get_network_monitor() -> NetworkMonitor:
     return _monitor_instance
 
 
-if __name__ == "__main__":
-    nm = NetworkMonitor()
-    summary = nm.scan_summary()
-    print(f"总连接: {summary['total_connections']}")
-    print(f"已建立: {summary['established']}")
-    print(f"高风险(C2): {summary['high_risk']}")
-    print(f"可疑: {summary['suspicious']}")
-    for c in summary["high_risk_details"]:
-        print(f"  [C2] {c['process_name']} -> {c['remote_addr']}:{c['remote_port']} ({c['c2_family']})")
+

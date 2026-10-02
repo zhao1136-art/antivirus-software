@@ -20,6 +20,15 @@ _DLL_NAME = "native_guard.dll"
 
 def _find_dll() -> Optional[str]:
     """查找 native_guard.dll 文件路径"""
+    # ── native_guard.dll 启用策略 ──
+    # 历史崩溃根因已定位并修复：
+    #   1) 调用约定不匹配：导出为 __cdecl，而桥接层用 windll(__stdcall) 调用，
+    #      栈不平衡触发 0xC0000005；已改用 ctypes.CDLL（见 _load）。
+    #   2) ETW 未启动时访问未初始化临界区；已在 etw_guard.cpp 各查询导出
+    #      前加 ensure_locks()，并重新编译。
+    # 默认启用。若需临时关闭以回退 Python 引擎，可设 YUTIAN_NATIVE_GUARD=0。
+    if os.environ.get("YUTIAN_NATIVE_GUARD", "").strip() == "0":
+        return None
     base = os.path.dirname(os.path.abspath(__file__))
     candidates = [
         os.path.join(base, "native_guard", _DLL_NAME),
@@ -42,7 +51,7 @@ def _find_dll() -> Optional[str]:
 # ========================================================================
 
 class NativeGuard:
-    """安盾原生防护引擎 - ctypes 绑定"""
+    """御天原生防护引擎 - ctypes 绑定"""
 
     def __init__(self, dll_path: Optional[str] = None):
         self._dll: Optional[ctypes.CDLL] = None
@@ -62,7 +71,12 @@ class NativeGuard:
 
     def _load(self, path: str):
         """加载 DLL 并设置函数签名"""
-        self._dll = ctypes.windll.LoadLibrary(path)
+        # 关键修复：native_guard 的导出函数均使用 C 默认 __cdecl 调用约定，
+        # 而 ctypes.windll 按 __stdcall 约定调用。调用约定不匹配会导致栈不平衡，
+        # 触发访问违规 0xC0000005（进程级崩溃，Python try/except 无法捕获）。
+        # 必须改用 ctypes.CDLL（cdecl）加载。已用隔离探针逐个验证所有导出。
+        self._dll = ctypes.CDLL(path)
+        self._funcs: set = set()   # 实际存在的导出函数名（缺失时优雅降级）
 
         # 所有返回 char* 的函数都用 c_void_p，避免 ctypes 自动释放
         # 然后手动调用 guard_free_string 释放 C 侧内存
@@ -74,19 +88,35 @@ class NativeGuard:
             "guard_fileless_scan_cmdlines", "guard_fileless_check_wmi",
             "guard_persist_scan_all",
             "guard_net_enum_tcp", "guard_net_enum_with_risk",
-            # ETW 事中检测
+            # ETW 事中检测（多 Provider 升级）
             "guard_etw_start", "guard_etw_stop", "guard_etw_status",
             "guard_etw_get_events",
+            "guard_etw_get_correlations",   # 事件关联引擎（攻击链）
+            "guard_etw_process_tree",       # 进程树行为评分（带 int 参数）
+            "guard_etw_health",             # Provider 健康监控
+            "guard_scan_amsi_tamper",       # AMSI 篡改扫描
+            "guard_scan_etw_tamper",        # ETW 自身防篡改扫描
         ]
         for fname in VOID_FUNCS:
-            func = getattr(self._dll, fname)
+            try:
+                func = getattr(self._dll, fname)
+            except AttributeError:
+                print(f"[NativeGuard] 导出函数缺失（DLL 版本过旧，已降级）: {fname}")
+                continue
             func.restype = ctypes.c_void_p
+            self._funcs.add(fname)
 
-        # 参数类型设置
-        self._dll.guard_inject_scan_memory.argtypes = [ctypes.c_uint32]
-        self._dll.guard_inject_enum_modules.argtypes = [ctypes.c_uint32]
-        self._dll.guard_inject_dump_memory.argtypes = [ctypes.c_uint32, ctypes.c_char_p]
-        self._dll.guard_inject_dump_memory.restype = ctypes.c_int
+        # 参数类型设置（仅对存在的函数设置，避免 DLL 版本不匹配时加载失败）
+        def _set_argtypes(name, types):
+            if name in self._funcs:
+                getattr(self._dll, name).argtypes = types
+
+        _set_argtypes("guard_inject_scan_memory", [ctypes.c_uint32])
+        _set_argtypes("guard_inject_enum_modules", [ctypes.c_uint32])
+        _set_argtypes("guard_inject_dump_memory", [ctypes.c_uint32, ctypes.c_char_p])
+        _set_argtypes("guard_etw_process_tree", [ctypes.c_int])
+        if "guard_inject_dump_memory" in self._funcs:
+            self._dll.guard_inject_dump_memory.restype = ctypes.c_int
 
         self._dll.guard_free_string.argtypes = [ctypes.c_void_p]
         self._dll.guard_free_string.restype = None
@@ -96,6 +126,9 @@ class NativeGuard:
     def _call(self, func_name: str, *args) -> Any:
         """调用 C++ 函数并解析 JSON 结果（正确处理 C 字符串内存）"""
         if not self._loaded or self._dll is None:
+            return None
+        if func_name not in self._funcs:
+            print(f"[NativeGuard] 函数 {func_name} 在当前 DLL 中不存在")
             return None
         try:
             func = getattr(self._dll, func_name)
@@ -246,30 +279,78 @@ class NativeGuard:
         return self._call("guard_net_enum_with_risk")
 
     # ====================================================================
-    # ETW 事中检测（升级一）
+    # ETW 事中检测（升级一：多 Provider 覆盖 + 架构增强）
     # ====================================================================
 
     def etw_start(self) -> dict:
         """
-        启动 ETW Threat-Intelligence 事中检测
-        :returns: {success, status}
+        启动 ETW 事中检测（多 Provider 会话）
+        覆盖: Threat-Intelligence / Kernel-Process / Kernel-File / Kernel-Registry /
+              DNS-Client / PowerShell / WMI-Activity / DotNETRuntime / Sysmon
+        :returns: {success, ...}
         """
         return self._call("guard_etw_start")
 
     def etw_stop(self) -> dict:
-        """停止 ETW 检测"""
+        """停止 ETW 检测（事件已持久化到内存映射，重启后可恢复）"""
         return self._call("guard_etw_stop")
 
     def etw_status(self) -> dict:
-        """ETW 状态"""
+        """
+        ETW 状态（含各 Provider 捕获统计）
+        :returns: {running, session_active, events_captured, suspicious,
+                   queue_size, recovered_history,
+                   providers: [{id, name, enabled, enable_ok, captured, suspicious}]}
+        """
         return self._call("guard_etw_status")
 
     def etw_get_events(self) -> dict:
         """
-        获取 ETW 捕获的可疑事件（获取后清空队列）
-        :returns: {events: [{event_id, source_pid, target_pid, start_addr, source_module, suspicious}]}
+        获取 ETW 捕获的可疑事件（获取后清空队列，含恢复的历史事件）
+        :returns: {events: [{provider, provider_id, event_id, source_pid,
+                             target_pid, parent_pid, image, image_name,
+                             detail, rule, severity, ts, suspicious, recovered}]}
         """
         return self._call("guard_etw_get_events")
+
+    def etw_get_correlations(self) -> dict:
+        """
+        事件关联引擎：获取攻击链事件（获取后清空）
+        如 MALWARE_INSTALL_CHAIN / OFFICE_MACRO_CHAIN / LSASS_DUMP_CHAIN 等
+        :returns: {correlations: [{pid, name, chain, severity, ts, detail}]}
+        """
+        return self._call("guard_etw_get_correlations")
+
+    def etw_process_tree(self, top_n: int = 20) -> dict:
+        """
+        进程树行为评分：输出风险分最高的进程及子树聚合分
+        :param top_n: 输出前 N 个进程（默认 20，范围 1-200）
+        :returns: {processes: [{pid, parent_pid, name, image,
+                                own_score, tree_score, first_seen}], total}
+        """
+        return self._call("guard_etw_process_tree", ctypes.c_int(top_n))
+
+    def etw_health(self) -> dict:
+        """
+        Provider 健康监控：会话存活 + 事件流动（自保护）
+        :returns: {running, session_active, flowing, events_since_last_poll,
+                   total_captured, total_suspicious, ever_started}
+        """
+        return self._call("guard_etw_health")
+
+    def scan_amsi_tamper(self) -> dict:
+        """
+        AMSI 篡改扫描：检测各进程 amsi.dll!AmsiScanBuffer 是否被 Inline Hook
+        :returns: {tampered, scanned, hooked: [{pid, process, addr}], details: [...]}
+        """
+        return self._call("guard_scan_amsi_tamper")
+
+    def scan_etw_tamper(self) -> dict:
+        """
+        ETW 自身防篡改扫描：检测 ntdll!EtwEventWrite 是否被 Patch + 会话存活
+        :returns: {tampered, session_active, detail}
+        """
+        return self._call("guard_scan_etw_tamper")
 
 
 # ========================================================================

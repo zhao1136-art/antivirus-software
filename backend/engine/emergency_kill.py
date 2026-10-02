@@ -280,9 +280,9 @@ class EmergencyKillManager:
             if name in SYSTEM_PROCESSES:
                 skipped.append((name, pid, "系统进程"))
                 continue
-            # 安盾自身
+            # 御天自身
             if name == self_name:
-                skipped.append((name, pid, "安盾自身"))
+                skipped.append((name, pid, "御天自身"))
                 continue
 
             ok = self._kill_process(pid, name)

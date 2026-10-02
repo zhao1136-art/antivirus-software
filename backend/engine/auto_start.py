@@ -1,6 +1,6 @@
 """
 开机自启管理模块
-通过写入 HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run 注册安盾自启
+通过写入 HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run 注册御天自启
 """
 import os
 import sys
@@ -107,9 +107,4 @@ def status() -> dict:
     return {"enabled": is_enabled()}
 
 
-if __name__ == "__main__":
-    print(f"当前状态: {'已启用' if is_enabled() else '已禁用'}")
-    action = input("切换? (y/n): ").strip().lower()
-    if action == 'y':
-        result = toggle()
-        print(f"操作结果: {result}")
+

@@ -1,5 +1,5 @@
 """
-安盾 原生引擎 - Python 绑定层（子进程方式）
+安盾破军引擎 - Python 绑定层（子进程方式）（破军主杀伐，原生利刃）
 通过调用 native_engine.exe 子进程执行高性能操作，无 CRT 兼容问题
 """
 
@@ -27,7 +27,7 @@ _EXE_PATH = _find_exe()
 
 
 def _run(*args):
-    """调用原生引擎 EXE，返回 JSON 解析结果"""
+    """调用破军引擎 EXE，返回 JSON 解析结果"""
     if _EXE_PATH is None:
         return None
     try:
@@ -39,23 +39,23 @@ def _run(*args):
         if result.returncode == 0 and result.stdout.strip():
             return json.loads(result.stdout.strip())
         if result.stderr:
-            print(f"[NativeEngine] stderr: {result.stderr}")
+            print(f"[破军引擎] stderr: {result.stderr}")
         return None
     except subprocess.TimeoutExpired:
-        print(f"[NativeEngine] 超时: {' '.join(args)}")
+        print(f"[破军引擎] 超时: {' '.join(args)}")
         return None
     except json.JSONDecodeError as e:
-        print(f"[NativeEngine] JSON 解析失败: {e}")
+        print(f"[破军引擎] JSON 解析失败: {e}")
         return None
     except Exception as e:
-        print(f"[NativeEngine] 调用失败: {e}")
+        print(f"[破军引擎] 调用失败: {e}")
         return None
 
 
 # ============== Python 接口类 ==============
 
 class NativeEngine:
-    """安盾原生引擎 Python 接口"""
+    """御天破军引擎 Python 接口"""
 
     @staticmethod
     def available() -> bool:
