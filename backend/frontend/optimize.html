@@ -115,6 +115,9 @@
         .btn-outline:hover { border-color: var(--accent); color: var(--accent); }
         .btn-danger { background: var(--danger); color: #fff; }
         .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none !important; }
+        /* 取消按钮：运行期间可见可点，结束后隐藏（取消是正常路径，用中性黄而非红色） */
+        .btn-cancel { background: transparent; border: 1px solid var(--warning); color: var(--warning); }
+        .btn-cancel:hover:not(:disabled) { background: rgba(255,204,0,0.12); }
 
         /* ── Tab 导航 ── */
         .tabs { display: flex; gap: 8px; margin-bottom: 24px; }
@@ -292,7 +295,10 @@
                             <div class="score-label">健康评分</div>
                         </div>
                     </div>
-                    <button class="btn btn-outline" style="width:100%" onclick="loadOverview()">刷新体检</button>
+                    <button class="btn btn-outline" style="width:100%" id="btnRefreshOverview" onclick="loadOverview()">刷新体检</button>
+                    <button class="btn btn-cancel" id="btnCancelOverview" onclick="cancelOverview()" style="display:none;width:100%;margin-top:8px">
+                        <span>取消体检</span>
+                    </button>
                 </div>
                 <div class="card">
                     <h3 class="card-title">检查结果</h3>
@@ -306,7 +312,12 @@
                     <div style="font-size:15px;font-weight:700;margin-bottom:4px">一键优化</div>
                     <div style="font-size:13px;color:var(--text-secondary)">清理临时垃圾、释放内存，并给出启动项优化建议（不自动禁用）</div>
                 </div>
-                <button class="btn btn-primary" id="btnOneClick" onclick="runOneClick()">开始优化</button>
+                <div style="display:flex;gap:10px;align-items:center">
+                    <button class="btn btn-primary" id="btnOneClick" onclick="runOneClick()">开始优化</button>
+                    <button class="btn btn-cancel" id="btnCancelOneClick" onclick="cancelOneClick()" style="display:none">
+                        <span>取消优化</span>
+                    </button>
+                </div>
             </div>
             <div class="card" id="recommendCard" style="display:none;margin-top:24px">
                 <h3 class="card-title">启动项优化建议</h3>
@@ -354,7 +365,12 @@
                 </div>
                 <div style="margin-top:24px;display:flex;justify-content:space-between;align-items:center">
                     <div style="font-size:12px;color:var(--text-muted)">通过收缩空闲进程工作集释放内存，不影响运行中程序</div>
-                    <button class="btn btn-primary" id="btnMemory" onclick="releaseMemory()">立即释放</button>
+                    <div style="display:flex;gap:10px;align-items:center">
+                        <button class="btn btn-primary" id="btnMemory" onclick="releaseMemory()">立即释放</button>
+                        <button class="btn btn-cancel" id="btnCancelMemory" onclick="cancelMemory()" style="display:none">
+                            <span>取消释放</span>
+                        </button>
+                    </div>
                 </div>
                 <div id="memResult" style="display:none;margin-top:16px;padding:14px 16px;border-radius:var(--radius-sm);background:var(--accent-dim);color:var(--accent);font-size:13px"></div>
             </div>
@@ -369,13 +385,44 @@ const API_BASE = '';
 let toastTimer = null;
 let overviewData = null;
 
-function showToast(msg, isError) {
+function showToast(msg, isError, isWarn) {
     const t = document.getElementById('toast');
     t.textContent = msg;
-    t.style.borderLeftColor = isError ? 'var(--danger)' : 'var(--accent)';
+    t.style.borderLeftColor = isWarn ? 'var(--warning)' : (isError ? 'var(--danger)' : 'var(--accent)');
     t.classList.add('show');
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => t.classList.remove('show'), 3500);
+}
+
+// ── 可取消任务通用轮询（通用 /api/v1/jobs 接口）──
+let overviewJobId = null;
+let oneClickJobId = null;
+let memoryJobId = null;
+
+function setCancelBtn(id, visible, busy, busyText, normalText) {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    btn.style.display = visible ? 'inline-flex' : 'none';
+    btn.disabled = !!busy;
+    const span = btn.querySelector('span');
+    if (span) span.textContent = busy ? busyText : normalText;
+}
+
+function pollJobUntilDone(taskId, onTick) {
+    return new Promise(resolve => {
+        const timer = setInterval(async () => {
+            const st = await apiGet('/api/v1/jobs/' + taskId + '/status');
+            if (!st) { clearInterval(timer); resolve(null); return; }
+            if (st.status === 'queued' || st.status === 'running') {
+                if (onTick) onTick(st);
+                return;
+            }
+            clearInterval(timer);
+            if (st.status === 'cancelled') resolve({ cancelled: true, partial: st.result });
+            else if (st.status === 'failed') resolve({ error: st.error || '任务失败' });
+            else resolve(st.result);
+        }, 400);
+    });
 }
 
 async function apiGet(path) {
@@ -413,8 +460,22 @@ const CHECK_ICONS = {
 };
 
 async function loadOverview() {
-    const data = await apiGet('/api/v1/optimize/overview');
-    if (!data || data.error) {
+    // 体检改为可取消的后台任务（后端 SystemOptimizer.overview 支持 cancel 令牌）
+    const job = await apiPost('/api/v1/jobs', { kind: 'optimize-overview', params: {} });
+    if (!job || !job.task_id) {
+        document.getElementById('checkList').innerHTML = '<div class="empty">体检数据获取失败</div>';
+        return;
+    }
+    overviewJobId = job.task_id;
+    setCancelBtn('btnCancelOverview', true, false, '正在取消…', '取消体检');
+    const data = await pollJobUntilDone(job.task_id);
+    setCancelBtn('btnCancelOverview', false, false, '正在取消…', '取消体检');
+    overviewJobId = null;
+    if (data && data.cancelled) {
+        showToast('体检已取消', false, true);
+        return;
+    }
+    if (!data || data.error || !data.checks) {
         document.getElementById('checkList').innerHTML = '<div class="empty">体检数据获取失败</div>';
         return;
     }
@@ -444,10 +505,28 @@ async function runOneClick() {
     const btn = document.getElementById('btnOneClick');
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span> 优化中…';
-    const data = await apiPost('/api/v1/optimize/one-click');
+    const job = await apiPost('/api/v1/jobs', { kind: 'optimize-one-click', params: {} });
+    if (!job || !job.task_id) {
+        btn.disabled = false;
+        btn.textContent = '开始优化';
+        showToast('一键优化失败', true);
+        return;
+    }
+    oneClickJobId = job.task_id;
+    setCancelBtn('btnCancelOneClick', true, false, '正在取消…', '取消优化');
+    const data = await pollJobUntilDone(job.task_id);
+    setCancelBtn('btnCancelOneClick', false, false, '正在取消…', '取消优化');
+    oneClickJobId = null;
     btn.disabled = false;
     btn.textContent = '开始优化';
-    if (!data || data.error) { showToast((data && data.error) || '一键优化失败', true); return; }
+    if (!data || (data.error && !data.cancelled)) { showToast((data && data.error) || '一键优化失败', true); return; }
+    if (data.cancelled) {
+        const done = [];
+        if (data.clean && data.clean.success) done.push(`已清理 ${data.clean.freed_text}`);
+        showToast('优化已取消' + (done.length ? '（' + done.join('，') + '）' : ''), false, true);
+        loadOverview();
+        return;
+    }
     const parts = [];
     if (data.clean && data.clean.success) parts.push(`清理释放 ${data.clean.freed_text}`);
     if (data.memory && data.memory.success) parts.push(`内存释放 ${data.memory.released_text}`);
@@ -611,10 +690,30 @@ async function releaseMemory() {
     const btn = document.getElementById('btnMemory');
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span> 释放中…';
-    const data = await apiPost('/api/v1/optimize/memory');
+    const job = await apiPost('/api/v1/jobs', { kind: 'optimize-memory', params: {} });
+    if (!job || !job.task_id) {
+        btn.disabled = false;
+        btn.textContent = '立即释放';
+        showToast('内存释放失败', true);
+        return;
+    }
+    memoryJobId = job.task_id;
+    setCancelBtn('btnCancelMemory', true, false, '正在取消…', '取消释放');
+    const data = await pollJobUntilDone(job.task_id);
+    setCancelBtn('btnCancelMemory', false, false, '正在取消…', '取消释放');
+    memoryJobId = null;
     btn.disabled = false;
     btn.textContent = '立即释放';
     const box = document.getElementById('memResult');
+    if (data && data.cancelled) {
+        // 取消是正常路径：中性黄，不使用红色错误样式
+        box.style.display = 'block';
+        box.style.background = 'rgba(255,204,0,0.12)';
+        box.style.color = 'var(--warning)';
+        box.textContent = '内存释放已取消';
+        showToast('内存释放已取消', false, true);
+        return;
+    }
     if (!data || !data.success) {
         box.style.display = 'block';
         box.style.background = 'var(--danger-dim)';
@@ -628,6 +727,27 @@ async function releaseMemory() {
     box.textContent = `已处理 ${data.processed} 个进程，释放内存 ${data.released_text}`;
     showToast(`内存释放完成：${data.released_text}`);
     setTimeout(() => loadMemoryInfo(), 600);
+}
+
+async function cancelOverview() {
+    if (!overviewJobId) return;
+    setCancelBtn('btnCancelOverview', true, true, '正在取消…', '取消体检');
+    await apiPost('/api/v1/jobs/' + overviewJobId + '/cancel');
+    showToast('已请求取消体检，正在停止…', false, true);
+}
+
+async function cancelOneClick() {
+    if (!oneClickJobId) return;
+    setCancelBtn('btnCancelOneClick', true, true, '正在取消…', '取消优化');
+    await apiPost('/api/v1/jobs/' + oneClickJobId + '/cancel');
+    showToast('已请求取消优化，正在停止…', false, true);
+}
+
+async function cancelMemory() {
+    if (!memoryJobId) return;
+    setCancelBtn('btnCancelMemory', true, true, '正在取消…', '取消释放');
+    await apiPost('/api/v1/jobs/' + memoryJobId + '/cancel');
+    showToast('已请求取消内存释放，正在停止…', false, true);
 }
 
 // 初始化

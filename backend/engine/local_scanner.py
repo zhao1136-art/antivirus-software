@@ -149,7 +149,18 @@ class LocalScanner:
                     futures[_SHARED_POOL.submit(self._scan_single_file, fp, scan_hashes)] = fp
                     continue
                 # 窗口已满：等待至少一个完成，回收内存
-                done, _ = wait(futures, return_when=FIRST_COMPLETED)
+                # 分片等待（0.2s）而不是阻塞到某个任务完成：单文件最长可能
+                # 跑 SINGLE_FILE_TIMEOUT(60s)，整体阻塞会让取消请求最多延迟
+                # 60s 才被主循环看到（用户看到"取消无效"）。
+                done = set()
+                while True:
+                    if self._is_cancelled():
+                        break
+                    done, _ = wait(futures, timeout=0.2, return_when=FIRST_COMPLETED)
+                    if done:
+                        break
+                if self._is_cancelled():
+                    break
                 _drain(done)
                 # 前台降权：有其他程序在前台时降低扫描对 CPU 的占用
                 if foreground_active():
@@ -161,10 +172,19 @@ class LocalScanner:
                     if self._is_cancelled():
                         break
                     _drain({f})
-            # 取消时也要把已提交的 future 结果取走，避免 pending 泄漏
-            for f in futures:
+            # 取消时不再逐个等待剩余 future：每个 f.result() 最长等
+            # SINGLE_FILE_TIMEOUT(60s)，窗口内可能积压数百个，会让取消后的
+            # 扫描线程被占住几分钟，进而占满调度线程池、后续扫描排不上队。
+            # 尚未开始执行的任务直接取消（释放线程池额度）；已开始的只能在
+            # 共享池里自行结束（正在读文件无法安全中断），但这里不再阻塞等待。
+            for f in list(futures):
+                if self._is_cancelled():
+                    f.cancel()
+                    continue
+                if not f.done():
+                    continue
                 try:
-                    f.result(timeout=SINGLE_FILE_TIMEOUT)
+                    f.result(timeout=0)
                 except Exception:
                     pass
         finally:

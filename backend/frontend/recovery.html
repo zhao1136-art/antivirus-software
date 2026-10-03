@@ -42,6 +42,13 @@
         .btn-outline{background:transparent;color:var(--text-secondary);border:1px solid var(--border)}
         .btn-outline:hover{background:var(--bg-hover);color:var(--text-primary);border-color:var(--border-light)}
         .btn-sm{padding:6px 14px;font-size:12px}
+/* 取消按钮：运行期间可见可点，结束后隐藏（取消是正常路径，用中性黄而非红色） */
+.btn-cancel{background:transparent;color:var(--warning);border:1px solid var(--warning)}
+.btn-cancel:hover:not(:disabled){background:rgba(255,204,0,0.12)}
+.btn-cancel:disabled{opacity:0.55;cursor:default}
+/* 轻量提示条（与 clean/optimize/guard 页面的 showToast 视觉一致） */
+.toast{position:fixed;top:24px;right:24px;z-index:9999;padding:12px 20px;border-radius:10px;background:var(--bg-card);border:1px solid var(--border);border-left:3px solid var(--accent);color:var(--text-primary);font-size:13px;max-width:340px;box-shadow:0 8px 24px rgba(0,0,0,0.35);transform:translateX(140%);transition:transform 0.25s ease;pointer-events:none}
+.toast.show{transform:translateX(0)}
         .stat-chip{display:flex;align-items:center;gap:6px;padding:6px 12px;background:var(--bg-hover);border-radius:20px;font-size:12px;font-weight:600;color:var(--text-secondary)}
         .stat-chip svg{width:14px;height:14px}
         .input-text{padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);font-size:13px;font-family:'DM Sans',sans-serif;outline:none;transition:var(--transition);flex:1;min-width:200px}
@@ -165,6 +172,9 @@
                 <div class="card-row">
                     <h3 class="card-title" style="margin-bottom:0"><svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" width="16" height="16" style="margin-right:8px;vertical-align:-2px"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="10"/></svg>版本历史</h3>
                     <button class="btn btn-outline btn-sm" onclick="loadVersions()">刷新</button>
+                    <button class="btn btn-cancel btn-sm" id="btnCancelRestore" onclick="cancelRestore()" style="display:none">
+                        <span>取消恢复</span>
+                    </button>
                 </div>
                 <div id="versionContainer">
                     <div class="empty-block">请从左侧选择一个文件查看版本历史</div>
@@ -191,6 +201,8 @@
         </div>
     </main>
 </div>
+
+<div class="toast" id="toast"></div>
 
 <script>
     const API_BASE = ''; // 动态适配当前 origin
@@ -222,6 +234,47 @@
         } catch(e) { console.warn(e); return null; }
     }
     function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
+
+    // ── 提示条 ──
+    let toastTimer = null;
+    function showToast(msg, isError, isWarn) {
+        const t = document.getElementById('toast');
+        if (!t) return;
+        t.textContent = msg;
+        t.style.borderLeftColor = isWarn ? 'var(--warning)' : (isError ? 'var(--danger)' : 'var(--accent)');
+        t.classList.add('show');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => t.classList.remove('show'), 3500);
+    }
+
+    // ── 可取消任务通用轮询（通用 /api/v1/jobs 接口）──
+    let restoreJobId = null;
+
+    function setCancelBtn(id, visible, busy, busyText, normalText) {
+        const btn = document.getElementById(id);
+        if (!btn) return;
+        btn.style.display = visible ? 'inline-flex' : 'none';
+        btn.disabled = !!busy;
+        const span = btn.querySelector('span');
+        if (span) span.textContent = busy ? busyText : normalText;
+    }
+
+    function pollJobUntilDone(taskId, onTick) {
+        return new Promise(resolve => {
+            const timer = setInterval(async () => {
+                const st = await apiGet('/api/v1/jobs/' + taskId + '/status');
+                if (!st) { clearInterval(timer); resolve(null); return; }
+                if (st.status === 'queued' || st.status === 'running') {
+                    if (onTick) onTick(st);
+                    return;
+                }
+                clearInterval(timer);
+                if (st.status === 'cancelled') resolve({ cancelled: true, partial: st.result });
+                else if (st.status === 'failed') resolve({ error: st.error || '任务失败' });
+                else resolve(st.result);
+            }, 400);
+        });
+    }
 
     let allFiles = [];
     let currentFile = null;
@@ -293,8 +346,33 @@
 
     async function restoreVersion(path, idx, id) {
         if (!confirm('确认将该文件恢复到此版本？当前版本将被覆盖。')) return;
-        const r = await apiPost('/api/v1/recovery/restore', { file_path:path, version_id:id });
-        if (r) alert('恢复成功');
+        // 走通用可取消任务接口：后端 restore_version 分块复制并在块间检查取消令牌
+        const job = await apiPost('/api/v1/jobs', {
+            kind: 'recovery-restore',
+            params: { file_path: path, version_id: id }
+        });
+        if (!job || !job.task_id) { showToast('恢复任务启动失败', true); return; }
+        restoreJobId = job.task_id;
+        setCancelBtn('btnCancelRestore', true, false, '正在取消…', '取消恢复');
+        const data = await pollJobUntilDone(job.task_id);
+        setCancelBtn('btnCancelRestore', false, false, '正在取消…', '取消恢复');
+        restoreJobId = null;
+        if (data && data.cancelled) {
+            // 取消是正常路径：中性黄提示，且不留下半截文件（后端临时文件已清理）
+            showToast('恢复已取消，文件未被修改', false, true);
+            loadVersions();
+            return;
+        }
+        if (data && data.error) { showToast('恢复失败：' + data.error, true); return; }
+        if (data && data.ok) { showToast('恢复成功'); loadVersions(); loadStats(); loadFiles(); }
+        else { showToast('恢复失败', true); }
+    }
+
+    async function cancelRestore() {
+        if (!restoreJobId) return;
+        setCancelBtn('btnCancelRestore', true, true, '正在取消…', '取消恢复');
+        await apiPost('/api/v1/jobs/' + restoreJobId + '/cancel');
+        showToast('已请求取消恢复，正在停止…', false, true);
     }
     async function deleteVersion(path, idx, id) {
         if (!confirm('确认删除此版本？此操作不可撤销。')) return;

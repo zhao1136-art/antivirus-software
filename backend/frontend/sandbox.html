@@ -44,6 +44,13 @@
         .btn-outline{background:transparent;color:var(--text-secondary);border:1px solid var(--border)}
         .btn-outline:hover{background:var(--bg-hover);color:var(--text-primary);border-color:var(--border-light)}
         .btn-sm{padding:6px 14px;font-size:12px}
+/* 取消按钮：运行期间可见可点，结束后隐藏（取消是正常路径，用中性黄而非红色） */
+.btn-cancel{background:transparent;color:var(--warning);border:1px solid var(--warning)}
+.btn-cancel:hover:not(:disabled){background:rgba(255,204,0,0.12)}
+.btn-cancel:disabled{opacity:0.55;cursor:default}
+/* 轻量提示条（与 clean/optimize/guard 页面的 showToast 视觉一致） */
+.toast{position:fixed;top:24px;right:24px;z-index:9999;padding:12px 20px;border-radius:10px;background:var(--bg-card);border:1px solid var(--border);border-left:3px solid var(--accent);color:var(--text-primary);font-size:13px;max-width:340px;box-shadow:0 8px 24px rgba(0,0,0,0.35);transform:translateX(140%);transition:transform 0.25s ease;pointer-events:none}
+.toast.show{transform:translateX(0)}
         .status-tag{font-size:12px;font-weight:700;padding:4px 12px;border-radius:20px;text-transform:uppercase;letter-spacing:0.5px}
         .status-tag.ok{background:var(--accent-dim);color:var(--accent)}
         .status-tag.fail{background:var(--danger-dim);color:var(--danger)}
@@ -183,6 +190,9 @@
             <input type="file" id="fileInput" style="display:none" onchange="onFilePicked(this.files[0])">
             <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap">
                 <button class="btn btn-primary" id="analyzeBtn" onclick="startAnalyze()" disabled>开始分析</button>
+                <button class="btn btn-cancel" id="btnCancelAnalyze" onclick="cancelAnalyze()" style="display:none">
+                    <span>取消分析</span>
+                </button>
                 <button class="btn btn-outline" onclick="loadHistory()">刷新历史</button>
             </div>
         </div>
@@ -239,6 +249,8 @@
     </main>
 </div>
 
+<div class="toast" id="toast"></div>
+
 <script>
     const API_BASE = ''; // 动态适配当前 origin
 
@@ -269,6 +281,28 @@
         } catch(e) { console.warn(e); return null; }
     }
     function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
+
+    // ── 提示条 ──
+    let toastTimer = null;
+    function showToast(msg, isError, isWarn) {
+        const t = document.getElementById('toast');
+        if (!t) return;
+        t.textContent = msg;
+        t.style.borderLeftColor = isWarn ? 'var(--warning)' : (isError ? 'var(--danger)' : 'var(--accent)');
+        t.classList.add('show');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => t.classList.remove('show'), 3500);
+    }
+
+    // ── 取消按钮显隐 ──
+    function setCancelBtn(id, visible, busy, busyText, normalText) {
+        const btn = document.getElementById(id);
+        if (!btn) return;
+        btn.style.display = visible ? 'inline-flex' : 'none';
+        btn.disabled = !!busy;
+        const span = btn.querySelector('span');
+        if (span) span.textContent = busy ? busyText : normalText;
+    }
 
     let selectedFile = null;
     let pollTimer = null;
@@ -305,7 +339,7 @@
         if (label) document.getElementById('progressLabel').textContent = label;
     }
 
-    // 开始分析
+    // 开始分析：上传文件 → 后端创建可取消的沙箱分析任务
     async function startAnalyze() {
         if (!selectedFile) { alert('请先选择文件'); return; }
         document.getElementById('analyzeBtn').disabled = true;
@@ -320,46 +354,75 @@
         formData.append('file', selectedFile);
         let resp = null;
         try {
-            const r = await fetch(API_BASE + '/api/v1/sandbox/analyze', { method:'POST', body: formData });
+            const r = await fetch(API_BASE + '/api/v1/sandbox/upload', { method:'POST', body: formData });
             resp = await r.json();
         } catch(e) { console.warn(e); }
 
-        if (!resp) {
-            // 回退：使用文件名 POST
-            appendLog('warn', '文件上传接口不可用，尝试以路径方式提交...');
-            resp = await apiPost('/api/v1/sandbox/analyze', { filename: selectedFile.name, size: selectedFile.size });
+        if (!resp || !resp.task_id) {
+            appendLog('danger', '上传/分析接口不可用');
+            showToast('沙箱分析启动失败', true);
+            document.getElementById('analyzeBtn').disabled = false;
+            setProgress(0, '分析未启动');
+            return;
         }
+        currentTaskId = resp.task_id;
+        appendLog('info', '已提交分析，任务ID: ' + currentTaskId);
+        setProgress(5, '已加入分析队列');
+        setCancelBtn('btnCancelAnalyze', true, false, '正在取消…', '取消分析');
 
-        if (!resp) { appendLog('danger', 'API 不可用'); document.getElementById('analyzeBtn').disabled = false; return; }
-        currentTaskId = resp.task_id || resp.id;
-        appendLog('info', '已提交分析，任务ID: ' + (currentTaskId||'—'));
-        setProgress(10, '已加入分析队列');
-
-        // 轮询任务状态
+        // 轮询通用可取消任务状态
         if (pollTimer) clearInterval(pollTimer);
-        let pct = 10;
         pollTimer = setInterval(async () => {
-            pct = Math.min(pct + 10, 90);
-            setProgress(pct, '分析中...');
-            const st = await apiGet('/api/v1/sandbox/status/' + (currentTaskId||''));
-            if (st && st.logs && st.logs.length) {
-                const stream = document.getElementById('logStream');
-                const existing = stream.children.length;
-                for (let i = existing; i < st.logs.length; i++) {
-                    const l = st.logs[i];
-                    appendLog(l.level||'info', l.message||l);
-                }
+            const st = await apiGet('/api/v1/jobs/' + currentTaskId + '/status');
+            if (!st) { clearInterval(pollTimer); pollTimer = null; finishAnalyze(null); return; }
+            if (st.status === 'queued' || st.status === 'running') {
+                if (st.current) appendLog('info', st.current);
+                setProgress(Math.max(5, st.progress || 5), st.current || '分析中...');
+                return;
             }
-            if (st && st.progress) setProgress(st.progress, st.status||'分析中...');
-            if (st && (st.status === 'done' || st.status === 'completed' || st.completed)) {
-                clearInterval(pollTimer); pollTimer = null;
-                setProgress(100, '分析完成');
-                appendLog('info', '分析完成');
-                renderReport(st.report || st);
-                document.getElementById('analyzeBtn').disabled = false;
-                loadHistory();
-            }
-        }, 1500);
+            clearInterval(pollTimer);
+            pollTimer = null;
+            finishAnalyze(st);
+        }, 800);
+    }
+
+    function finishAnalyze(st) {
+        setCancelBtn('btnCancelAnalyze', false, false, '正在取消…', '取消分析');
+        document.getElementById('analyzeBtn').disabled = false;
+        currentTaskId = null;
+        if (st === null) {
+            setProgress(0, '分析中断');
+            appendLog('warn', '无法获取分析状态');
+            showToast('无法获取分析状态', true);
+            return;
+        }
+        if (st.status === 'cancelled') {
+            // 取消是正常路径：中性黄提示，进度条停在当前位置
+            setProgress(Math.max(5, st.progress || 5), '分析已取消');
+            appendLog('warn', '分析已取消（沙箱进程已终止）');
+            showToast('沙箱分析已取消', false, true);
+            return;
+        }
+        if (st.status === 'failed') {
+            setProgress(0, '分析失败');
+            appendLog('danger', '分析失败: ' + (st.error || '未知错误'));
+            showToast('分析失败：' + (st.error || '未知错误'), true);
+            return;
+        }
+        const report = st.result || {};
+        setProgress(100, '分析完成');
+        appendLog('info', '分析完成');
+        renderReport(report);
+        loadHistory();
+    }
+
+    async function cancelAnalyze() {
+        if (!currentTaskId) return;
+        setCancelBtn('btnCancelAnalyze', true, true, '正在取消…', '取消分析');
+        // 后端会立刻 TerminateJobObject 杀掉沙箱进程，而不是只改前端状态
+        await apiPost('/api/v1/jobs/' + currentTaskId + '/cancel');
+        appendLog('warn', '已请求取消，正在终止沙箱进程…');
+        showToast('已请求取消分析，正在停止…', false, true);
     }
 
     function renderReport(report) {

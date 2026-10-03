@@ -993,6 +993,35 @@ async def scan_report(task_id: str):
     return task.to_dict()
 
 
+# ---------- 威胁处置决策 API ----------
+# 2026-10-03：不再"YARA 命中即自动隔离"。命中后挂起为待决项、通报给用户，
+# 由用户决定；DECISION_TIMEOUT 秒内没有决定则自动处理（默认隔离），
+# 以保证无人值守时防护不失效。系统目录的文件在此之前已被二次复核
+# （threat_decision.second_opinion，不使用 YARA）拦下，不会走到这里。
+
+class ThreatDecideRequest(BaseModel):
+    action: str          # "quarantine" | "ignore"
+
+
+@app.get("/api/v1/threats/pending")
+async def threats_pending():
+    """当前等待用户决定的威胁（前端据此显示倒计时）"""
+    from engine.threat_decision import QUEUE, DECISION_TIMEOUT
+    return {
+        "pending": QUEUE.list_pending(),
+        "timeout": DECISION_TIMEOUT,
+        "stats": QUEUE.stats,
+    }
+
+
+@app.post("/api/v1/threats/{pending_id}/decide")
+async def threats_decide(pending_id: str, req: ThreatDecideRequest):
+    """用户对待决威胁作出决定。超时后再调用返回 ok=False（已自动处理）。"""
+    from engine.threat_decision import QUEUE
+    ok = QUEUE.decide(pending_id, (req.action or "").strip().lower())
+    return {"ok": ok, "id": pending_id, "action": req.action, "stats": QUEUE.stats}
+
+
 @app.post("/api/v1/scan/{task_id}/cancel")
 async def scan_cancel(task_id: str):
     """取消扫描任务"""
@@ -4407,6 +4436,50 @@ async def recovery_watch_dirs_remove(data: dict = Body(...)):
 async def sandbox_analyze(data: dict = Body(...)):
     result = sandbox.analyze_file(data.get('file_path', ''), data.get('timeout', 30))
     return result
+
+
+@app.post('/api/v1/sandbox/upload')
+async def sandbox_upload(file: UploadFile = File(...)):
+    """上传样本并启动「可取消」的沙箱分析任务。
+
+    浏览器拿不到本地绝对路径，原 /api/v1/sandbox/analyze 只能收 JSON file_path，
+    因此前端上传路径一直是坏的（回退分支传 filename 会得到"文件不存在"的空报告）。
+    这里把上传样本落到临时目录，再交给通用任务登记表异步分析：
+      - 返回 task_id，前端轮询 GET /api/v1/jobs/{task_id}/status
+      - 取消走 POST /api/v1/jobs/{task_id}/cancel（真的 TerminateJobObject 杀进程）
+    """
+    import tempfile as _tempfile
+
+    safe_name = os.path.basename(file.filename or "sample.bin") or "sample.bin"
+    up_dir = os.path.join(_tempfile.gettempdir(), "yutian_sandbox_uploads")
+    try:
+        os.makedirs(up_dir, exist_ok=True)
+    except OSError as e:
+        return JSONResponse({"error": f"创建上传目录失败: {e}"}, 500)
+
+    dest = os.path.join(up_dir, os.urandom(4).hex() + "_" + safe_name)
+    try:
+        with open(dest, "wb") as f:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                f.write(chunk)
+    except Exception as e:
+        return JSONResponse({"error": f"样本保存失败: {e}"}, 500)
+    finally:
+        try:
+            await file.close()
+        except Exception:
+            pass
+
+    params = {"file_path": dest, "timeout": 30}
+    job = _jobs.submit(
+        "sandbox-analyze",
+        lambda token, report: _job_sandbox_analyze(token, report, params),
+        params,
+    )
+    return {"task_id": job.task_id, "file_path": dest, "filename": safe_name}
 
 @app.get('/api/v1/sandbox/status')
 async def sandbox_status():

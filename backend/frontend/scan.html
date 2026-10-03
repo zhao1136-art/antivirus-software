@@ -601,6 +601,59 @@
     color: var(--text-primary);
   }
 
+  /* 扫描中的取消按钮：运行期间可见可点，结束后隐藏 */
+  .scan-overlay-card .btn-cancel-scan {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    margin: 22px auto 0;
+    padding: 10px 26px;
+    border-radius: 10px;
+    border: 1px solid var(--danger);
+    background: transparent;
+    color: var(--danger);
+    font-size: 14px;
+    font-weight: 700;
+    font-family: 'DM Sans', sans-serif;
+    cursor: pointer;
+    transition: var(--transition);
+  }
+
+  .scan-overlay-card .btn-cancel-scan:hover:not(:disabled) {
+    background: rgba(255,77,109,0.12);
+  }
+
+  .scan-overlay-card .btn-cancel-scan:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+
+  .scan-overlay-card .scan-cancelled {
+    color: var(--warning) !important;
+  }
+
+  /* 轻量提示条（与本项目其它页面 showToast 视觉一致） */
+  .toast {
+    position: fixed;
+    top: 24px; right: 24px;
+    z-index: 9999;
+    padding: 12px 20px;
+    border-radius: 10px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    color: var(--text-primary);
+    font-size: 14px;
+    max-width: 340px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+    transform: translateX(140%);
+    transition: transform 0.25s ease;
+    pointer-events: none;
+  }
+
+  .toast.show { transform: translateX(0); }
+
   .scan-overlay-card .radar-wrap {
     position: relative;
     width: 140px; height: 140px;
@@ -970,8 +1023,11 @@
     <div class="scan-meta" style="margin-top: 8px;">
       <span id="scanRemaining"></span>
     </div>
+    <button class="btn-cancel-scan" id="btnCancelScan" onclick="cancelScan()">取消扫描</button>
   </div>
 </div>
+
+<div class="toast" id="toast"></div>
 
 <!-- ===== FOLDER PICKER DIALOG ===== -->
 <div class="scan-overlay" id="folderDialog">
@@ -1018,6 +1074,28 @@
   let currentTaskId = null;
   let ws = null;
   let scanInterval = null;
+  let scanPollTimer = null;
+  let scanRunning = false;
+  let toastTimer = null;
+
+  function showToast(msg, isError, isWarn) {
+    const t = document.getElementById('toast');
+    if (!t) return;
+    t.textContent = msg;
+    t.style.borderLeftColor = isWarn ? 'var(--warning)' : (isError ? 'var(--danger)' : 'var(--accent)');
+    t.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.classList.remove('show'), 3500);
+  }
+
+  // 取消按钮：仅扫描运行期间可见可点
+  function setCancelScanVisible(visible, busy) {
+    const btn = document.getElementById('btnCancelScan');
+    if (!btn) return;
+    btn.style.display = visible ? 'inline-flex' : 'none';
+    btn.disabled = !!busy;
+    btn.textContent = busy ? '正在取消…' : '取消扫描';
+  }
 
   function connectWebSocket() {
     if (ws && ws.readyState === WebSocket.OPEN) return;
@@ -1062,6 +1140,8 @@
 
     overlay.classList.add('active');
     connectWebSocket();
+    scanRunning = true;
+    setCancelScanVisible(true, false);
 
     // 调用后端 API
     let data;
@@ -1073,26 +1153,32 @@
 
     if (data && data.task_id) {
       currentTaskId = data.task_id;
+      statusText.classList.remove('scan-cancelled');
       statusText.textContent = '扫描已启动，正在检查文件...';
       remaining.textContent = '预计剩余: ' + formatTimeEstimate(type === 'quick' ? 300 : type === 'full' ? 3600 : 480);
 
       // 轮询任务状态
-      const poll = setInterval(async () => {
+      if (scanPollTimer) clearInterval(scanPollTimer);
+      scanPollTimer = setInterval(async () => {
         const status = await apiGet(`/api/v1/scan/${currentTaskId}/status`);
         if (!status) {
-          clearInterval(poll);
+          clearInterval(scanPollTimer);
+          scanPollTimer = null;
           finishScan(false, '无法连接到扫描引擎');
           return;
         }
         if (status.status === 'completed') {
-          clearInterval(poll);
+          clearInterval(scanPollTimer);
+          scanPollTimer = null;
           finishScan(true, status.result);
         } else if (status.status === 'failed') {
-          clearInterval(poll);
+          clearInterval(scanPollTimer);
+          scanPollTimer = null;
           finishScan(false, status.error || '扫描失败');
         } else if (status.status === 'cancelled') {
-          clearInterval(poll);
-          finishScan(false, '扫描已取消');
+          clearInterval(scanPollTimer);
+          scanPollTimer = null;
+          finishScan(null, '扫描已取消');
         } else {
           // 兜底：如果 WebSocket 不可用，用轮询更新
           if (status.progress && (!ws || ws.readyState !== WebSocket.OPEN)) {
@@ -1108,6 +1194,28 @@
     }
   }
 
+  // 取消扫描：低风险操作，不弹确认框；后端 LocalScanner 在扫描主循环检查取消标志
+  async function cancelScan() {
+    if (!scanRunning || !currentTaskId) {
+      document.getElementById('scanOverlay').classList.remove('active');
+      return;
+    }
+    setCancelScanVisible(true, true);
+    const tid = currentTaskId;
+    await apiPost(`/api/v1/scan/${tid}/cancel`, {});
+    // 不在这里直接收尾：让轮询读到 status=cancelled 后统一走 finishScan，
+    // 避免后端仍在收尾时前端已宣告结束（假取消）。
+    const bar = document.getElementById('progressBarFill');
+    const statusText = document.getElementById('scanStatusText');
+    statusText.textContent = '正在停止扫描…';
+    bar.style.opacity = '0.5';
+    showToast('已请求取消扫描，正在停止…', false, true);
+    // 兜底：若 3 秒内轮询没有拿到 cancelled，主动按已取消收尾（避免按钮卡死）
+    setTimeout(() => {
+      if (scanRunning) finishScan(null, '扫描已取消');
+    }, 3000);
+  }
+
   function finishScan(success, result) {
     const title = document.getElementById('scanTitle');
     const statusText = document.getElementById('scanStatusText');
@@ -1116,7 +1224,25 @@
     const percent = document.getElementById('scanPercent');
     const remaining = document.getElementById('scanRemaining');
 
-    if (success) {
+    // 收尾：无论何种结局都必须复位，避免按钮/进度条永久卡住
+    scanRunning = false;
+    if (scanPollTimer) { clearInterval(scanPollTimer); scanPollTimer = null; }
+    setCancelScanVisible(false, false);
+    bar.style.opacity = '1';
+    currentTaskId = null;
+
+    if (success === null) {
+      // 取消是正常路径，不是错误：中性黄色提示，进度条停在当前位置
+      const currentPct = parseFloat(percent.textContent) || 0;
+      bar.style.width = currentPct + '%';
+      percent.textContent = currentPct + '%';
+      title.textContent = '扫描已取消';
+      statusText.textContent = result || '扫描已取消';
+      statusText.classList.add('scan-cancelled');
+      remaining.textContent = '已取消';
+      filesChecked.textContent = '已检查: 已取消';
+      showToast('扫描已取消', false, true);
+    } else if (success) {
       bar.style.width = '100%';
       percent.textContent = '100%';
       statusText.textContent = '扫描完成';
@@ -1132,6 +1258,7 @@
       setTimeout(() => renderHistory(), 1000);
     } else {
       statusText.textContent = result || '扫描失败';
+      showToast(result || '扫描失败', true);
     }
 
     setTimeout(() => {
@@ -1143,11 +1270,15 @@
   }
 
   function closeScan() {
-    if (currentTaskId) {
-      apiPost(`/api/v1/scan/${currentTaskId}/cancel`, {});
+    // 关闭遮罩 == 取消扫描（低风险操作，不弹确认框）
+    if (scanRunning && currentTaskId) {
+      cancelScan();
+      document.getElementById('scanOverlay').classList.remove('active');
+      return;
     }
     document.getElementById('scanOverlay').classList.remove('active');
   }
+
 
   // ── 自定义扫描文件夹选择 ──
   async function openFolderDialog() {

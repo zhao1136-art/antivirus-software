@@ -43,6 +43,13 @@
         .btn-outline{background:transparent;color:var(--text-secondary);border:1px solid var(--border)}
         .btn-outline:hover{background:var(--bg-hover);color:var(--text-primary);border-color:var(--border-light)}
         .btn-sm{padding:6px 14px;font-size:12px}
+/* 取消按钮：运行期间可见可点，结束后隐藏（取消是正常路径，用中性黄而非红色） */
+.btn-cancel{background:transparent;color:var(--warning);border:1px solid var(--warning)}
+.btn-cancel:hover:not(:disabled){background:rgba(255,204,0,0.12)}
+.btn-cancel:disabled{opacity:0.55;cursor:default}
+/* 轻量提示条（与 clean/optimize/guard 页面的 showToast 视觉一致） */
+.toast{position:fixed;top:24px;right:24px;z-index:9999;padding:12px 20px;border-radius:10px;background:var(--bg-card);border:1px solid var(--border);border-left:3px solid var(--accent);color:var(--text-primary);font-size:13px;max-width:340px;box-shadow:0 8px 24px rgba(0,0,0,0.35);transform:translateX(140%);transition:transform 0.25s ease;pointer-events:none}
+.toast.show{transform:translateX(0)}
         .toggle{width:48px;height:26px;background:var(--bg-hover);border-radius:20px;position:relative;cursor:pointer;transition:var(--transition);border:1px solid var(--border-light);flex-shrink:0}
         .toggle.active{background:var(--accent);border-color:var(--accent)}
         .toggle::after{content:'';position:absolute;top:2px;left:2px;width:20px;height:20px;background:white;border-radius:50%;transition:var(--transition);box-shadow:0 2px 6px rgba(0,0,0,0.2)}
@@ -207,6 +214,9 @@
                     <span class="stat-chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>已装: <strong id="vulnInstalledCount">-</strong></span>
                     <span class="stat-chip"><svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="9" y1="9" x2="15" y2="15"/><line x1="15" y1="9" x2="9" y2="15"/></svg>已忽略: <strong id="vulnIgnoredCount">0</strong></span>
                     <button class="btn btn-primary btn-sm" onclick="vulnScan()">立即扫描</button>
+                    <button class="btn btn-cancel btn-sm" id="btnCancelVuln" onclick="cancelVulnScan()" style="display:none">
+                        <span>取消扫描</span>
+                    </button>
                     <button class="btn btn-outline btn-sm" onclick="refreshVulnFix()">刷新</button>
                 </div>
                 <div class="card-row">
@@ -283,7 +293,12 @@
                 <p class="card-desc">检测隐藏的恶意进程和 Rootkit</p>
                 <div class="card-row">
                     <span>Rootkit检测</span>
-                    <button class="btn btn-primary btn-sm" onclick="scanRootkit()">立即扫描</button>
+                    <span style="display:flex;gap:8px">
+                        <button class="btn btn-primary btn-sm" onclick="scanRootkit()">立即扫描</button>
+                        <button class="btn btn-cancel btn-sm" id="btnCancelRootkit" onclick="cancelRootkitScan()" style="display:none">
+                            <span>取消扫描</span>
+                        </button>
+                    </span>
                 </div>
                 <div class="card-row">
                     <span class="stat-chip"><svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>扫描状态: <strong id="rootkitStatus">待扫描</strong></span>
@@ -437,6 +452,8 @@
     </main>
 </div>
 
+<div class="toast" id="toast"></div>
+
 <script>
     const API_BASE = ''; // 动态适配当前 origin
 
@@ -470,6 +487,48 @@
         const el = document.getElementById(id);
         el.textContent = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
         el.classList.add('show');
+    }
+
+    // ── 提示条 ──
+    let toastTimer = null;
+    function showToast(msg, isError, isWarn) {
+        const t = document.getElementById('toast');
+        if (!t) return;
+        t.textContent = msg;
+        t.style.borderLeftColor = isWarn ? 'var(--warning)' : (isError ? 'var(--danger)' : 'var(--accent)');
+        t.classList.add('show');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => t.classList.remove('show'), 3500);
+    }
+
+    // ── 可取消任务通用轮询（通用 /api/v1/jobs 接口）──
+    let vulnJobId = null;
+    let rootkitJobId = null;
+
+    function setCancelBtn(id, visible, busy, busyText, normalText) {
+        const btn = document.getElementById(id);
+        if (!btn) return;
+        btn.style.display = visible ? 'inline-flex' : 'none';
+        btn.disabled = !!busy;
+        const span = btn.querySelector('span');
+        if (span) span.textContent = busy ? busyText : normalText;
+    }
+
+    function pollJobUntilDone(taskId, onTick) {
+        return new Promise(resolve => {
+            const timer = setInterval(async () => {
+                const st = await apiGet('/api/v1/jobs/' + taskId + '/status');
+                if (!st) { clearInterval(timer); resolve(null); return; }
+                if (st.status === 'queued' || st.status === 'running') {
+                    if (onTick) onTick(st);
+                    return;
+                }
+                clearInterval(timer);
+                if (st.status === 'cancelled') resolve({ cancelled: true, partial: st.result });
+                else if (st.status === 'failed') resolve({ error: st.error || '任务失败' });
+                else resolve(st.result);
+            }, 400);
+        });
     }
 
     // ═══ 1. 断网急救 ═══
@@ -608,13 +667,32 @@
         const box = document.getElementById('vulnResult');
         box.style.display = 'flex';
         box.innerHTML = '<span class="status-tag warn">正在扫描...（枚举补丁清单）</span>';
-        const data = await apiPost('/api/v1/vulnfix/scan', {});
-        if (!data) { box.innerHTML = '<span class="status-tag fail">API 不可用</span>'; return; }
+        // 可取消任务：后端 vuln_fix.scan 在注册表枚举循环里检查取消标志
+        const job = await apiPost('/api/v1/jobs', { kind: 'vulnfix-scan', params: {} });
+        if (!job || !job.task_id) { box.innerHTML = '<span class="status-tag fail">API 不可用</span>'; return; }
+        vulnJobId = job.task_id;
+        setCancelBtn('btnCancelVuln', true, false, '正在取消…', '取消扫描');
+        const data = await pollJobUntilDone(job.task_id);
+        setCancelBtn('btnCancelVuln', false, false, '正在取消…', '取消扫描');
+        vulnJobId = null;
+        if (data && data.cancelled) {
+            box.innerHTML = '<span class="status-tag warn">扫描已取消</span>';
+            showToast('漏洞扫描已取消', false, true);
+            return;
+        }
+        if (!data || data.error) { box.innerHTML = '<span class="status-tag fail">扫描失败</span>'; return; }
         const ok = data.all_patched;
         box.innerHTML = `<span class="status-tag ${ok ? 'ok' : 'fail'}">${ok ? '✓ 系统补丁齐全' : '✗ 发现 ' + (data.missing_count||0) + ' 个高危补丁待修复'}</span>` +
             `<span style="font-size:12px;color:var(--text-muted)">已装 ${data.installed_count||0} / 核查 ${data.checked_kb||0}</span>`;
         refreshVulnFix();
         showVulnList();
+    }
+
+    async function cancelVulnScan() {
+        if (!vulnJobId) return;
+        setCancelBtn('btnCancelVuln', true, true, '正在取消…', '取消扫描');
+        await apiPost('/api/v1/jobs/' + vulnJobId + '/cancel');
+        showToast('已请求取消漏洞扫描，正在停止…', false, true);
     }
 
     async function vulnOpenUpdate() {
@@ -733,10 +811,27 @@
     async function scanRootkit() {
         document.getElementById('rootkitStatus').textContent = '扫描中...';
         showOutput('rootkitOutput', '正在扫描Rootkit...');
-        const data = await apiPost('/api/v1/rootkit/scan', {});
-        if (!data) {
+        // 可取消任务：后端 anti_rootkit.scan 分阶段执行，阶段之间与枚举循环内检查取消标志
+        const job = await apiPost('/api/v1/jobs', { kind: 'rootkit-scan', params: {} });
+        if (!job || !job.task_id) {
             document.getElementById('rootkitStatus').textContent = '扫描失败';
             showOutput('rootkitOutput', '❌ API 不可用');
+            return;
+        }
+        rootkitJobId = job.task_id;
+        setCancelBtn('btnCancelRootkit', true, false, '正在取消…', '取消扫描');
+        const data = await pollJobUntilDone(job.task_id);
+        setCancelBtn('btnCancelRootkit', false, false, '正在取消…', '取消扫描');
+        rootkitJobId = null;
+        if (data && data.cancelled) {
+            document.getElementById('rootkitStatus').textContent = '已取消';
+            showOutput('rootkitOutput', '扫描已取消（已完成阶段的结果已丢弃）');
+            showToast('Rootkit 扫描已取消', false, true);
+            return;
+        }
+        if (!data || data.error) {
+            document.getElementById('rootkitStatus').textContent = '扫描失败';
+            showOutput('rootkitOutput', '❌ ' + ((data && data.error) || 'API 不可用'));
             return;
         }
         document.getElementById('rootkitStatus').textContent = data.threats_found > 0 ? '发现威胁' : '扫描完成';
@@ -747,6 +842,13 @@
             out += '✓ 系统安全，未发现Rootkit';
         }
         showOutput('rootkitOutput', out);
+    }
+
+    async function cancelRootkitScan() {
+        if (!rootkitJobId) return;
+        setCancelBtn('btnCancelRootkit', true, true, '正在取消…', '取消扫描');
+        await apiPost('/api/v1/jobs/' + rootkitJobId + '/cancel');
+        showToast('已请求取消 Rootkit 扫描，正在停止…', false, true);
     }
 
     // ═══ 10. 浏览器保护 ═══

@@ -323,6 +323,12 @@ class AntiRootkit:
                 if status != STATUS_SUCCESS:
                     return []
 
+                # 仅当 ImageName.Buffer 落在本次查询缓冲区内才解引用：
+                # 结构体布局与内核版本不完全一致时 Buffer 可能是野指针，
+                # 直接 c_wchar_p.value 会触发 0xC0000005 访问违例并杀掉整个后端进程。
+                buf_base = ctypes.cast(buf, ctypes.c_void_p).value or 0
+                buf_end = buf_base + buf_size
+
                 # 解析链表
                 offset = 0
                 while True:
@@ -333,9 +339,10 @@ class AntiRootkit:
                     info = SYSTEM_PROCESS_INFORMATION.from_buffer_copy(buf, offset)
                     pid = info.UniqueProcessId or 0
                     name = ""
-                    if info.ImageName.Buffer and info.ImageName.Length > 0:
+                    ptr = info.ImageName.Buffer or 0
+                    if ptr and info.ImageName.Length > 0 and buf_base <= ptr < buf_end:
                         try:
-                            name_buf = ctypes.cast(info.ImageName.Buffer, ctypes.c_wchar_p)
+                            name_buf = ctypes.cast(ptr, ctypes.c_wchar_p)
                             name = name_buf.value or ""
                         except Exception:
                             name = ""
@@ -390,7 +397,10 @@ class AntiRootkit:
                         return drivers
                     if driver_array[i]:
                         name_buf = ctypes.create_unicode_buffer(260)
-                        psapi.GetDeviceDriverBaseNameW(driver_array[i], name_buf, 260)
+                        # 用 c_void_p 包装：64 位地址直接当 Python int 传入会被
+                        # ctypes 当成 C int，溢出后整段枚举失败（既有缺陷）
+                        psapi.GetDeviceDriverBaseNameW(
+                            ctypes.c_void_p(driver_array[i]), name_buf, 260)
                         if name_buf.value:
                             drivers.append({
                                 'name': name_buf.value,

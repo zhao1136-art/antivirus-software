@@ -1,5 +1,205 @@
 [
   {
+    "timestamp": "2026-10-03T10:20:36.392790",
+    "categories": [
+      {
+        "id": "temp_files",
+        "name": "系统临时文件",
+        "freed_bytes": 0,
+        "cleaned_files": 0
+      }
+    ],
+    "total_freed": 0,
+    "freed_text": "0 B",
+    "cleaned_files": 0,
+    "failed_count": 0,
+    "cancelled": false
+  },
+  {
+    "timestamp": "2026-10-03T10:20:24.598277",
+    "categories": [
+      {
+        "id": "temp_files",
+        "name": "系统临时文件",
+        "freed_bytes": 0,
+        "cleaned_files": 0
+      },
+      {
+        "id": "crash_dumps",
+        "name": "崩溃转储",
+        "freed_bytes": 0,
+        "cleaned_files": 0
+      },
+      {
+        "id": "update_cache",
+        "name": "Windows 更新缓存",
+        "freed_bytes": 0,
+        "cleaned_files": 0
+      }
+    ],
+    "total_freed": 0,
+    "freed_text": "0 B",
+    "cleaned_files": 0,
+    "failed_count": 0,
+    "cancelled": false
+  },
+  {
+    "timestamp": "2026-10-03T10:12:01.244753",
+    "categories": [
+      {
+        "id": "temp_files",
+        "name": "系统临时文件",
+        "freed_bytes": 0,
+        "cleaned_files": 0
+      }
+    ],
+    "total_freed": 0,
+    "freed_text": "0 B",
+    "cleaned_files": 0,
+    "failed_count": 0,
+    "cancelled": false
+  },
+  {
+    "timestamp": "2026-10-03T10:11:57.335413",
+    "categories": [
+      {
+        "id": "temp_files",
+        "name": "系统临时文件",
+        "freed_bytes": 0,
+        "cleaned_files": 0
+      },
+      {
+        "id": "crash_dumps",
+        "name": "崩溃转储",
+        "freed_bytes": 0,
+        "cleaned_files": 0
+      },
+      {
+        "id": "update_cache",
+        "name": "Windows 更新缓存",
+        "freed_bytes": 0,
+        "cleaned_files": 0
+      }
+    ],
+    "total_freed": 0,
+    "freed_text": "0 B",
+    "cleaned_files": 0,
+    "failed_count": 0,
+    "cancelled": false
+  },
+  {
+    "timestamp": "2026-10-03T10:11:36.419323",
+    "categories": [
+      {
+        "id": "temp_files",
+        "name": "系统临时文件",
+        "freed_bytes": 0,
+        "cleaned_files": 0
+      }
+    ],
+    "total_freed": 0,
+    "freed_text": "0 B",
+    "cleaned_files": 0,
+    "failed_count": 0,
+    "cancelled": false
+  },
+  {
+    "timestamp": "2026-10-03T10:11:34.004741",
+    "categories": [
+      {
+        "id": "temp_files",
+        "name": "系统临时文件",
+        "freed_bytes": 0,
+        "cleaned_files": 0
+      },
+      {
+        "id": "crash_dumps",
+        "name": "崩溃转储",
+        "freed_bytes": 0,
+        "cleaned_files": 0
+      },
+      {
+        "id": "update_cache",
+        "name": "Windows 更新缓存",
+        "freed_bytes": 0,
+        "cleaned_files": 0
+      }
+    ],
+    "total_freed": 0,
+    "freed_text": "0 B",
+    "cleaned_files": 0,
+    "failed_count": 0,
+    "cancelled": false
+  },
+  {
+    "timestamp": "2026-10-03T10:01:02.201568",
+    "categories": [],
+    "total_freed": 0,
+    "freed_text": "0 B",
+    "cleaned_files": 0,
+    "failed_count": 0,
+    "cancelled": true
+  },
+  {
+    "timestamp": "2026-10-03T10:01:00.906173",
+    "categories": [
+      {
+        "id": "temp_files",
+        "name": "系统临时文件",
+        "freed_bytes": 0,
+        "cleaned_files": 0
+      }
+    ],
+    "total_freed": 0,
+    "freed_text": "0 B",
+    "cleaned_files": 0,
+    "failed_count": 0,
+    "cancelled": false
+  },
+  {
+    "timestamp": "2026-10-03T10:00:59.633717",
+    "categories": [],
+    "total_freed": 0,
+    "freed_text": "0 B",
+    "cleaned_files": 0,
+    "failed_count": 0,
+    "cancelled": true
+  },
+  {
+    "timestamp": "2026-10-03T09:59:15.945062",
+    "categories": [],
+    "total_freed": 0,
+    "freed_text": "0 B",
+    "cleaned_files": 0,
+    "failed_count": 0,
+    "cancelled": true
+  },
+  {
+    "timestamp": "2026-10-03T09:59:14.886416",
+    "categories": [
+      {
+        "id": "temp_files",
+        "name": "系统临时文件",
+        "freed_bytes": 0,
+        "cleaned_files": 0
+      }
+    ],
+    "total_freed": 0,
+    "freed_text": "0 B",
+    "cleaned_files": 0,
+    "failed_count": 0,
+    "cancelled": false
+  },
+  {
+    "timestamp": "2026-10-03T09:59:13.790042",
+    "categories": [],
+    "total_freed": 0,
+    "freed_text": "0 B",
+    "cleaned_files": 0,
+    "failed_count": 0,
+    "cancelled": true
+  },
+  {
     "timestamp": "2026-10-03T09:59:02.369095",
     "categories": [],
     "total_freed": 0,
@@ -84,4 +284,29 @@
       },
       {
         "id": "update_cache",
-        "name":
+        "name": "Windows 更新缓存",
+        "freed_bytes": 0,
+        "cleaned_files": 0
+      }
+    ],
+    "total_freed": 0,
+    "freed_text": "0 B",
+    "cleaned_files": 0,
+    "failed_count": 6
+  },
+  {
+    "timestamp": "2026-08-23T14:24:28.383310",
+    "categories": [
+      {
+        "id": "temp_files",
+        "name": "系统临时文件",
+        "freed_bytes": 2073889585,
+        "cleaned_files": 1755
+      }
+    ],
+    "total_freed": 2073889585,
+    "freed_text": "1.9 GB",
+    "cleaned_files": 1755,
+    "failed_count": 6
+  }
+]

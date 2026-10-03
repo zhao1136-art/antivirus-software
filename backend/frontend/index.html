@@ -748,6 +748,59 @@
             font-size: 14px;
         }
 
+        /* 扫描中的取消按钮：运行期间可见可点，结束后隐藏 */
+        .scan-cancel-btn {
+            display: none;
+            align-items: center;
+            justify-content: center;
+            margin-top: 22px;
+            padding: 10px 26px;
+            border-radius: 10px;
+            border: 1px solid var(--danger);
+            background: transparent;
+            color: var(--danger);
+            font-size: 14px;
+            font-weight: 700;
+            font-family: inherit;
+            cursor: pointer;
+            transition: all 0.25s ease;
+        }
+
+        .scan-cancel-btn:hover:not(:disabled) {
+            background: rgba(255, 77, 109, 0.12);
+        }
+
+        .scan-cancel-btn:disabled {
+            opacity: 0.55;
+            cursor: default;
+        }
+
+        .scan-text p.cancelled {
+            color: var(--warning);
+        }
+
+        /* 轻量提示条（与 clean/optimize/guard 页面的 showToast 视觉一致） */
+        .toast {
+            position: fixed;
+            top: 24px;
+            right: 24px;
+            z-index: 1000;
+            padding: 12px 20px;
+            border-radius: 10px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-left: 3px solid var(--accent);
+            color: var(--text-primary);
+            font-size: 14px;
+            max-width: 340px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+            transform: translateX(140%);
+            transition: transform 0.25s ease;
+            pointer-events: none;
+        }
+
+        .toast.show { transform: translateX(0); }
+
         @keyframes radar {
             to { transform: rotate(360deg); }
         }
@@ -1429,7 +1482,10 @@
         <div class="scan-bar-wrap">
             <div class="scan-bar-fill" id="scanBarFill"></div>
         </div>
+        <button class="scan-cancel-btn" id="btnCancelScan">取消扫描</button>
     </div>
+
+    <div class="toast" id="toast"></div>
 
     <script>
         // ==================== 配置 ====================
@@ -1457,6 +1513,7 @@
         const scanBtn = document.getElementById('scanBtn');
         const scanOverlay = document.getElementById('scanOverlay');
         const scanResultText = document.getElementById('scanResultText');
+        const scanOverlayTitle = document.getElementById('scanOverlayTitle');
         const scanBarFill = document.getElementById('scanBarFill');
         const scanCount = document.getElementById('scanCount');
         const blockedCount = document.getElementById('blockedCount');
@@ -1648,6 +1705,28 @@
         // ==================== 扫描 ====================
         let currentTaskId = null;
         let ws = null;
+        let scanPollTimer = null;
+        let scanRunning = false;
+        let toastTimer = null;
+
+        function showToast(msg, isError, isWarn) {
+            const t = document.getElementById('toast');
+            if (!t) return;
+            t.textContent = msg;
+            t.style.borderLeftColor = isWarn ? 'var(--warning)' : (isError ? 'var(--danger)' : 'var(--accent)');
+            t.classList.add('show');
+            clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => t.classList.remove('show'), 3500);
+        }
+
+        // 取消按钮：仅扫描运行期间可见可点
+        function setCancelScanVisible(visible, busy) {
+            const btn = document.getElementById('btnCancelScan');
+            if (!btn) return;
+            btn.style.display = visible ? 'inline-flex' : 'none';
+            btn.disabled = !!busy;
+            btn.textContent = busy ? '正在取消…' : '取消扫描';
+        }
 
         function connectWebSocket() {
             if (ws && ws.readyState === WebSocket.OPEN) return;
@@ -1679,7 +1758,10 @@
             // 显示扫描遮罩
             scanOverlay.classList.add('active');
             scanBarFill.style.width = '0%';
+            scanResultText.classList.remove('cancelled');
             scanResultText.textContent = '正在初始化扫描引擎...';
+            scanRunning = true;
+            setCancelScanVisible(true, false);
 
             // 连接 WebSocket
             connectWebSocket();
@@ -1690,22 +1772,27 @@
                 currentTaskId = data.task_id;
 
                 // 轮询任务状态
-                const poll = setInterval(async () => {
+                if (scanPollTimer) clearInterval(scanPollTimer);
+                scanPollTimer = setInterval(async () => {
                     const status = await apiGet(`/api/v1/scan/${currentTaskId}/status`);
                     if (!status) {
-                        clearInterval(poll);
+                        clearInterval(scanPollTimer);
+                        scanPollTimer = null;
                         finishScan(false, '无法连接到扫描引擎');
                         return;
                     }
                     if (status.status === 'completed') {
-                        clearInterval(poll);
+                        clearInterval(scanPollTimer);
+                        scanPollTimer = null;
                         finishScan(true, status.result);
                     } else if (status.status === 'failed') {
-                        clearInterval(poll);
+                        clearInterval(scanPollTimer);
+                        scanPollTimer = null;
                         finishScan(false, status.error || '扫描失败');
                     } else if (status.status === 'cancelled') {
-                        clearInterval(poll);
-                        finishScan(false, '扫描已取消');
+                        clearInterval(scanPollTimer);
+                        scanPollTimer = null;
+                        finishScan(null, '扫描已取消');
                     } else {
                         // 更新进度（兜底，WebSocket 优先）
                         if (status.progress) {
@@ -1719,16 +1806,48 @@
             }
         });
 
+        // 取消扫描：低风险操作，不弹确认框
+        document.getElementById('btnCancelScan').addEventListener('click', cancelScan);
+
+        async function cancelScan() {
+            if (!scanRunning || !currentTaskId) {
+                finishScan(null, '扫描已取消');
+                return;
+            }
+            setCancelScanVisible(true, true);
+            const tid = currentTaskId;
+            await apiPost(`/api/v1/scan/${tid}/cancel`, {});
+            scanResultText.textContent = '正在停止扫描…';
+            showToast('已请求取消扫描，正在停止…', false, true);
+            // 兜底：后端若未在 3 秒内落 cancelled，前端也要干净收尾
+            setTimeout(() => {
+                if (scanRunning) finishScan(null, '扫描已取消');
+            }, 3000);
+        }
+
         function finishScan(success, result) {
+            scanRunning = false;
+            if (scanPollTimer) { clearInterval(scanPollTimer); scanPollTimer = null; }
+            setCancelScanVisible(false, false);
+            currentTaskId = null;
             scanBtn.classList.remove('scanning');
             scanBtn.innerHTML = `
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
                 执行扫描
             `;
 
-            if (success) {
+            if (success === null) {
+                // 取消是正常路径：中性黄色提示，进度条停在当前位置
+                const pct = parseFloat((scanBarFill.style.width || '0').replace('%', '')) || 0;
+                scanBarFill.style.width = pct + '%';
+                scanOverlayTitle.textContent = '扫描已取消';
+                scanResultText.textContent = result || '扫描已取消';
+                scanResultText.classList.add('cancelled');
+                showToast('扫描已取消', false, true);
+            } else if (success) {
                 scanBarFill.style.width = '100%';
                 const stats = result;
+                scanOverlayTitle.textContent = '扫描完成';
                 scanResultText.textContent = success
                     ? `扫描完成 · ${(stats.files_scanned || 0).toLocaleString()} 个文件 · 检出 ${stats.threats_found || 0} 个威胁`
                     : '';
@@ -1739,6 +1858,7 @@
                 }, 500);
             } else {
                 scanResultText.textContent = result || '扫描失败';
+                showToast(result || '扫描失败', true);
             }
 
             setTimeout(() => {
