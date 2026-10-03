@@ -266,6 +266,14 @@ class DecisionQueue:
             )
         except Exception:
             pass
+        # 桌面决策窗口：用户不在浏览器前时的**唯一可点通道**。
+        # 网页弹窗和托盘气泡都只是"通知"——点不到、也没按钮；
+        # 少了这个，桌面用户只能眼看着 15 秒后文件被自动隔离。
+        try:
+            from engine.desktop_prompt import show as _desktop_show
+            _desktop_show(pd, self.decide)
+        except Exception:
+            pass
         return pd
 
     def decide(self, pending_id: str, action: str) -> bool:
@@ -311,6 +319,12 @@ class DecisionQueue:
             self.stats["auto"] += 1
         with self._lock:
             self._pending.pop(pd.id, None)
+        # 从桌面决策窗口上撤掉这一行（无论用户点了还是超时自动处理）
+        try:
+            from engine.desktop_prompt import get_window as _dwin
+            _dwin().dismiss(pd.id)
+        except Exception:
+            pass
         return pd.action
 
     def list_pending(self) -> list:
