@@ -1,5 +1,5 @@
 /*!
- * 威胁处置弹窗 —— 右下角倒计时卡片
+ * 威胁处置弹窗 —— 右下角倒计时卡片（视觉风格参考火绒：近黑卡片 + 红色主导 + 大号粗体标题）
  *
  * 2026-10-03：原先"YARA 命中即自动隔离"把 42 个 Windows 系统文件搬走了。
  * 现在后端把命中挂起为待决项（/api/v1/threats/pending），由用户决定；
@@ -8,10 +8,10 @@
  *
  * 系统目录的文件已在后端被二次复核拦下，不会出现在这里。
  *
- * 两条实现纪律（都栽过跟头）：
- *   1) 绝不用 document.hidden 跳过轮询 —— 早先加过，结果标签页不在前台
- *      时弹窗根本不出现，而 15 秒后后端照常隔离，用户只看到"文件没了"。
- *   2) 请求失败不再静默 —— 连续失败要在控制台留痕，否则无从查起。
+ * 两条实现纪律（都栽过跟头，别再改回去）：
+ *   1) 绝不用 document.hidden 跳过轮询 —— 加过，结果标签页不在前台时弹窗
+ *      根本不出现，而 15 秒后后端照常隔离，用户只看到"文件没了"。
+ *   2) 请求失败不静默 —— 连续失败在控制台留痕，否则无从查起。
  *
  * 纯原生 JS，无依赖。通过 <script src="/static/decision_popup.js"> 引入。
  */
@@ -20,71 +20,84 @@
 
   var API = '/api/v1/threats';
   var POLL_MS = 1000;
-  var NS = 'ytdp';          // 类名前缀，避免和页面样式打架
+  var NS = 'ytdp';
 
   var box = null;
   var styleDone = false;
-  var cards = {};           // id -> card 状态对象
+  var cards = {};
   var pollFails = 0;
 
-  /* ── 样式：一次性注入，避免和 16 个页面各自的 CSS 变量纠缠 ── */
+  // 火绒式配色：近黑底 + 警示红 + 克制的灰阶
+  var C = {
+    bg1: '#1b1b1d', bg2: '#131315',
+    line: 'rgba(255,255,255,.08)',
+    text: '#f2f3f5', dim: '#8d9199',
+    red: '#e0483c', redDark: '#b8352b',
+    blue: '#2f81f7'
+  };
+
   function injectStyle() {
     if (styleDone || document.getElementById(NS + '-style')) return;
     var css = [
       '.' + NS + '-box{position:fixed;right:18px;bottom:18px;z-index:2147483000;',
-      'display:flex;flex-direction:column-reverse;gap:12px;max-width:392px;pointer-events:none;',
-      "font-family:'Segoe UI','Microsoft YaHei',system-ui,-apple-system,sans-serif}",
+      'display:flex;flex-direction:column-reverse;gap:12px;width:368px;max-width:calc(100vw - 36px);',
+      'pointer-events:none;font-family:"Segoe UI","Microsoft YaHei",system-ui,-apple-system,sans-serif;',
+      '-webkit-font-smoothing:antialiased}',
 
+      /* 卡片：近黑渐变 + 顶部红色警示条 */
       '.' + NS + '-card{pointer-events:auto;position:relative;overflow:hidden;',
-      'background:linear-gradient(160deg,#1e2530 0%,#171c24 100%);color:#e6e9ee;',
-      'border:1px solid rgba(255,255,255,.09);border-radius:14px;padding:15px 16px 14px;',
-      'box-shadow:0 12px 34px rgba(0,0,0,.5),0 2px 6px rgba(0,0,0,.35);',
-      'animation:' + NS + '-in .28s cubic-bezier(.22,1,.36,1)}',
-      '@keyframes ' + NS + '-in{from{opacity:0;transform:translateX(24px) scale(.97)}',
-      'to{opacity:1;transform:none}}',
+      'background:linear-gradient(180deg,' + C.bg1 + ' 0%,' + C.bg2 + ' 100%);color:' + C.text + ';',
+      'border:1px solid ' + C.line + ';border-radius:12px;padding:16px 18px 15px;',
+      'box-shadow:0 14px 40px rgba(0,0,0,.62),0 2px 8px rgba(0,0,0,.4);',
+      'animation:' + NS + '-in .3s cubic-bezier(.22,1,.36,1)}',
+      '.' + NS + '-card::before{content:"";position:absolute;left:0;right:0;top:0;height:3px;',
+      'background:linear-gradient(90deg,' + C.red + ',' + C.redDark + ')}',
+      '@keyframes ' + NS + '-in{from{opacity:0;transform:translateY(14px) scale(.98)}to{opacity:1;transform:none}}',
       '.' + NS + '-card.' + NS + '-out{animation:' + NS + '-out .22s ease forwards}',
-      '@keyframes ' + NS + '-out{to{opacity:0;transform:translateX(24px) scale(.97)}}',
-      /* 左侧色带随剩余时间变色 */
-      '.' + NS + '-card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;',
-      'background:var(--ytdp-accent,#e5534b);transition:background .3s}',
+      '@keyframes ' + NS + '-out{to{opacity:0;transform:translateY(10px) scale(.98)}}',
 
-      '.' + NS + '-head{display:flex;align-items:flex-start;gap:10px}',
-      '.' + NS + '-badge{flex:0 0 auto;width:30px;height:30px;border-radius:9px;display:flex;',
-      'align-items:center;justify-content:center;font-size:16px;line-height:1;',
-      'background:var(--ytdp-badge,rgba(229,83,75,.16));color:var(--ytdp-accent,#e5534b)}',
-      '.' + NS + '-title{flex:1;min-width:0}',
-      '.' + NS + '-name{font-size:13.5px;font-weight:600;letter-spacing:.1px;',
+      /* 头部：大号粗体「发现威胁」+ 威胁名 */
+      '.' + NS + '-head{display:flex;align-items:center;gap:11px;margin-bottom:13px}',
+      '.' + NS + '-badge{flex:0 0 auto;width:34px;height:34px;border-radius:9px;',
+      'display:flex;align-items:center;justify-content:center;',
+      'background:linear-gradient(180deg,' + C.red + ',' + C.redDark + ');',
+      'box-shadow:0 4px 12px rgba(224,72,60,.34)}',
+      '.' + NS + '-badge svg{width:19px;height:19px;display:block}',
+      '.' + NS + '-htext{flex:1;min-width:0}',
+      '.' + NS + '-big{font-size:15px;font-weight:700;letter-spacing:.2px;line-height:1.25}',
+      '.' + NS + '-name{font-size:12.5px;color:' + C.dim + ';margin-top:2px;',
       'white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
-      '.' + NS + '-sub{font-size:11.5px;color:#8b95a3;margin-top:2px;',
-      'white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
-      '.' + NS + '-close{flex:0 0 auto;width:22px;height:22px;border:0;background:transparent;',
-      'color:#6b7684;font-size:17px;line-height:1;cursor:pointer;border-radius:6px;padding:0}',
-      '.' + NS + '-close:hover{background:rgba(255,255,255,.08);color:#c9d1d9}',
+      '.' + NS + '-close{flex:0 0 auto;width:24px;height:24px;border:0;background:transparent;',
+      'color:#63666d;font-size:18px;line-height:1;cursor:pointer;border-radius:6px;padding:0}',
+      '.' + NS + '-close:hover{background:rgba(255,255,255,.08);color:' + C.text + '}',
 
-      '.' + NS + '-path{margin:11px 0 9px;font:11px/1.5 Consolas,"Cascadia Mono",monospace;',
-      'color:#9aa5b1;background:rgba(0,0,0,.26);border-radius:8px;padding:7px 9px;',
-      'word-break:break-all;max-height:46px;overflow:hidden}',
+      /* 文件路径：等宽、深底 */
+      '.' + NS + '-path{font:11px/1.5 Consolas,"Cascadia Mono",monospace;color:#9aa0aa;',
+      'background:rgba(0,0,0,.34);border:1px solid rgba(255,255,255,.05);border-radius:8px;',
+      'padding:8px 10px;word-break:break-all;max-height:47px;overflow:hidden;margin-bottom:11px}',
 
-      '.' + NS + '-chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:11px}',
-      '.' + NS + '-chip{font-size:11px;padding:2px 8px;border-radius:20px;',
-      'background:rgba(255,255,255,.07);color:#a9b4c0}',
-      '.' + NS + '-chip.' + NS + '-hi{background:rgba(229,83,75,.16);color:#ff8b83}',
-      '.' + NS + '-chip.' + NS + '-md{background:rgba(210,153,34,.16);color:#e2b04a}',
+      '.' + NS + '-chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}',
+      '.' + NS + '-chip{font-size:11px;padding:2px 9px;border-radius:4px;',
+      'background:rgba(255,255,255,.07);color:#a9aeb6}',
+      '.' + NS + '-chip.' + NS + '-hi{background:rgba(224,72,60,.18);color:#ff8d84}',
+      '.' + NS + '-chip.' + NS + '-md{background:rgba(214,152,44,.18);color:#e5b455}',
 
-      '.' + NS + '-bar{height:5px;border-radius:4px;background:rgba(255,255,255,.08);',
-      'overflow:hidden;margin-bottom:11px}',
-      '.' + NS + '-bar>i{display:block;height:100%;width:100%;border-radius:4px;',
-      'background:var(--ytdp-accent,#e5534b);transition:width .2s linear,background .3s}',
+      /* 倒计时条：红->橙->绿 反过来用（剩余越多越红，越少越亮） */
+      '.' + NS + '-bar{height:4px;border-radius:3px;background:rgba(255,255,255,.07);',
+      'overflow:hidden;margin-bottom:12px}',
+      '.' + NS + '-bar>i{display:block;height:100%;width:100%;background:' + C.red + ';',
+      'transition:width .2s linear,background .3s}',
 
       '.' + NS + '-foot{display:flex;align-items:center;gap:9px}',
-      '.' + NS + '-left{flex:1;font-size:11.5px;color:#8b95a3;font-variant-numeric:tabular-nums}',
-      '.' + NS + '-left b{color:var(--ytdp-accent,#e5534b);font-weight:600}',
-      '.' + NS + '-btn{border:0;border-radius:9px;padding:7px 14px;font:inherit;font-size:12.5px;',
-      'cursor:pointer;transition:filter .15s,background .15s;white-space:nowrap}',
-      '.' + NS + '-btn:hover{filter:brightness(1.18)}',
-      '.' + NS + '-btn-q{background:linear-gradient(180deg,#c8453c,#a8342d);color:#fff;font-weight:600}',
-      '.' + NS + '-btn-i{background:rgba(255,255,255,.08);color:#c9d1d9}',
-      '.' + NS + '-done{font-size:12.5px;padding:6px 0;font-weight:600}'
+      '.' + NS + '-left{flex:1;font-size:12px;color:' + C.dim + ';font-variant-numeric:tabular-nums}',
+      '.' + NS + '-left b{color:' + C.red + ';font-weight:700;font-size:13px}',
+      '.' + NS + '-btn{border:0;border-radius:8px;padding:8px 16px;font:inherit;font-size:12.5px;',
+      'cursor:pointer;transition:background .15s,filter .15s;white-space:nowrap}',
+      '.' + NS + '-btn-q{background:' + C.red + ';color:#fff;font-weight:600}',
+      '.' + NS + '-btn-q:hover{background:#ef5a4e}',
+      '.' + NS + '-btn-i{background:rgba(255,255,255,.09);color:#c9ccd2}',
+      '.' + NS + '-btn-i:hover{background:rgba(255,255,255,.15)}',
+      '.' + NS + '-done{font-size:12.5px;padding:5px 0;font-weight:600}'
     ].join('');
     var el = document.createElement('style');
     el.id = NS + '-style';
@@ -135,12 +148,12 @@
     }).then(function (r) { return r.json(); }).then(function (res) {
       if (res && res.ok) {
         flash(id, action === 'quarantine' ? '已隔离' : '已忽略',
-              action === 'quarantine' ? '#e5534b' : '#5aa9e6');
+              action === 'quarantine' ? C.red : C.blue);
       } else {
-        flash(id, '已自动处理', '#8b95a3');   // 超时后后端已处理
+        flash(id, '已自动处理', C.dim);   // 超时后后端已处理
       }
     }).catch(function () {
-      flash(id, '提交失败，请重试', '#e5534b');
+      flash(id, '提交失败，请重试', C.red);
       var c2 = cards[id]; if (c2) c2.done = false;
     });
   }
@@ -165,6 +178,10 @@
     delete cards[id];
   }
 
+  var SHIELD = '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" ' +
+    'stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5l7.5 3.5v5.5c0 4.6-3.2 7.9-7.5 9.5' +
+    '-4.3-1.6-7.5-4.9-7.5-9.5V6z"/><path d="M12 8.6v4.2"/><circle cx="12" cy="16.2" r="1.05" fill="#fff" stroke="none"/></svg>';
+
   function makeCard(item) {
     var el = document.createElement('div');
     el.className = NS + '-card';
@@ -172,10 +189,10 @@
     var head = document.createElement('div');
     head.className = NS + '-head';
     head.innerHTML =
-      '<div class="' + NS + '-badge">&#9888;</div>' +
-      '<div class="' + NS + '-title">' +
+      '<div class="' + NS + '-badge">' + SHIELD + '</div>' +
+      '<div class="' + NS + '-htext">' +
+        '<div class="' + NS + '-big">发现威胁</div>' +
         '<div class="' + NS + '-name" title="' + esc(item.threat_name) + '">' + esc(item.threat_name) + '</div>' +
-        '<div class="' + NS + '-sub">需要你决定</div>' +
       '</div>' +
       '<button class="' + NS + '-close" title="关闭（不做决定，等超时自动处理）">&#215;</button>';
     head.querySelector('.' + NS + '-close').onclick = function () { remove(item.id); };
@@ -212,10 +229,9 @@
       var ms = deadline - Date.now();
       if (ms < 0) ms = 0;
       var pct = total > 0 ? Math.max(0, Math.min(100, ms / total * 100)) : 0;
-      var accent = pct < 34 ? '#e5534b' : (pct < 67 ? '#d29922' : '#3fb950');
-      el.style.setProperty('--ytdp-accent', accent);
-      el.style.setProperty('--ytdp-badge', 'rgba(255,255,255,.07)');
+      var accent = pct < 34 ? '#ff6b5e' : (pct < 67 ? '#e0483c' : '#c0392f');
       fill.style.width = pct + '%';
+      fill.style.background = accent;
       var secs = Math.ceil(ms / 1000);
       left.innerHTML = secs > 0
         ? '<b>' + secs + '</b> 秒后自动隔离'
@@ -236,7 +252,7 @@
   }
 
   function poll() {
-    // 纪律 1：这里绝不能因为 document.hidden 就跳过轮询。
+    // 纪律 1：不能因为 document.hidden 跳过轮询。
     fetch(API + '/pending', { credentials: 'same-origin' })
       .then(function (r) {
         if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -248,7 +264,7 @@
         var alive = {};
         list.forEach(function (it) { alive[it.id] = 1; upsert(it); });
         Object.keys(cards).forEach(function (id) {
-          if (!alive[id] && !cards[id].done) flash(id, '已自动处理', '#8b95a3');
+          if (!alive[id] && !cards[id].done) flash(id, '已自动处理', C.dim);
         });
       })
       .catch(function (e) {
