@@ -18,8 +18,6 @@ CRITICAL_FILES = [
     "engine/file_guard.py", "engine/system_guard.py",
     "engine/watchdog.py",
     "engine/native_guard/file_guard.exe",
-    "vigil/launcher.py",
-    "vigil/src/dashboard.py", "vigil/src/scan_api.py",
 ]
 
 

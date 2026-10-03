@@ -543,7 +543,7 @@ SLIDE6 = '''<slide xmlns="http://www.larkoffice.com/sml/2.0">
   </shape>
   <shape type="text" topLeftX="530" topLeftY="348" width="360" height="24">
     <content textType="body" textAlign="left" fontSize="13" fontFamily="Microsoft YaHei" color="#8f8fab">
-      <p>  Vigil 强力模式 · P2P 内网穿透 · 深度分析</p>
+      <p>  P2P 内网穿透 · 深度分析</p>
     </content>
   </shape>
 </data>

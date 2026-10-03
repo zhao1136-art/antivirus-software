@@ -13,7 +13,6 @@ const modules = {
 };
 let etwRunning = false;
 let amsiRegistered = false;
-let vigilRunning = false;
 let tasks = {};
 let taskSeq = 0;
 
@@ -92,13 +91,6 @@ const server = http.createServer((req, res) => {
     }
     if (req.method === 'GET' && p === '/api/v1/ai/status') {
         return json(res, { available: true, engine: 'GuardianCNN v1.0', loaded: true, img_size: 128, params: '622,690' });
-    }
-    if (req.method === 'GET' && p === '/api/v1/vigil/status') {
-        return json(res, { running: vigilRunning, port: 7331 });
-    }
-    if (req.method === 'POST' && p === '/api/v1/vigil/start') {
-        vigilRunning = true;
-        return json(res, { status: 'started', url: 'http://127.0.0.1:7331' });
     }
     if (req.method === 'GET' && p === '/api/v1/etw/status') {
         return json(res, { running: etwRunning });

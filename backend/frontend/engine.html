@@ -821,8 +821,6 @@
         registry: [
             { id: 'ml_pe', name: 'ML PE 扫描引擎', icon: 'ml',
               desc: 'EMBER v2 · 2381 维特征 · PE 恶意软件检测', status: 'static', action: 'none' },
-            { id: 'vigil', name: '洞渊引擎 (Vigil)', icon: 'vigil',
-              desc: '深度行为分析 AI 引擎 · 端口 7331', status: 'vigil', action: 'start' },
             { id: 'etw', name: 'ETW 事中检测', icon: 'etw',
               desc: 'Windows 事件追踪 · 实时捕获进程行为', status: 'etw', action: 'toggle' },
             { id: 'amsi', name: 'AMSI 无文件拦截', icon: 'amsi',
@@ -831,19 +829,17 @@
         status: {}, // id -> 各引擎原始状态
         icons: {
             ml: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>',
-            vigil: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>',
             etw: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>',
             amsi: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/><path d="M8 9l2 2-2 2M12 13h4"/></svg>'
         },
 
         /** 并行拉取各引擎状态（实时数据来源 3） */
         async refresh() {
-            const [vigil, etw, amsi] = await Promise.all([
-                api.get('/api/v1/vigil/status'),
+            const [etw, amsi] = await Promise.all([
                 api.get('/api/v1/etw/status'),
                 api.get('/api/v1/amsi/status')
             ]);
-            engines.status = { vigil: vigil, etw: etw, amsi: amsi };
+            engines.status = { etw: etw, amsi: amsi };
             engines.render();
         },
 
@@ -852,12 +848,6 @@
             const s = engines.status;
             switch (cfg.status) {
                 case 'static': return { cls: 'ok', text: '就绪' };
-                case 'vigil': {
-                    const d = s.vigil;
-                    return d && d.running
-                        ? { cls: 'ok', text: '运行中 :' + (d.port || 7331) }
-                        : { cls: 'bad', text: '已停止' };
-                }
                 case 'etw': {
                     const d = s.etw;
                     return d && d.running ? { cls: 'ok', text: '运行中' } : { cls: 'bad', text: '已停止' };
@@ -897,9 +887,6 @@
         /** 根据引擎状态生成操作按钮 */
         actionHtml(cfg) {
             if (cfg.action === 'none') return '';
-            if (cfg.action === 'start') {
-                return '<button class="ec-btn primary" data-act="start">启动引擎</button>';
-            }
             if (cfg.action === 'toggle') {
                 const running = (cfg.status === 'etw' && engines.status.etw && engines.status.etw.running) ||
                     (cfg.status === 'amsi' && engines.status.amsi && engines.status.amsi.registered);
@@ -921,13 +908,6 @@
             if (btn) btn.disabled = true;
             let msg = '', type = 'success';
             switch (id) {
-                case 'vigil': {
-                    const d = await api.post('/api/v1/vigil/start', {});
-                    msg = d && (d.status === 'started' || d.status === 'already_running')
-                        ? '洞渊引擎已启动 ' + (d.url || '') : ((d && d.error) || '启动失败');
-                    if (!d || !(d.status === 'started' || d.status === 'already_running')) type = 'error';
-                    break;
-                }
                 case 'etw': {
                     const d = action === 'start'
                         ? await api.post('/api/v1/etw/start', {})

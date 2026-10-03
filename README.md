@@ -108,8 +108,7 @@ f:\Caelire\
 │   ├── data/                         # 数据目录
 │   ├── database/                     # 数据库目录
 │   ├── p2p_tunnel/                   # P2P 隧道模块
-│   ├── libs/                         # 第三方库
-│   └── vigil/                        # Vigil 安全模块
+│   └── libs/                         # 第三方库
 │
 ├── installer/                        # 安装/卸载程序
 │   ├── installer.py                  # 安装程序

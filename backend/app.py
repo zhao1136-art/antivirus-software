@@ -2713,50 +2713,6 @@ async def deep_libpeconv():
         return JSONResponse({"error": str(e)})
 
 
-# ---------- 洞渊引擎 (Vigil) 强力模式 API ----------
-
-_vigil_status = {"running": False, "port": 7331}
-
-def _check_vigil_alive() -> bool:
-    """Check if Vigil is actually responding"""
-    import socket
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(1)
-        result = s.connect_ex(("127.0.0.1", _vigil_status["port"]))
-        s.close()
-        return result == 0
-    except Exception:
-        return False
-
-@app.get("/api/v1/vigil/status")
-async def vigil_status():
-    """洞渊引擎 (Vigil) 强力模式状态"""
-    if _vigil_status["running"] and not _check_vigil_alive():
-        _vigil_status["running"] = False
-    return _vigil_status
-
-
-@app.post("/api/v1/vigil/start")
-async def vigil_start():
-    """启动洞渊引擎 (Vigil) 强力模式"""
-    if _vigil_status["running"] and _check_vigil_alive():
-        return {"status": "already_running", "url": f"http://127.0.0.1:{_vigil_status['port']}"}
-    try:
-        from vigil.launcher import start_dashboard
-        start_dashboard(host="127.0.0.1", port=_vigil_status["port"])
-        # Wait for service to actually be ready
-        import time
-        for i in range(10):
-            time.sleep(0.5)
-            if _check_vigil_alive():
-                _vigil_status["running"] = True
-                return {"status": "started", "url": f"http://127.0.0.1:{_vigil_status['port']}"}
-        return {"status": "error", "error": "Vigil 启动超时，请检查依赖（需要 Flask）"}
-    except Exception as e:
-        return {"status": "error", "error": str(e)}
-
-
 # ---------- 根路由 ----------
 
 @app.get("/")
@@ -4595,8 +4551,6 @@ if __name__ == "__main__":
 
     server_thread = threading.Thread(target=run_server, daemon=True)
     server_thread.start()
-
-    # 洞渊引擎 (Vigil) 强力模式默认不启动，用户可在设置页手动启用
 
     # 后台启动网络监控
     try:

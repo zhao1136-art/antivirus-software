@@ -902,14 +902,6 @@
 
                     <div class="setting-row">
                         <div class="setting-info">
-                            <span class="setting-label">洞渊引擎 (Vigil)</span>
-                            <span class="setting-desc">基于 ML 的高级行为分析，默认关闭以节省资源</span>
-                        </div>
-                        <div class="toggle" id="toggleVigil" role="switch" aria-checked="false"></div>
-                    </div>
-
-                    <div class="setting-row">
-                        <div class="setting-info">
                             <span class="setting-label">F12 紧急处置</span>
                             <span class="setting-desc">紧急时连按F12五次，关闭所有非系统进程（30秒冷却）</span>
                         </div>
@@ -1282,7 +1274,6 @@
                     <li><strong>ClamAV</strong> — GPL v2 License</li>
                     <li><strong>PE-sieve</strong> — BSD 2-Clause License</li>
                     <li><strong>capa</strong> — Apache 2.0 License</li>
-                    <li><strong>Vigil</strong> — MIT License</li>
                     <li>以及 NumPy、LightGBM、LIEF、psutil、pefile 等其他开源库</li>
                 </ul>
                 <p>完整的第三方组件列表及许可证信息，请参见源码目录中的 <code>requirements.txt</code> 及各组件的官方文档。</p>
@@ -1503,38 +1494,6 @@
                 }
             });
         })(); } catch (e) { console.error('[Watchdog模块失败]', e); }
-
-        // 洞渊引擎 (Vigil) 开关
-        try { (function () {
-            const toggleVigil = document.getElementById('toggleVigil');
-            if (!toggleVigil) return;
-            (async function () {
-                var resp = await apiGet('/api/v1/vigil/status');
-                if (resp && resp.running) {
-                    toggleVigil.classList.add('active');
-                    toggleVigil.setAttribute('aria-checked', 'true');
-                }
-            })();
-            toggleVigil.addEventListener('click', async function () {
-                var isActive = toggleVigil.classList.contains('active');
-                if (isActive) {
-                    showToast('请重启御天以关闭 Vigil', 'info');
-                    return;
-                }
-                var resp = await apiPost('/api/v1/vigil/start', {});
-                if (resp && resp.status === 'started') {
-                    toggleVigil.classList.add('active');
-                    toggleVigil.setAttribute('aria-checked', 'true');
-                    showToast('Vigil 强力分析已启动', 'success');
-                } else if (resp && resp.status === 'already_running') {
-                    toggleVigil.classList.add('active');
-                    toggleVigil.setAttribute('aria-checked', 'true');
-                    showToast('Vigil 已在运行', 'info');
-                } else {
-                    showToast('Vigil 启动失败：' + (resp ? resp.error : '无法连接后端'), 'error');
-                }
-            });
-        })(); } catch (e) { console.error('[Vigil模块失败]', e); }
 
         // F12 紧急处置开关
         try { (function () {
