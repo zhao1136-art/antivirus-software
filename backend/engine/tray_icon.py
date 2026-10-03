@@ -92,6 +92,46 @@ if IS_WINDOWS:
     IMAGE_ICON = 1
     LR_LOADFROMFILE = 0x0010
 
+    # ── 64 位下必须显式声明 restype/argtypes ──
+    # 不声明时 ctypes 默认把返回值当 c_int(32 位)，HMODULE/HWND/LRESULT 这些
+    # 64 位指针会被截断成野值：GetModuleHandleW 拿到的 hInstance 是垃圾，
+    # 于是 RegisterClassW / CreateWindowExW 失败，窗口建不出来 ——
+    # 表现为 TrayIcon.start() 之后 _hwnd 一直是 None。
+    # GetModuleHandleW 在 kernel32 里，**不在 user32**。
+    # 原先写成 user32.GetModuleHandleW(None)，那是个不存在的函数，
+    # 一调用就抛 AttributeError，被 _tray_loop 的裸 except 吞掉 ——
+    # 于是托盘窗口永远建不出来，_hwnd 一直是 None。
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel32.GetModuleHandleW.restype = wt.HMODULE
+    kernel32.GetModuleHandleW.argtypes = [wt.LPCWSTR]
+
+    user32.RegisterClassW.restype = wt.ATOM
+    user32.RegisterClassW.argtypes = [ctypes.c_void_p]
+
+    user32.UnregisterClassW.restype = wt.BOOL
+    user32.UnregisterClassW.argtypes = [wt.LPCWSTR, wt.HANDLE]
+
+    user32.CreateWindowExW.restype = wt.HWND
+    user32.CreateWindowExW.argtypes = [
+        wt.DWORD, wt.LPCWSTR, wt.LPCWSTR, wt.DWORD,
+        ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+        wt.HWND, wt.HANDLE, wt.HANDLE, ctypes.c_void_p,
+    ]
+
+    user32.DefWindowProcW.restype = ctypes.c_void_p
+    user32.DefWindowProcW.argtypes = [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
+
+    user32.DestroyWindow.restype = wt.BOOL
+    user32.DestroyWindow.argtypes = [wt.HWND]
+
+    user32.PostQuitMessage.argtypes = [ctypes.c_int]
+
+    user32.DestroyIcon.restype = wt.BOOL
+    user32.DestroyIcon.argtypes = [wt.HANDLE]
+
+    user32.LoadIconW.restype = wt.HANDLE
+    user32.LoadIconW.argtypes = [wt.HANDLE, wt.LPCWSTR]
+
 
 class NOTIFYICONDATAW(ctypes.Structure):
     _fields_ = [
@@ -156,7 +196,7 @@ class TrayIcon:
         """创建隐藏窗口 + 托盘图标 + 消息循环"""
         try:
             # 注册窗口类
-            hinstance = user32.GetModuleHandleW(None)
+            hinstance = kernel32.GetModuleHandleW(None)
             class_name = "AndunTrayClass"
             wc = ctypes.create_unicode_buffer(256)
             wc.value = class_name
@@ -164,12 +204,18 @@ class TrayIcon:
             WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_long, wt.HANDLE, wt.UINT, wt.WPARAM, wt.LPARAM)
 
             def wnd_proc(hwnd, msg, wparam, lparam):
+                # WNDPROC 声明为返回 c_long，所以这里**必须**永远返回整数。
+                # 之前直接 `return user32.DefWindowProcW(...)`，其 restype 是
+                # c_void_p，可能得到 None -> ctypes 转换回调返回值时抛
+                # TypeError: 'NoneType' object cannot be interpreted as an integer，
+                # 而且是每条消息都抛一次（被忽略，但会刷满 stderr）。
                 if msg == WM_USER + 1:
-                    return self._handle_tray_msg(hwnd, wparam, lparam)
+                    return self._handle_tray_msg(hwnd, wparam, lparam) or 0
                 if msg == WM_DESTROY:
                     user32.PostQuitMessage(0)
                     return 0
-                return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+                r = user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+                return int(r) if r else 0
 
             wc_proc = WNDPROC(wnd_proc)
 
@@ -247,8 +293,15 @@ class TrayIcon:
             user32.DestroyWindow(self._hwnd)
             user32.UnregisterClassW(class_name, hinstance)
 
-        except Exception:
-            pass
+        except Exception as exc:
+            # 不要裸吞异常：托盘窗口建不出来时，这里曾经是唯一的线索来源，
+            # 而 except: pass 让它彻底不可见，排查只能靠猜。
+            self._last_error = "%s: %s" % (type(exc).__name__, exc)
+            try:
+                import logging
+                logging.getLogger("yutian").warning("托盘图标初始化失败: %s", exc, exc_info=True)
+            except Exception:
+                pass
 
     def notify(self, title: str, text: str, warning: bool = True) -> bool:
         """弹一个系统托盘气泡（图标已存在时用 NIM_MODIFY + NIF_INFO）。
