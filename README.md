@@ -130,7 +130,6 @@ f:\Caelire\
 ├── maltrail-master/                  # Maltrail 恶意流量检测
 ├── pe-sieve-master/                  # PE-sieve 进程扫描
 ├── libpeconv-master/                 # libpeconv PE 处理库
-├── vigil-main/                       # Vigil 安全引擎
 ├── yarGen-master/                    # YARA 规则生成器
 ├── C2IntelFeeds-master/              # C2 情报源
 ├── clamav-main/                      # ClamAV 源码
