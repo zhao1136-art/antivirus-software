@@ -4,12 +4,19 @@
 来源：从 engine/local_scanner.py 抽取既有启发式实现，逐字搬运，未新增任何检测逻辑、
 未改动任何阈值与打分。同时并入 engine/url_guard.py 的 URL 启发式。
 
-等价性保证：
-  - 本文件中的判定逻辑与阈值全部逐字复制自原实现，仅去掉 `self` 形参。
+等价性保证（**抽取当时**成立；此后有一段刻意的行为修正，见下）：
+  - 抽取时本文件中的判定逻辑与阈值全部逐字复制自原实现，仅去掉 `self` 形参。
   - 原方法的对外名称与签名保持不变，内部改为委托到本引擎（见 local_scanner.py）。
   - 已用 300 个合法 System32 样本逐文件比对：返回 dict（分数 / warnings / 熵 / action）
     与原实现完全一致，差异数 0。注意：该样本集上原实现本身就会命中 3/300
     （通用启发式）与 0/300（PE 启发式），抽取未改变其中任何一个判定。
+
+2026-10-03 误报修正（只改了 `analyze_generic` 的第 2 段"勒索文本特征"这一处，
+其余段落与阈值一个字没动）：
+  旧实现把 4346 个合法 System32 文件里的 30 个判成勒索软件，全部仅由勒索
+  关键词文本命中构成（cipher.exe 240 分、SecurityHealthSystray.exe 90 分…）。
+  修正后同一批文件命中 0 个，同一批文件上的其它判定、其它段落逐字未变。
+  详见 `analyze_generic` 第 2 段注释与 `RANSOM_TEXT_STRONG/_WEAK`。
 
 抽取来源与校验（AST 源码段 SHA256 前 16 位）：
   _generic_heuristic_from_data / _generic_heuristic_core / _generic_heuristic /
@@ -19,9 +26,49 @@
       H:\\Caelire\\rtguard\\engine\\local_scanner.py
   url_guard._heuristic 在 backend 与 rtguard 两处一致。
 """
+import logging
 import math
 import os
 import re
+
+logger = logging.getLogger("yutian")
+
+# ── 勒索文本特征（按"有效鉴别力"分档，2026-10-03 新增）──────────────────────
+#
+# 强特征：整句/多词特征，正常软件里几乎不会自然出现 —— 有鉴别力，可单独计分。
+RANSOM_TEXT_STRONG = (
+    b"YOUR FILES", b"YOUR DOCUMENTS", b"YOUR DATA", b"RANSOM",
+    b"PRIVATE KEY", b"RECOVERY KEY", b"WALLET ADDRESS", b"BITCOIN",
+)
+#
+# 弱特征：单个通用英文词，微软自带程序的界面文案/资源里到处都是
+# （cipher.exe 里 8 个 ENCRYPTED、bdeui.dll 的 DECRYPT、SecurityHealthSystray.exe
+# 的 LOCKED、PaymentMediatorServiceProxy.dll 的 PAYMENT…）—— 只能当旁证。
+RANSOM_TEXT_WEAK = (b"ENCRYPTED", b"DECRYPT", b"LOCKED", b"PAYMENT")
+
+RANSOM_STRONG_SCORE = 30      # 每个**不同**强特征
+RANSOM_STRONG_MAX_HITS = 2    # 最多按 2 个计分（封顶 60）
+RANSOM_WEAK_SCORE = 10        # 每个**不同**弱特征
+RANSOM_WEAK_MAX_HITS = 3      # 最多按 3 个计分（封顶 30，到不了 40 报告线）
+
+
+def _signed_system_binary(file_path: str) -> bool:
+    """文件是否"位于系统目录 + Authenticode 签名有效"。
+
+    复用 engine.threat_decision 的 WinVerifyTrust 封装（**不**自己写签名校验）。
+    任何异常、模块不可用、签名取不到（大量系统文件是目录签名，返回
+    0x800B0100 TRUST_E_NOSIGNATURE）一律返回 False —— 默认**不豁免**，
+    宁可多报也不瞎。实测 30 个误报文件里 5 个能拿到有效内嵌签名。
+    """
+    try:
+        from engine.threat_decision import is_system_path, verify_signature
+        if not is_system_path(file_path):
+            return False
+        ok, _detail = verify_signature(file_path)
+        return bool(ok)
+    except Exception:
+        return False
+
 
 # ── URL 启发式关键词（原 engine/url_guard.py 模块级常量，逐字迁移）─────────
 
@@ -73,18 +120,63 @@ class HeuristicEngine:
             reasons.append("较高熵值 (%.2f)" % ent)
 
         # --- 2. 勒索软件/恶意通知特征字符串 ---
+        #
+        # 2026-10-03 实测修正（误报：合法 System32 文件被判成勒索软件）。
+        # 旧实现：每个 20+ 字符 ASCII 块里命中的关键词都 +30，不区分词、不去重。
+        # 实测 4346 个 System32 文件命中 30 个，**全部**只由文本命中构成：
+        #     cipher.exe                      240  = ENCRYPTED ×8
+        #     PaymentMediatorServiceProxy.dll 210  = PAYMENT ×6 + LOCKED
+        #     bdeui.dll                       180  = DECRYPT ×4 + ENCRYPTED + LOCKED
+        #     nltest.exe / wsmprovhost.exe    180  = LOCKED ×6
+        #     baaupdate.exe / bdechangepin.exe / fveprompt.exe
+        #                                     120  = DECRYPT ×2 + ENCRYPTED + LOCKED
+        #     SecurityHealthSystray.exe        90  = LOCKED ×3
+        # 这些是 Windows 安全中心 / BitLocker / 证书服务的自带程序，
+        # 它们自己的界面文案里就写着 DECRYPT / ENCRYPTED / LOCKED / PAYMENT。
+        #
+        # 改法（同 2026-10-03 其它两处误报的既定模式：先算"有效鉴别力"）：
+        #   ① 特征分两档。整句特征（YOUR FILES / PRIVATE KEY / WALLET ADDRESS…）
+        #      才有鉴别力；单个通用英文词（ENCRYPTED/DECRYPT/LOCKED/PAYMENT）
+        #      在正常软件里到处都是，只能算弱旁证。
+        #   ② 按**不同**特征计分并封顶：强 30/个（≤2 个）、弱 10/个（≤3 个）。
+        #      于是单个弱词 = 10 分、三个弱词 = 30 分，都够不到 40 分的报告线；
+        #      同一个词刷屏重复计分（cipher.exe 的 8×ENCRYPTED=240）同时失效。
+        #   ③ 微软签名 + 系统目录的文件（复用 threat_decision.verify_signature，
+        #      不自己写签名校验）**弱**文本特征一律不计分，只留可见的降级说明；
+        #      强特征照常计分 —— 不做"签名即豁免"，真勒索文本该报还是报。
+        # 降级绝不静默：降级原因写进 warnings（随报告露出）并记一条日志。
         text_chunks = re.findall(rb'[\x20-\x7E]{20,}', header)
-        ransom_signals = [b"YOUR FILES", b"ENCRYPTED", b"BITCOIN", b"DECRYPT",
-                          b"YOUR DOCUMENTS", b"YOUR DATA", b"PAYMENT",
-                          b"PRIVATE KEY", b"RANSOM", b"LOCKED",
-                          b"RECOVERY KEY", b"WALLET ADDRESS"]
+        strong_hits: list[str] = []
+        weak_hits: list[str] = []
         for chunk in text_chunks:
             upper = chunk.upper()
-            for sig in ransom_signals:
-                if sig in upper:
-                    score += 30
-                    reasons.append("勒索特征文本: %s" % sig.decode())
-                    break
+            for sig in RANSOM_TEXT_STRONG:
+                name = sig.decode()
+                if name not in strong_hits and sig in upper:
+                    strong_hits.append(name)
+            for sig in RANSOM_TEXT_WEAK:
+                name = sig.decode()
+                if name not in weak_hits and sig in upper:
+                    weak_hits.append(name)
+
+        if strong_hits:
+            score += RANSOM_STRONG_SCORE * min(len(strong_hits), RANSOM_STRONG_MAX_HITS)
+            reasons.append("勒索特征文本(强): %s" % ", ".join(strong_hits))
+
+        if weak_hits:
+            weak_score = RANSOM_WEAK_SCORE * min(len(weak_hits), RANSOM_WEAK_MAX_HITS)
+            if _signed_system_binary(file_path):
+                # 降级可见：原因进 warnings，同时落一条日志
+                reasons.append(
+                    "勒索关键词(弱)已降级不计分: %s —— 微软签名系统目录文件"
+                    % ", ".join(weak_hits))
+                logger.info(
+                    "启发式降级(不静默): %s 仅命中弱勒索关键词 %s，"
+                    "签名有效且位于系统目录，弱文本特征不计分",
+                    file_path, ",".join(weak_hits))
+            else:
+                score += weak_score
+                reasons.append("勒索关键词(弱): %s" % ", ".join(weak_hits))
 
         # --- 3. PowerShell/CMD 编码命令模式 ---
         ps_patterns = [b"-EncodedCommand", b"-enc ", b"FromBase64String",

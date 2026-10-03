@@ -466,6 +466,55 @@ def _format_size(size: int) -> str:
     return f"{size:.1f}TB"
 
 
+# ── 系统控制台宿主识别（2026-10-03 沙箱误报修复）────────────────────────
+#
+# 为什么需要：Windows 上**任何**控制台程序都会被系统拉起一个 conhost.exe，
+# 它是不是出现、出现几次，只取决于"样本是不是控制台程序"，与样本好坏无关。
+# 实测：无害的 choice.exe、自己编的一行打印控制台程序，conhost 一律出现，
+# 而修复前它被记成 child_process/high（+30 高危 +10 子进程 = 40 分）并进入
+# strong_kinds，直接把 verdict 顶到 malicious（risk=80）。
+#
+# 只豁免**系统目录里**的同名映像：C:\Temp\conhost.exe 这种伪装仍然按
+# child_process 计 —— 名字可以随便起，路径不能。
+_CONSOLE_HOST_NAMES = frozenset(("conhost.exe", "openconsole.exe"))
+
+
+def _child_image_path(exe_path: str, cmd_line: str) -> str:
+    """取子进程映像路径：优先 psutil 给的 exe()，拿不到再从命令行里抠。
+
+    实测 conhost 的 cmdline 形如 "\\??\\C:\\Windows\\system32\\conhost.exe 0x4"。
+    """
+    cand = (exe_path or "").strip()
+    if cand:
+        return cand
+    low = (cmd_line or "").lower()
+    idx = low.find(".exe")
+    if idx < 0:
+        return ""
+    return (cmd_line or "")[:idx + 4].strip().strip('"')
+
+
+def _is_console_host(exe_path: str, cmd_line: str) -> bool:
+    """子进程是否是系统目录里的控制台宿主（conhost.exe / OpenConsole.exe）"""
+    cand = _child_image_path(exe_path, cmd_line)
+    if not cand:
+        return False
+    for pre in ("\\??\\", "\\\\?\\"):
+        if cand.startswith(pre):
+            cand = cand[len(pre):]
+    if os.path.basename(cand).lower() not in _CONSOLE_HOST_NAMES:
+        return False
+    sysroot = os.path.normcase(os.environ.get("SystemRoot", r"C:\Windows"))
+    try:
+        full = os.path.normcase(os.path.abspath(cand))
+    except Exception:
+        return False
+    for sub in ("system32", "syswow64"):
+        if full.startswith(os.path.join(sysroot, sub) + os.sep):
+            return True
+    return False
+
+
 def _token_cancelled(cancel) -> bool:
     """判断取消令牌是否已置位（兼容 is_cancelled() / is_set() 两种约定）"""
     if cancel is None:
@@ -1465,10 +1514,21 @@ class LightweightSandbox:
                                 cmd = " ".join(child.cmdline()) or child.name()
                             except (psutil.AccessDenied, psutil.NoSuchProcess):
                                 cmd = child.name()
+                            try:
+                                img = child.exe()
+                            except (psutil.Error, OSError):
+                                img = ""
+                            # 控制台宿主（conhost）单独归类：它是 Windows 为
+                            # 控制台程序自动拉起的，不是样本"拉起了子进程"的证据。
+                            # 只降级这一类；来路不明的可执行文件仍然按
+                            # child_process/high 记（见 _is_console_host）。
+                            host = _is_console_host(img, cmd)
                             behaviors.append({
-                                "type": "child_process",
-                                "detail": f"创建子进程: {cmd} (PID={child.pid})",
-                                "severity": "high",
+                                "type": "console_host" if host else "child_process",
+                                "detail": (f"系统控制台宿主进程: {cmd} (PID={child.pid})"
+                                           if host else
+                                           f"创建子进程: {cmd} (PID={child.pid})"),
+                                "severity": "low" if host else "high",
                                 "timestamp": time.time(),
                             })
                 except (psutil.AccessDenied, psutil.NoSuchProcess):
@@ -1558,6 +1618,17 @@ class LightweightSandbox:
         #   ① 读系统目录 / 自己所在目录 / Program Files 的 file_access 不计风险
         #   ② 判 malicious **必须**拿到至少一个强指标
         #      （高危行为、子进程、网络连接），光靠"超时 + 读文件"堆分不够
+        #
+        # 2026-10-03 第二处实测修正：控制台程序一律被判 malicious。
+        # notepad 是 GUI 程序，所以第一处修正没暴露这条 —— 只要样本是控制台
+        # 程序，Windows 就会给它配一个 conhost.exe，监控把它记成
+        # child_process/high，于是（+30 高危 +10 子进程 +5 退出 +15 超时
+        # +20 超时加成）= 80 → malicious。实测 choice.exe 在 copy / none
+        # 两个后端上都是 risk=80/verdict=malicious。
+        #   ③ 系统目录里的 conhost.exe / OpenConsole.exe 按 console_host
+        #      单独归类，只记录、不计分（见 _is_console_host）；
+        #      非系统宿主子进程的分数从 +10 提到 +40，保证"真拉起了可疑
+        #      子进程"仍然单独够到 70 分线，不因这次豁免被一起降级。
         _sysroot = os.environ.get("SystemRoot", r"C:\Windows").lower()
         _trusted_dirs = [
             d.lower() for d in (
@@ -1579,6 +1650,7 @@ class LightweightSandbox:
         risk_indicators: list[str] = []
         strong_kinds: set = set()      # 强指标：只有它们有资格支撑 malicious
         benign_count = 0
+        host_child_count = 0
 
         # 各类行为计数
         behavior_counts: dict[str, int] = {}
@@ -1589,6 +1661,17 @@ class LightweightSandbox:
             # ① 正常文件读取不计风险（仍然出现在报告里，只是不加分）
             if btype == "file_access" and _benign_access(str(b.get("detail", ""))):
                 benign_count += 1
+                continue
+
+            # ①b 系统控制台宿主（conhost.exe / OpenConsole.exe）不计风险。
+            #     2026-10-03 实测修正：Windows 上任何控制台程序都会被系统
+            #     拉起一个 conhost，它只说明"样本是控制台程序"，不说明样本
+            #     拉起了子进程 —— 修复前它被记成 child_process/high，
+            #     无害的 choice.exe 因此拿到 risk=80/verdict=malicious
+            #     （copy 与 none 两个后端都一样；notepad 是 GUI 所以没暴露）。
+            #     仍然留在 behaviors 里**可见**，只是不计分。
+            if btype == "console_host":
+                host_child_count += 1
                 continue
 
             behavior_counts[btype] = behavior_counts.get(btype, 0) + 1
@@ -1604,11 +1687,22 @@ class LightweightSandbox:
 
         if benign_count:
             risk_indicators.append("正常文件读取 %d 次（系统/自身目录，不计风险）" % benign_count)
+        if host_child_count:
+            risk_indicators.append(
+                "系统控制台宿主进程 %d 次（conhost/OpenConsole，控制台程序由 Windows "
+                "自动拉起，不计风险）" % host_child_count)
 
         # 高风险行为指标
         if behavior_counts.get("child_process", 0) > 0:
-            risk_indicators.append("创建子进程")
-            risk_score += 10
+            # 这里只统计**非系统宿主**的子进程（conhost 已在上面剥离）。
+            # 原为 +10；剥离 conhost 后它是"样本主动拉起外部可执行文件"的
+            # 唯一证据 —— 修复前那 70 分线其实一半靠 conhost 撑着（+30 高危
+            # +10 子进程）。若仍按 +10 计，单个真实子进程只剩 45 分，
+            # verdict 会从 malicious 掉到 suspicious —— 那就是把真信号一起
+            # 修瞎了。实测控制样本（无害父进程拉起一个非常规名字的无害子进程）
+            # 补足到 +40 后仍为 malicious/risk=75，与修复前一致。
+            risk_indicators.append("创建非系统宿主子进程（拉起外部可执行文件）")
+            risk_score += 40
             strong_kinds.add("child_process")
         if behavior_counts.get("network", 0) > 0:
             risk_indicators.append("发起网络连接")
