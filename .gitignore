@@ -94,3 +94,4 @@ backend/_diag_*.log
 backend/data/logs/
 backend/engine/data/logs/
 backend/engine/data/sandbox_history.json
+backend/_tmp/

@@ -4647,11 +4647,44 @@ if __name__ == "__main__":
             pass
 
     # 主线程：webview 消息循环（pywebview 要求必须在主线程）
-    # 强制使用 EdgeChromium 后端, 跳过 WinForms/pythonnet/.NET 依赖
+    #
+    # ⚠️ 这里原来写的是「强制使用 EdgeChromium 后端, 跳过 WinForms/pythonnet/.NET
+    #    依赖」—— **那句话是错的**，而且正是打包后的 exe 一起就崩的原因。
+    #
+    #    pywebview 在 Windows 上只有一条路：
+    #        guilib.initialize() -> guis = [import_winforms]
+    #        -> import webview.platforms.winforms -> import clr
+    #    而 platforms/edgechromium.py 自己第 10 行就 `import clr`。
+    #    所以 edgechromium 后端**本身就依赖 pythonnet**，跳不掉。
+    #
+    #    更糟的是 pywebview 的 import_winforms() **只捕获 ImportError**：
+    #        except ImportError:  return False
+    #    冻结环境里 clr 抛的却是 RuntimeError
+    #    （Failed to resolve Python.Runtime.Loader.Initialize）——
+    #    不被捕获就冒泡，把整个进程带走。
+    #
+    #    所以这里兜一层：内嵌浏览器起不来就退回系统默认浏览器，打开同一个
+    #    127.0.0.1:8899。界面从内置变外置，但程序能用 —— 总好过用户双击图标
+    #    之后什么也看不到。
     _mark("调用 webview.start")
     try:
         webview.start(gui='edgechromium', func=_startup_func)
         _mark("webview.start 正常返回")
-    except Exception:
+    except Exception as _wv_exc:
         _log_startup("webview.start 异常:\n" + traceback.format_exc())
-        raise
+        # 兜底：内嵌浏览器（WebView2/pythonnet）不可用时改用默认浏览器。
+        # 此时 uvicorn 已在其它线程跑着，8899 是可用的。
+        try:
+            _log_startup("内嵌浏览器不可用（%s: %s），回退到系统默认浏览器"
+                         % (type(_wv_exc).__name__, _wv_exc))
+            print("[御天] 内嵌浏览器不可用，已改用系统默认浏览器打开界面")
+            webbrowser.open("http://127.0.0.1:8899")
+            # 外置浏览器模式下**主线程绝不能退出** —— uvicorn 跑在守护线程里，
+            # 主线程一结束整个进程就没了、服务也跟着停。所以在这里挂住。
+            # 用户点托盘菜单的「退出」时，_do_exit_with_fadeout 会 os._exit(0)。
+            _mark("已回退到默认浏览器，主线程挂起等待退出")
+            while True:
+                time.sleep(1)
+        except Exception:
+            _log_startup("回退默认浏览器同样失败:\n" + traceback.format_exc())
+            raise

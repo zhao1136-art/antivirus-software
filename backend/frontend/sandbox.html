@@ -107,6 +107,55 @@
         .isolation-panel .iso-grid .ok{color:var(--accent)}
         .isolation-panel .iso-grid .bad{color:var(--danger)}
         .isolation-panel .iso-degraded{margin-top:10px;font-size:12.5px;color:var(--danger)}
+        /* ── 隔离能力申报（capabilities）—— 这块是分析结论的地基，不能省 ── */
+        .cap-panel{margin-top:14px;padding:16px 18px;border-radius:var(--radius-md);background:var(--bg-secondary);border:1px solid var(--border)}
+        .cap-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px}
+        .cap-title{font-family:'Syne',sans-serif;font-size:12px;letter-spacing:0.5px;text-transform:uppercase;color:var(--text-secondary)}
+        .cap-engine{font-size:12px;font-weight:700;padding:3px 10px;border-radius:12px;background:var(--accent-dim);color:var(--accent);font-family:'Courier New',monospace}
+        .cap-engine.none{background:var(--danger-dim);color:var(--danger)}
+        .cap-sub{font-size:12px;color:var(--text-muted);margin-bottom:12px;line-height:1.5}
+        .cap-rows{display:grid;grid-template-columns:auto 1fr;gap:7px 18px;font-size:12.5px;align-items:start}
+        .cap-rows .cap-k{color:var(--text-secondary);white-space:nowrap}
+        .cap-ok{color:var(--accent)}
+        .cap-bad{color:var(--danger)}
+        .cap-note{color:var(--text-muted);font-size:11.5px}
+        .cap-limit{color:var(--danger);font-weight:600}
+        /* 限制项整行高亮：absolute_path_redirect=false 不是特性，是限制 */
+        .cap-row-limit{grid-column:1/-1;display:grid;grid-template-columns:auto 1fr;gap:18px;padding:10px 12px;border-radius:8px;background:var(--danger-dim);border:1px solid rgba(255,77,109,0.35)}
+        .cap-row-limit .cap-k{color:var(--danger);font-weight:700}
+        .cap-limitation{margin-top:12px;padding:10px 12px;border-radius:8px;background:rgba(255,204,0,0.08);border-left:3px solid var(--warning);font-size:12.5px;line-height:1.6;color:var(--text-primary)}
+        .cap-limitation .cap-lim-label{display:block;color:var(--warning);font-weight:700;font-size:11px;letter-spacing:0.5px;text-transform:uppercase;margin-bottom:4px}
+        .cap-notes{margin-top:10px;font-size:12px;color:var(--text-secondary)}
+        .cap-notes ul{list-style:none;padding:0;margin-top:6px}
+        .cap-notes li{padding:5px 10px;background:var(--bg-hover);border-radius:6px;margin-bottom:4px;line-height:1.5}
+        .cap-notes li:last-child{margin-bottom:0}
+        .cap-scope{margin-top:10px;padding:9px 12px;border-radius:8px;background:var(--accent-dim);font-size:12px;color:var(--text-primary);line-height:1.55}
+        .cap-warn-inline{color:var(--warning);font-weight:600}
+        /* ── 内存镜像扫描 ── */
+        .mem-panel{margin-top:14px;padding:16px 18px;border-radius:var(--radius-md);background:var(--bg-secondary);border:1px solid var(--border)}
+        .mem-panel.uncovered{background:rgba(255,204,0,0.07);border-color:rgba(255,204,0,0.4)}
+        .mem-panel.hit{background:rgba(255,77,109,0.07);border-color:rgba(255,77,109,0.4)}
+        .mem-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+        .mem-title{font-family:'Syne',sans-serif;font-size:12px;letter-spacing:0.5px;text-transform:uppercase;color:var(--text-secondary)}
+        .mem-stat{font-size:12px;font-weight:600;padding:3px 10px;border-radius:12px;background:var(--bg-hover);color:var(--text-secondary)}
+        .mem-uncovered{margin:10px 0 0;padding:11px 13px;border-radius:8px;background:rgba(255,204,0,0.1);border-left:3px solid var(--warning);font-size:12.5px;line-height:1.6}
+        .mem-uncovered .mem-uncovered-title{display:block;color:var(--warning);font-weight:700;font-size:11px;letter-spacing:0.5px;text-transform:uppercase;margin-bottom:4px}
+        .mem-reason{font-family:'Courier New',monospace;font-size:12px;color:var(--text-primary);word-break:break-all}
+        .mem-interp{margin-top:10px;font-size:12.5px;line-height:1.6;color:var(--text-primary);padding:9px 12px;border-radius:8px;background:var(--bg-hover)}
+        .mem-interp .mem-interp-label{color:var(--accent);font-weight:700}
+        .mem-hits{list-style:none;padding:0;margin-top:12px}
+        .mem-hits li{padding:9px 12px;background:var(--bg-hover);border:1px solid var(--border);border-radius:8px;margin-bottom:6px;font-size:12.5px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+        .mem-hits li.cred-high{border-left:3px solid var(--danger)}
+        .mem-hits li.cred-medium{border-left:3px solid var(--warning)}
+        .mem-hits li.cred-low{border-left:3px solid var(--text-muted);opacity:0.72}
+        .mem-hits .mem-rule{font-weight:700;word-break:break-all}
+        .mem-hits .mem-mod{font-family:'Courier New',monospace;font-size:11.5px;color:var(--text-secondary)}
+        .mem-hits .mem-hitsrc{font-size:11px;color:var(--text-muted)}
+        .cred-tag{font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:10px;text-transform:uppercase;letter-spacing:0.5px}
+        .cred-tag.high{background:var(--danger-dim);color:var(--danger)}
+        .cred-tag.medium{background:rgba(255,204,0,0.12);color:var(--warning)}
+        .cred-tag.low{background:var(--bg-card);color:var(--text-muted);border:1px solid var(--border)}
+        .mem-skipped{margin-top:10px;font-size:11.5px;color:var(--text-muted);line-height:1.6}
         .indicator-list{list-style:none;padding:0}
         .indicator-list li{padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;margin-bottom:6px;font-size:13px;display:flex;align-items:center;gap:10px}
         .indicator-list li .dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
@@ -223,7 +272,11 @@
         <div class="card report-section" id="reportSection">
             <h3 class="card-title"><svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" width="16" height="16" style="margin-right:8px;vertical-align:-2px"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>分析报告</h3>
             <div id="isolationBox" class="isolation-panel" style="display:none"></div>
+            <!-- 隔离能力申报：copy 引擎只隔离样本自身+同目录，绝对路径不重定向 -->
+            <div id="capBox" class="cap-panel" style="display:none"></div>
             <div id="verdictBox"></div>
+            <!-- 内存镜像扫描：未覆盖 ≠ 安全，ok:false 必须显示原因 -->
+            <div id="memoryScanBox" class="mem-panel" style="display:none"></div>
             <div class="sb-grid" style="margin-top:20px">
                 <div>
                     <h4 style="font-family:'Syne',sans-serif;font-size:13px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:12px">行为列表</h4>
@@ -437,6 +490,150 @@
         showToast('已请求取消分析，正在停止…', false, true);
     }
 
+    /* ==================================================================
+       隔离能力申报 / 内存镜像扫描 —— 两个纯渲染函数
+       故意写成无 DOM 依赖的 "返回 HTML 字符串" 形式：既方便在页面里用，
+       也能在 Node 里喂假报告逐分支验证（这两个面板决定分析结论，必须可测）。
+       ================================================================== */
+
+    // 字节数人性化显示
+    function fmtBytes(n) {
+        const v = Number(n);
+        if (!isFinite(v) || v <= 0) return '0 B';
+        if (v < 1024) return v + ' B';
+        if (v < 1048576) return (v/1024).toFixed(1) + ' KB';
+        if (v < 1073741824) return (v/1048576).toFixed(1) + ' MB';
+        return (v/1073741824).toFixed(2) + ' GB';
+    }
+
+    // ── 命中来源模块：后端字段是 _module，历史上也出现过 _source，两个都认 ──
+    function memHitModule(h) {
+        return h && (h._module || h._source || h.module) ? (h._module || h.module || h._source) : '';
+    }
+    // ── 命中置信度：后端给 confidence（high/medium/low/weak），缺失按 medium 展示 ──
+    function memHitCred(h) {
+        const c = String((h && (h.confidence || h.tier)) || '').toLowerCase();
+        if (c === 'weak') return 'low';
+        return (c === 'high' || c === 'medium' || c === 'low') ? c : 'medium';
+    }
+
+    // 内存镜像扫描面板
+    function renderMemoryScan(m) {
+        // 没有这个字段（老报告 / 未走到该阶段）—— 不显示面板，也绝不显示成"安全"
+        if (!m || typeof m !== 'object') return '';
+        const interp = m.interpretation || '';
+        const interpHtml = interp
+            ? `<div class="mem-interp"><span class="mem-interp-label">结论：</span>${esc(interp)}</div>` : '';
+
+        // ── 未覆盖分支：ok=false 时把原因摆在最显眼处，不许藏 ──
+        if (m.ok !== true) {
+            const reason = m.error || '未说明原因';
+            return `<div class="mem-panel uncovered">
+                <div class="mem-head">
+                    <span class="mem-title">内存镜像扫描</span>
+                    <span class="status-tag warn">未覆盖</span>
+                </div>
+                <div class="mem-uncovered">
+                    <span class="mem-uncovered-title">未执行 / 未覆盖 —— 不能据此认定安全</span>
+                    <div>原因：<span class="mem-reason">${esc(reason)}</span></div>
+                    <div style="margin-top:6px;color:var(--text-secondary)">内存未被扫描，加壳 / 注入类样本可能因此漏检：磁盘无误报不等于内存干净。</div>
+                </div>
+                ${interpHtml}
+            </div>`;
+        }
+
+        const hits = m.hits || [];
+        const cls = hits.length ? 'mem-panel hit' : 'mem-panel';
+        const skipped = m.skipped || [];
+        const skippedHtml = skipped.length
+            ? `<div class="mem-skipped">跳过 ${skipped.length} 个模块：${esc(skipped.slice(0,6).map(s=>Array.isArray(s)?(s[0]+'（'+s[1]+'）'):String(s)).join('；'))}${skipped.length>6?' …':''}</div>`
+            : '';
+
+        const hitsHtml = hits.length
+            ? `<ul class="mem-hits">${hits.map(h=>{
+                   const cred = memHitCred(h);
+                   const mod = memHitModule(h);
+                   const reason = h.quality_reason || h.reason || '';
+                   return `<li class="cred-${cred}">
+                       <span class="cred-tag ${cred}">${esc(cred)}</span>
+                       <span class="mem-rule">${esc(h.rule || h.name || h.signature || '未命名规则')}</span>
+                       ${mod ? `<span class="mem-mod">来源模块 ${esc(mod)}</span>` : ''}
+                       <span class="mem-hitsrc">内存命中</span>
+                       ${reason ? `<span class="cap-note" style="flex-basis:100%">${esc(reason)}</span>` : ''}
+                   </li>`;
+               }).join('')}</ul>`
+            : `<div class="mem-interp" style="color:var(--text-secondary)">本次内存扫描未命中任何规则（磁盘与内存结果一致）。</div>`;
+
+        return `<div class="${cls}">
+            <div class="mem-head">
+                <span class="mem-title">内存镜像扫描</span>
+                <span class="status-tag ${hits.length?'fail':'ok'}">${hits.length?'命中 '+hits.length+' 条':'已覆盖 · 无命中'}</span>
+                <span class="mem-stat">PID ${esc(m.pid!=null?m.pid:'—')}</span>
+                <span class="mem-stat">模块 ${esc(m.modules_read!=null?m.modules_read:'—')}/${esc(m.modules_total!=null?m.modules_total:'—')}</span>
+                <span class="mem-stat">扫描 ${esc(fmtBytes(m.scanned_bytes))}</span>
+                <span class="mem-stat">耗时 ${esc(m.elapsed_ms!=null?Math.round(m.elapsed_ms)+' ms':'—')}</span>
+                ${m.truncated ? '<span class="stat-chip cap-warn-inline">已达读取上限，未扫全</span>' : ''}
+            </div>
+            ${interpHtml}
+            ${hitsHtml}
+            ${skippedHtml}
+        </div>`;
+    }
+
+    // 隔离能力申报面板 —— 核心：把 absolute_path_redirect:false 作为**限制**显著标出
+    function renderCapabilities(iso) {
+        const cap = iso && iso.capabilities;
+        if (!cap || typeof cap !== 'object') return '';
+        const engine = (iso.engine || 'unknown');
+        const engineCls = (engine === 'none') ? ' none' : '';
+        const requested = iso.engine_requested && iso.engine_requested !== engine
+            ? `<span class="cap-note">（请求 ${esc(iso.engine_requested)}，已降级）</span>` : '';
+        const scope = cap.copy_scope || cap.coverage || '';
+
+        // 布尔能力 -> 逐项说明它是"能力"还是"限制"
+        const y = v => v === true ? '<span class="cap-ok">支持</span>'
+                                  : (v === false ? '<span class="cap-bad">不支持</span>' : '<span class="cap-note">未申报</span>');
+
+        // absolute_path_redirect 单独整行高亮：false = 限制（不是"不需要"）
+        const apr = cap.absolute_path_redirect;
+        const aprRow = apr === true
+            ? `<div class="cap-row-limit" style="background:var(--accent-dim);border-color:rgba(0,188,212,0.35)">
+                   <span class="cap-k" style="color:var(--accent)">绝对路径重定向</span>
+                   <span class="cap-ok">支持 —— 样本对绝对路径的读写会被改写到沙箱副本</span>
+               </div>`
+            : (apr === false
+                ? `<div class="cap-row-limit">
+                       <span class="cap-k">绝对路径重定向</span>
+                       <span><span class="cap-bad" style="font-weight:700">不支持（这是限制，不是特性）</span>
+                       <div class="cap-note" style="margin-top:4px">只隔离样本自身及其同目录文件。样本内部硬编码的绝对路径（例如 C:\\Windows\\System32\\...）不会被改写，读写的仍是真实系统位置。</div></span>
+                   </div>`
+                : `<div class="cap-rows"><span class="cap-k">绝对路径重定向</span><span class="cap-note">未申报</span></div>`);
+
+        return `<div class="cap-panel">
+            <div class="cap-head">
+                <span class="cap-title">隔离能力申报</span>
+                <span class="cap-engine${engineCls}">engine: ${esc(engine)}</span>
+                ${requested}
+            </div>
+            <div class="cap-sub">隔离是"部分隔离"：下列能力决定结论能推到哪一步。标红项表示隔离未覆盖到的部分。</div>
+            <div class="cap-rows">
+                ${aprRow}
+                <span class="cap-k">文件复制隔离</span><span>${y(cap.file_copy)}</span>
+                <span class="cap-k">注册表重定向</span><span>${y(cap.registry_redirect)}</span>
+                <span class="cap-k">沙箱内可写</span><span>${y(cap.writable_sandbox)}</span>
+                <span class="cap-k">隔离覆盖范围</span><span>${esc(cap.coverage || '未申报')}</span>
+                ${scope ? `<span class="cap-k">复制范围</span><span>${esc(scope)}</span>` : ''}
+                <span class="cap-k">容量上限</span><span>总 ${esc(fmtBytes(cap.max_total_bytes))} · 单文件 ${esc(fmtBytes(cap.max_single_file_bytes))} · 最多 ${esc(cap.max_files!=null?cap.max_files:'—')} 个文件${cap.truncated_capable?' <span class="cap-note">（超限会截断）</span>':''}</span>
+            </div>
+            ${cap.limitation ? `<div class="cap-limitation"><span class="cap-lim-label">能力限制（原文）</span>${esc(cap.limitation)}</div>` : ''}
+            <div class="cap-rows" style="margin-top:12px">
+                <span class="cap-k">实际执行路径</span><span style="font-family:'Courier New',monospace;font-size:12px;word-break:break-all">${esc(iso.exec_path || '—')}</span>
+                <span class="cap-k">已复制文件</span><span>${esc(iso.copied_files!=null?iso.copied_files:'—')} 个 · ${esc(fmtBytes(iso.copied_bytes))}${iso.truncated?' <span class="cap-warn-inline">（因容量上限被截断，未复制全）</span>':''}</span>
+            </div>
+            ${(iso.engine_notes && iso.engine_notes.length) ? `<div class="cap-notes">引擎自述（作用范围 / 跳过原因）<ul>${iso.engine_notes.map(n=>`<li>${esc(n)}</li>`).join('')}</ul></div>` : ''}
+        </div>`;
+    }
+
     function renderReport(report) {
         document.getElementById('reportSection').classList.add('show');
         const verdict = (report.verdict || report.classification || 'clean').toLowerCase();
@@ -468,19 +665,41 @@
                 const il = iso.integrity_level === 'low' ? '低完整性 (Low IL)'
                     : (iso.integrity_level === 'medium' ? '中完整性（降级）'
                        : (iso.integrity_level === 'none' ? '无（未隔离）' : '未执行'));
+                // 防火墙规则没删掉 = 系统上仍留着一条阻断规则，必须显式告警（不能只显示"已阻断"）
+                const fwRemoved = iso.firewall_rule_removed === false
+                    ? ' <span class="cap-warn-inline">· 规则未清理，仍在系统上</span>' : '';
+                const via = iso.created_via ? `<span>启动方式</span><span class="cap-note">${esc(iso.created_via)}</span>` : '';
                 isoBox.className = 'isolation-panel' + (degraded ? ' degraded' : '');
                 isoBox.innerHTML = `<div class="iso-title">本次分析隔离状态</div>
                     <div class="iso-grid">
                         <span>Job Object 资源限制</span><span>${iso.job_object ? '已启用' : '未启用'}</span>
-                        <span>网络出网阻断</span><span class="${iso.network_blocked ? 'ok' : 'bad'}">${net}${iso.firewall_rule ? ' · ' + esc(iso.firewall_rule) : ''}</span>
+                        <span>网络出网阻断</span><span class="${iso.network_blocked ? 'ok' : 'bad'}">${net}${iso.firewall_rule ? ' · ' + esc(iso.firewall_rule) : ''}${fwRemoved}</span>
                         <span>文件/注册表完整性级别</span><span class="${iso.integrity_level === 'low' ? 'ok' : 'bad'}">${il}</span>
                         <span>沙箱工作目录</span><span>${esc(iso.low_il_workdir || '—')}</span>
+                        ${via}
                     </div>
-                    ${degraded ? `<div class="iso-degraded">隔离降级：${esc(iso.degraded_reason)}</div>` : ''}`;
+                    ${degraded ? `<div class="iso-degraded">隔离降级：${esc(iso.degraded_reason)}<div class="cap-note" style="margin-top:4px;color:var(--text-secondary)">隔离不完整时，样本行为可能没有全部被约束，本报告的结论可信度随之下降。</div></div>` : ''}`;
                 isoBox.style.display = '';
             } else {
                 isoBox.style.display = 'none';
             }
+        }
+
+        // 隔离能力申报（engine / absolute_path_redirect / limitation / coverage / 复制统计）
+        const capBox = document.getElementById('capBox');
+        if (capBox) {
+            const html = renderCapabilities(iso);
+            if (html) { capBox.innerHTML = html; capBox.style.display = ''; }
+            else { capBox.style.display = 'none'; }
+        }
+
+        // 内存镜像扫描（未覆盖必须显示原因，绝不显示成"无威胁"）
+        const memBox = document.getElementById('memoryScanBox');
+        if (memBox) {
+            const mem = report.memory_scan || (report.report && report.report.memory_scan) || null;
+            const html = renderMemoryScan(mem);
+            if (html) { memBox.innerHTML = html; memBox.style.display = ''; }
+            else { memBox.style.display = 'none'; }
         }
 
         // 行为列表

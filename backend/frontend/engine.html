@@ -824,13 +824,16 @@
             { id: 'etw', name: 'ETW 事中检测', icon: 'etw',
               desc: 'Windows 事件追踪 · 实时捕获进程行为', status: 'etw', action: 'toggle' },
             { id: 'amsi', name: 'AMSI 无文件拦截', icon: 'amsi',
-              desc: 'AMSI Provider · 拦截 PowerShell 等无文件攻击', status: 'amsi', action: 'toggle' }
+              desc: 'AMSI Provider · 拦截 PowerShell 等无文件攻击', status: 'amsi', action: 'toggle' },
+            { id: 'heuristic', name: '启发式引擎', icon: 'heuristic',
+              desc: '脚本/OLE/PDF/驱动通用启发式 · PE 头异常 · URL 钓鱼 · 勒索文本分档', status: 'static', action: 'none' }
         ],
         status: {}, // id -> 各引擎原始状态
         icons: {
             ml: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>',
             etw: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>',
-            amsi: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/><path d="M8 9l2 2-2 2M12 13h4"/></svg>'
+            amsi: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/><path d="M8 9l2 2-2 2M12 13h4"/></svg>',
+            heuristic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/><path d="M11 8v3l2 2"/></svg>'
         },
 
         /** 并行拉取各引擎状态（实时数据来源 3） */

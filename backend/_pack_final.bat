@@ -2,7 +2,7 @@
 chcp 65001 >nul
 setlocal EnableDelayedExpansion
 
-cd /d "F:\Caelire\backend"
+cd /d "H:\Caelire\backend"
 set LOGFILE=_pack_final.log
 if exist %LOGFILE% del /f /q %LOGFILE%
 if exist _pack_SUCCESS.flag del /f /q _pack_SUCCESS.flag

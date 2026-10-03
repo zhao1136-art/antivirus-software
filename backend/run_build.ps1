@@ -1,10 +1,10 @@
 $ErrorActionPreference = "Continue"
-$WorkingDir = "F:\杀毒\backend"
-$LogFile = "F:\tmp\pyinstaller_full.log"
+$WorkingDir = "H:\Caelire\backend"
+$LogFile = "H:\Caelire\backend\_tmp\pyinstaller_full.log"
 
 Set-Location $WorkingDir
-$env:TMP = "F:\tmp"
-$env:TEMP = "F:\tmp"
+$env:TMP = "H:\Caelire\backend\_tmp"
+$env:TEMP = "H:\Caelire\backend\_tmp"
 
 "=== 开始时间: $(Get-Date) ===" | Out-File -FilePath $LogFile -Encoding UTF8
 "工作目录: $(Get-Location)" | Out-File -FilePath $LogFile -Append -Encoding UTF8

@@ -1,6 +1,6 @@
 @echo off
 setlocal enabledelayedexpansion
-set LOG=F:\杀毒\backend\FULL_PACK_LOG.txt
+set LOG=H:\Caelire\backend\FULL_PACK_LOG.txt
 
 echo ============================================================ > "%LOG%"
 echo YUTIAN PACK EXECUTION LOG >> "%LOG%"
@@ -9,15 +9,15 @@ echo ============================================================ >> "%LOG%"
 echo. >> "%LOG%"
 
 echo --- Step 1: Set TMP and TEMP --- >> "%LOG%"
-set TMP=F:\tmp
-set TEMP=F:\tmp
+set TMP=H:\Caelire\backend\_tmp
+set TEMP=H:\Caelire\backend\_tmp
 echo TMP=%TMP% >> "%LOG%"
 echo TEMP=%TEMP% >> "%LOG%"
 if exist "%TMP%" (echo TMP dir exists: YES >> "%LOG%") else (echo TMP dir exists: NO >> "%LOG%")
 echo. >> "%LOG%"
 
 echo --- Step 2: Change directory --- >> "%LOG%"
-cd /d "F:\杀毒\backend"
+cd /d "H:\Caelire\backend"
 echo Current dir: %CD% >> "%LOG%"
 echo. >> "%LOG%"
 
@@ -42,7 +42,7 @@ echo Start: %DATE% %TIME% >> "%LOG%"
 echo. >> "%LOG%"
 echo ================ PyInstaller OUTPUT ================ >> "%LOG%"
 
-F:\Python314\python.exe -m PyInstaller 安盾.spec --clean --noconfirm >> "%LOG%" 2>&1
+F:\Python314\python.exe -m PyInstaller 御天.spec --clean --noconfirm >> "%LOG%" 2>&1
 set EXITCODE=%ERRORLEVEL%
 
 echo ================ END PyInstaller OUTPUT ================ >> "%LOG%"
