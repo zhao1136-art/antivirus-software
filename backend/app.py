@@ -628,6 +628,10 @@ def _init_tray_icon():
         def on_exit():
             """退出程序（Logo 淡出 + 资源释放 + 进程退出）"""
             import threading
+            # 诊断：后端一整天在"自己消失"，日志只有 [御天] 再见、没有任何 HTTP
+            # 请求痕迹。_do_exit_with_fadeout 跑在独立线程里，它自己的调用栈
+            # 看不到是谁起的线程 —— 所以必须在**启动线程的地方**留痕。
+            print("[御天][诊断] 退出触发点 = 托盘图标菜单 on_exit")
             threading.Thread(target=_do_exit_with_fadeout, daemon=True).start()
 
         tray_icon.set_callbacks(on_show=on_show, on_exit=on_exit)
@@ -1741,6 +1745,8 @@ async def emergency_kill_log():
 @app.post("/api/v1/shutdown")
 async def shutdown():
     """关闭御天（含守护进程）- Logo 淡出动画 + 资源释放 + 进程退出"""
+    # 诊断：见 on_exit 处的说明。这个接口被设置页的「立即退出」按钮调用。
+    print("[御天][诊断] 退出触发点 = POST /api/v1/shutdown")
     _thr.Thread(target=_do_exit_with_fadeout, daemon=True).start()
     return {"success": True, "message": "御天正在退出，Logo 淡出动画播放中..."}
 
@@ -3784,6 +3790,15 @@ def _do_exit_with_fadeout():
     3. 动画期间释放引擎资源
     4. 动画结束后彻底退出进程
     """
+    # 诊断：后端一整天在"自己消失"，日志里只有 [御天] 再见、没有任何 HTTP
+    # 请求痕迹，说明是进程内部某处调了这里。把调用栈打出来，一次就能点名。
+    try:
+        import traceback as _tb
+        print("[御天][诊断] _do_exit_with_fadeout 被调用，调用栈如下：")
+        _tb.print_stack()
+        print("[御天][诊断] 调用栈结束")
+    except Exception:
+        pass
     # 1. 保存状态
     print("[御天] 正在保存状态...")
     try:
