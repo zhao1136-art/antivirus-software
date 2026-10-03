@@ -17,6 +17,11 @@
   7. 自动生成分析报告（verdict / confidence / behaviors / risk_indicators / isolation）
   8. 历史分析记录持久化到 data/sandbox_history.json
   9. 支持分析超时控制与强制终止
+ 10. 可插拔隔离引擎（engine/isolation/）：copy = 复制式隔离（样本在沙箱内
+     副本上执行），none = 样本在原路径执行（对照 / 降级目标）。每个引擎必须
+     申报能力（capabilities）并写进 isolation.capabilities —— 用户态做不到
+     绝对路径重定向，就绝不说做到了；copy 不可用时降级 none 并写进
+     isolation.degraded_reason
 
 注意：
   - 仅支持 Windows 平台（依赖 Job Object / ctypes / Windows API）
@@ -393,6 +398,34 @@ except ImportError:
     _HAS_PSUTIL = False
 
 
+# ── 可插拔隔离引擎（文件系统视野：copy = 复制式隔离 / none = 现状）──
+# 缺了它沙箱仍然要能跑（退回"样本在原路径执行"的旧行为），所以导入失败
+# 不抛异常，只把 _HAS_ISOLATION_ENGINE 置 False 并在报告里如实标注。
+try:
+    from engine.isolation import (
+        get_engine as _get_isolation_engine,
+        describe_engines as _describe_isolation_engines,
+        DEFAULT_ENGINE as _DEFAULT_ISOLATION_ENGINE,
+        ENGINE_NONE as _ENGINE_NONE,
+    )
+    _HAS_ISOLATION_ENGINE = True
+except Exception:  # pragma: no cover - 备用相对导入
+    try:
+        from .isolation import (
+            get_engine as _get_isolation_engine,
+            describe_engines as _describe_isolation_engines,
+            DEFAULT_ENGINE as _DEFAULT_ISOLATION_ENGINE,
+            ENGINE_NONE as _ENGINE_NONE,
+        )
+        _HAS_ISOLATION_ENGINE = True
+    except Exception:
+        _get_isolation_engine = None
+        _describe_isolation_engines = None
+        _DEFAULT_ISOLATION_ENGINE = "none"
+        _ENGINE_NONE = "none"
+        _HAS_ISOLATION_ENGINE = False
+
+
 # ── 工具函数 ──
 
 def _get_logger():
@@ -450,7 +483,13 @@ def _token_cancelled(cancel) -> bool:
 
 def _empty_isolation(level: str = ISOLATION_LEVEL_NONE,
                      reason: str = "") -> dict:
-    """构造隔离状态字典（所有报告都会带上它）"""
+    """构造隔离状态字典（所有报告都会带上它）
+
+    既有的键（job_object / network_blocked / integrity_level /
+    degraded_reason / low_il_workdir / firewall_rule /
+    firewall_rule_removed / created_via）一个都不能少；
+    下面 engine* 一组是隔离引擎（文件系统视野）的自述。
+    """
     return {
         "job_object": False,
         "network_blocked": False,
@@ -460,7 +499,89 @@ def _empty_isolation(level: str = ISOLATION_LEVEL_NONE,
         "firewall_rule": None,
         "firewall_rule_removed": None,
         "created_via": None,
+        # ── 隔离引擎（文件系统视野）──
+        "engine": None,              # 本次真正生效的引擎（copy / none）
+        "engine_requested": None,    # 调用方/配置请求的引擎（降级前）
+        "capabilities": None,        # 能力申报（绝对路径重定向等，必须诚实）
+        "exec_path": None,           # 实际被执行的路径（copy 下是沙箱内副本）
+        "copied_files": 0,
+        "copied_bytes": 0,
+        "truncated": False,          # 因容量上限没复制全
+        "engine_notes": [],          # 引擎自述（作用范围 / 跳过原因）
     }
+
+
+def _select_isolation_engine(sample_path: str, task_id: str,
+                             degraded: list, name: str | None = None) -> tuple[list, dict]:
+    """选隔离引擎并 prepare（默认 copy；不可用时降级 none）
+
+    降级原因一律追加进 degraded（最终写进 isolation.degraded_reason），
+    绝不静默跳过隔离。
+
+    Args:
+        name: 显式指定的引擎名；None = 用户配置 > 环境变量 > 默认 copy
+
+    Returns:
+        (engines, info)：engines 是需要调用方在 finally 中 cleanup 的引擎
+        列表（含降级前被弃用的那个，它可能已经建了目录）；
+        info 是最终采用引擎的 prepare() 结果。
+
+    注意：prepare 在这里**不删**任何目录（引擎契约如此）——万一 copy 失败，
+    它建好的目录由调用方在 finally 里统一清理。
+    """
+    if not _HAS_ISOLATION_ENGINE:
+        degraded.append("隔离引擎包不可用，样本将在原始路径执行（无复制式隔离）")
+        return [], {
+            "ok": False, "engine": None, "exec_path": sample_path,
+            "work_dir": None, "root_dir": None, "capabilities": None,
+            "copied_files": 0, "copied_bytes": 0, "truncated": False,
+            "notes": [], "degraded_reason": "隔离引擎包不可用",
+        }
+
+    engines: list = []
+    engine = _get_isolation_engine(name)      # 显式指定 > 配置 > 环境变量 > 默认
+    engines.append(engine)
+    if engine.fallback_reason:
+        # 例如配置里写了不存在的引擎名：照实上报
+        degraded.append(engine.fallback_reason)
+
+    try:
+        info = engine.prepare(sample_path, task_id)
+    except Exception as e:
+        info = {
+            "ok": False, "engine": engine.name, "exec_path": sample_path,
+            "work_dir": None, "root_dir": None,
+            "capabilities": engine.capabilities(),
+            "copied_files": 0, "copied_bytes": 0, "truncated": False,
+            "notes": [],
+            "degraded_reason": f"prepare 异常: {type(e).__name__}: {e}",
+        }
+
+    if info.get("ok"):
+        return engines, info
+
+    reason = info.get("degraded_reason") or "引擎未说明原因"
+    failed_name = info.get("engine") or engine.name
+    if failed_name == _ENGINE_NONE:
+        degraded.append(f"隔离引擎 {failed_name} 不可用（{reason}），无更低的后端可降级")
+        return engines, info
+
+    degraded.append(
+        f"隔离引擎 {failed_name} 不可用（{reason}），已降级为 {_ENGINE_NONE}"
+    )
+    fallback = _get_isolation_engine(_ENGINE_NONE)
+    engines.append(fallback)
+    try:
+        info2 = fallback.prepare(sample_path, task_id)
+    except Exception as e:
+        info2 = dict(info)
+        info2.update({
+            "ok": False, "engine": fallback.name, "exec_path": sample_path,
+            "work_dir": None, "capabilities": fallback.capabilities(),
+            "degraded_reason": f"none 后端 prepare 异常: {type(e).__name__}: {e}",
+        })
+        degraded.append(info2["degraded_reason"])
+    return engines, info2
 
 
 def _run_netsh(args: list[str]) -> tuple[int, str, str]:
@@ -815,12 +936,14 @@ class LightweightSandbox:
     # ── 主分析入口 ──
 
     def analyze_file(self, file_path: str, timeout: int = DEFAULT_ANALYSIS_TIMEOUT,
-                     cancel=None) -> dict:
+                     cancel=None, isolation_engine: str | None = None) -> dict:
         """在沙箱中分析文件
 
         流程：
           1. 建独立低完整性工作目录（icacls 打 Low 标签）
-          2. 加防火墙出网阻断规则（按样本绝对路径，规则名带 task id）
+          1b. 准备隔离引擎（默认 copy = 复制式隔离；不可用则降级 none）
+              —— 必须在建 Job Object 之前，执行路径取引擎给出的 exec_path
+          2. 加防火墙出网阻断规则（按**实际执行路径**，规则名带 task id）
           3. 创建 Job Object（内存/CPU/进程数/关闭即杀/UI 限制）
           4. 创建 Low IL 受限令牌（CreateRestrictedToken + TokenIntegrityLevel）
           5. 用该令牌创建挂起进程（CreateProcessAsUserW，失败则
@@ -830,7 +953,7 @@ class LightweightSandbox:
           8. 等待 timeout 秒（分片轮询，可被 cancel 令牌提前打断）
           9. 收集行为日志
          10. 终止 Job（杀死所有子进程）
-         11. finally：删除防火墙规则 + 清理工作目录
+         11. finally：删除防火墙规则 + 清理隔离引擎目录 + 清理工作目录
          12. 生成报告（含 isolation 字段，降级原因如实写入）
 
         Args:
@@ -838,6 +961,8 @@ class LightweightSandbox:
             timeout: 分析超时时间（秒）
             cancel: 可选取消令牌（is_cancelled()/is_set()）；置位后立即
                     终止沙箱进程并返回 cancelled=True 的部分报告
+            isolation_engine: 可选引擎名覆盖（"copy"/"none"）；None = 走
+                    用户配置 > 环境变量 > 默认 copy
 
         Returns:
             分析报告字典，包含 verdict / confidence / behaviors /
@@ -897,6 +1022,10 @@ class LightweightSandbox:
         firewall_rule = ""
         firewall_added = False
         cleanup_error = ""
+        isolation_engines: list = []
+        iso_info: dict = {}
+        exec_path = file_path
+        iso_work_dir: str | None = None
 
         try:
             # 1. 独立低完整性工作目录
@@ -905,10 +1034,37 @@ class LightweightSandbox:
             if acl_err:
                 degraded.append(f"低完整性工作目录 ACL 未生效: {acl_err}")
 
-            # 2. 出网阻断（按样本路径，规则名唯一）
+            # 1b. 准备隔离引擎（文件系统视野），必须在建 Job Object 之前。
+            #     引擎的 work_dir 与上面的低完整性工作目录是同一条路径
+            #     （%TEMP%\yutian_sandbox\<task_id>），副本因此天然落在已打
+            #     Low 标签的目录里，低完整性进程写得进去。若将来某个后端把
+            #     work_dir 指到别处，必须自己先给那个目录打 Low 标签。
+            isolation_engines, iso_info = _select_isolation_engine(
+                file_path, report_id, degraded, isolation_engine)
+            exec_path = iso_info.get("exec_path") or file_path
+            iso_work_dir = iso_info.get("work_dir") or low_box_dir or None
+            isolation["engine"] = iso_info.get("engine")
+            isolation["engine_requested"] = (
+                isolation_engines[0].requested_name if isolation_engines else None)
+            isolation["capabilities"] = iso_info.get("capabilities")
+            isolation["exec_path"] = exec_path
+            isolation["copied_files"] = iso_info.get("copied_files", 0)
+            isolation["copied_bytes"] = iso_info.get("copied_bytes", 0)
+            isolation["truncated"] = bool(iso_info.get("truncated"))
+            isolation["engine_notes"] = list(iso_info.get("notes") or [])
+            self._log(
+                "info",
+                f"隔离引擎={isolation['engine']} "
+                f"(请求 {isolation['engine_requested']})，"
+                f"执行路径={exec_path}，工作目录={iso_work_dir}"
+            )
+
+            # 2. 出网阻断（规则名唯一，按**实际执行路径**加规则）
+            #    ⚠️ copy 引擎下样本从沙箱内副本启动，若仍按样本原路径加规则，
+            #    防火墙按 program 匹配不到副本，出网阻断会形同虚设。
             firewall_rule = _network_rule_name(report_id)
             isolation["firewall_rule"] = firewall_rule
-            blocked, block_err = _network_block_rule(firewall_rule, file_path)
+            blocked, block_err = _network_block_rule(firewall_rule, exec_path)
             firewall_added = blocked
             isolation["network_blocked"] = blocked
             if blocked:
@@ -950,9 +1106,11 @@ class LightweightSandbox:
             # 加入本沙箱 Job（嵌套 Job），资源限制照常生效。
 
             # CreateProcess* 需要可变字符串作为命令行
-            cmd_line = ctypes.create_unicode_buffer(f'"{file_path}"')
-            env_block = _build_sandbox_environment(low_box_dir or None) \
-                if low_box_dir else None
+            # 注意：命令行给的是**引擎的执行路径**（copy 下 = 沙箱内副本），
+            # 不是样本原路径。
+            cmd_line = ctypes.create_unicode_buffer(f'"{exec_path}"')
+            env_block = _build_sandbox_environment(iso_work_dir) \
+                if iso_work_dir else None
             env_ptr = ctypes.cast(env_block, ctypes.c_void_p) if env_block else None
 
             success = False
@@ -962,7 +1120,7 @@ class LightweightSandbox:
                 # 5a. 正统路径：用 Low IL 令牌创建挂起进程
                 success = _advapi32.CreateProcessAsUserW(
                     h_token, None, cmd_line, None, None, False,
-                    creation_flags, env_ptr, low_box_dir or None,
+                    creation_flags, env_ptr, iso_work_dir or None,
                     ctypes.byref(startup_info), ctypes.byref(proc_info)
                 )
                 if success:
@@ -973,7 +1131,7 @@ class LightweightSandbox:
                     ok_b = _advapi32.CreateProcessWithTokenW(
                         h_token, 0, None, cmd_line,
                         creation_flags & ~CREATE_SUSPENDED,
-                        env_ptr, low_box_dir or None,
+                        env_ptr, iso_work_dir or None,
                         ctypes.byref(startup_info), ctypes.byref(proc_info)
                     )
                     if ok_b:
@@ -1000,7 +1158,7 @@ class LightweightSandbox:
                 # 5c. 降级：同等完整性启动（隔离等级不足，如实记录）
                 success = _kernel32.CreateProcessW(
                     None, cmd_line, None, None, False, creation_flags,
-                    env_ptr, low_box_dir or None,
+                    env_ptr, iso_work_dir or None,
                     ctypes.byref(startup_info), ctypes.byref(proc_info)
                 )
                 if success:
@@ -1188,7 +1346,23 @@ class LightweightSandbox:
                 else:
                     self._log("info", f"防火墙规则已删除: {firewall_rule}")
 
-            # 11. 清理沙箱工作目录
+            # 11. 隔离引擎清理（和防火墙规则删除、工作目录清理并列，
+            #     且必须在 TerminateJobObject 之后 —— 进程还活着时目录删不掉）
+            for _eng in isolation_engines:
+                _eng_name = getattr(_eng, "name", "?")
+                try:
+                    _eng.cleanup()
+                except Exception as e:
+                    degraded.append(
+                        f"隔离引擎清理异常({_eng_name}): {type(e).__name__}: {e}")
+                    continue
+                if getattr(_eng, "cleanup_error", ""):
+                    degraded.append(
+                        f"隔离引擎清理失败({_eng_name}): {_eng.cleanup_error}")
+                else:
+                    self._log("info", f"隔离引擎已清理: {_eng_name}")
+
+            # 12. 清理沙箱工作目录（兜底清扫，防止引擎没管到的残留）
             if low_box_dir:
                 wd_err = _cleanup_sandbox_workdir(low_box_dir)
                 if wd_err:
@@ -1197,7 +1371,7 @@ class LightweightSandbox:
         isolation["degraded_reason"] = "; ".join(degraded)
         elapsed = round(time.time() - start_time, 2)
 
-        # 12. 生成报告
+        # 13. 生成报告
         report = self._generate_report(
             file_path, behaviors, elapsed, report_id, isolation=isolation
         )
@@ -1639,6 +1813,13 @@ class LightweightSandbox:
                 "integrity_sid": INTEGRITY_SID_LOW,
                 "sandbox_root": os.path.join(
                     os.environ.get("TEMP") or "", SANDBOX_ROOT_DIRNAME
+                ),
+                "isolation_engine_available": _HAS_ISOLATION_ENGINE,
+                "isolation_engine_default": (
+                    _DEFAULT_ISOLATION_ENGINE if _HAS_ISOLATION_ENGINE else "none"),
+                "isolation_engines": (
+                    _describe_isolation_engines()
+                    if _HAS_ISOLATION_ENGINE else {}
                 ),
             },
         }
