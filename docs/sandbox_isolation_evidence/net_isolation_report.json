@@ -1,0 +1,26 @@
+{
+  "workdir": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\yutian_sandbox\\netproof",
+  "workdir_acl_error": "",
+  "workdir_is_low": true,
+  "firewall_rule": "caelire_sandbox_block_netproof_5948",
+  "firewall_add_ok": true,
+  "firewall_add_error": "",
+  "firewall_visible": true,
+  "low_il_token_error": "",
+  "created_via": "CreateProcessAsUserW(low_il)",
+  "create_error": 0,
+  "assigned_to_job": true,
+  "exit_code": 0,
+  "child_net_log": [
+    "--- net probe start ---",
+    "1.1.1.1:80 BLOCKED/FAILED wsa=10013",
+    "8.8.8.8:53 BLOCKED/FAILED wsa=10013",
+    "223.5.5.5:53 BLOCKED/FAILED wsa=10013",
+    "93.184.216.34:80 BLOCKED/FAILED wsa=10013",
+    "--- net probe end ---"
+  ],
+  "firewall_removed": true,
+  "firewall_remove_error": "",
+  "firewall_still_visible": false,
+  "workdir_cleanup_error": ""
+}

@@ -1,0 +1,183 @@
+{
+  "capabilities": {
+    "job_object": true,
+    "network_block": true,
+    "low_integrity": true,
+    "integrity_sid": "S-1-16-4096",
+    "sandbox_root": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\yutian_sandbox"
+  },
+  "reports": {
+    "mingw_test_exe": {
+      "report_id": "sandbox_1791010284840",
+      "file_path": "H:\\Caelire\\_isolation_check\\test_exe.exe",
+      "file_name": "test_exe.exe",
+      "file_size": 54197,
+      "verdict": "clean",
+      "confidence": 0.95,
+      "risk_score": 5,
+      "behaviors": [
+        {
+          "type": "process_exit",
+          "detail": "沙箱进程正常退出，退出码 0（低完整性 low 隔离下运行）",
+          "severity": "low",
+          "timestamp": 1791010288.1273525
+        }
+      ],
+      "risk_indicators": [],
+      "behavior_counts": {
+        "process_exit": 1
+      },
+      "isolation": {
+        "job_object": true,
+        "network_blocked": true,
+        "integrity_level": "low",
+        "degraded_reason": "",
+        "low_il_workdir": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\yutian_sandbox\\sandbox_1791010284840",
+        "firewall_rule": "caelire_sandbox_block_sandbox_1791010284840_6584",
+        "firewall_rule_removed": true,
+        "created_via": "CreateProcessAsUserW(low_il)"
+      },
+      "elapsed_sec": 3.49,
+      "timestamp": 1791010288.4073682,
+      "datetime": "2026-10-03 14:51:28"
+    },
+    "notepad": {
+      "report_id": "sandbox_1791010289065",
+      "file_path": "C:\\Windows\\System32\\notepad.exe",
+      "file_name": "notepad.exe",
+      "file_size": 200704,
+      "verdict": "suspicious",
+      "confidence": 0.4,
+      "risk_score": 40,
+      "behaviors": [
+        {
+          "type": "process_exit",
+          "detail": "进程被超时强制终止，退出码不可信",
+          "severity": "low",
+          "timestamp": 1791010297.2073004
+        },
+        {
+          "type": "timeout",
+          "detail": "进程在 8s 后未退出",
+          "severity": "medium"
+        }
+      ],
+      "risk_indicators": [
+        "运行超时未退出（行为不可知）"
+      ],
+      "behavior_counts": {
+        "process_exit": 1,
+        "timeout": 1
+      },
+      "isolation": {
+        "job_object": true,
+        "network_blocked": true,
+        "integrity_level": "low",
+        "degraded_reason": "",
+        "low_il_workdir": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\yutian_sandbox\\sandbox_1791010289065",
+        "firewall_rule": "caelire_sandbox_block_sandbox_1791010289065_6584",
+        "firewall_rule_removed": true,
+        "created_via": "CreateProcessAsUserW(low_il)"
+      },
+      "elapsed_sec": 8.62,
+      "timestamp": 1791010297.6912682,
+      "datetime": "2026-10-03 14:51:37"
+    }
+  },
+  "non_pe": {
+    "report_id": "sandbox_1791010298360",
+    "file_path": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\caelire_not_a_pe.txt",
+    "file_name": "caelire_not_a_pe.txt",
+    "file_size": 8,
+    "verdict": "unknown",
+    "confidence": 0.0,
+    "risk_score": 0,
+    "behaviors": [],
+    "risk_indicators": [],
+    "behavior_counts": {},
+    "isolation": {
+      "job_object": false,
+      "network_blocked": false,
+      "integrity_level": "none",
+      "degraded_reason": "未进入沙箱执行，无隔离",
+      "low_il_workdir": null,
+      "firewall_rule": null,
+      "firewall_rule_removed": null,
+      "created_via": null
+    },
+    "elapsed_sec": 0,
+    "timestamp": 1791010298.3616972,
+    "datetime": "2026-10-03 14:51:38",
+    "note": "非 PE 文件，无法沙箱执行"
+  },
+  "missing": {
+    "report_id": "sandbox_1791010298361",
+    "file_path": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\nope_xyz.exe",
+    "file_name": "nope_xyz.exe",
+    "file_size": 0,
+    "verdict": "unknown",
+    "confidence": 0.0,
+    "risk_score": 0,
+    "behaviors": [],
+    "risk_indicators": [],
+    "behavior_counts": {},
+    "isolation": {
+      "job_object": false,
+      "network_blocked": false,
+      "integrity_level": "none",
+      "degraded_reason": "未进入沙箱执行，无隔离",
+      "low_il_workdir": null,
+      "firewall_rule": null,
+      "firewall_rule_removed": null,
+      "created_via": null
+    },
+    "elapsed_sec": 0,
+    "timestamp": 1791010298.362115,
+    "datetime": "2026-10-03 14:51:38",
+    "note": "文件不存在"
+  },
+  "baseline_network": [
+    "8.8.8.8:53 CONNECTED",
+    "223.5.5.5:53 CONNECTED",
+    "1.1.1.1:80 TimeoutError: timed out"
+  ],
+  "sandboxed_net_probe": {
+    "report_id": "sandbox_1791010302575",
+    "file_path": "H:\\Caelire\\_isolation_check\\net_probe.exe",
+    "file_name": "net_probe.exe",
+    "file_size": 58855,
+    "verdict": "clean",
+    "confidence": 0.95,
+    "risk_score": 5,
+    "behaviors": [
+      {
+        "type": "process_exit",
+        "detail": "沙箱进程正常退出，退出码 0（低完整性 low 隔离下运行）",
+        "severity": "low",
+        "timestamp": 1791010303.9945118
+      }
+    ],
+    "risk_indicators": [],
+    "behavior_counts": {
+      "process_exit": 1
+    },
+    "isolation": {
+      "job_object": true,
+      "network_blocked": true,
+      "integrity_level": "low",
+      "degraded_reason": "",
+      "low_il_workdir": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\yutian_sandbox\\sandbox_1791010302575",
+      "firewall_rule": "caelire_sandbox_block_sandbox_1791010302575_6584",
+      "firewall_rule_removed": true,
+      "created_via": "CreateProcessAsUserW(low_il)"
+    },
+    "elapsed_sec": 1.67,
+    "timestamp": 1791010304.2449949,
+    "datetime": "2026-10-03 14:51:44"
+  },
+  "firewall_rules_left": {
+    "netsh_rc": 1,
+    "output": "No rules match the specified criteria."
+  },
+  "workdirs_left": []
+}
