@@ -246,26 +246,20 @@ class DecisionQueue:
                       "auto": 0, "suppressed": 0}
 
     def ask(self, path: str, threat: dict) -> PendingDecision:
-        """登记一个待决项（不阻塞），并尽力弹一个系统托盘气泡。
+        """登记一个待决项（不阻塞），并推给两条**可点**通道。
 
-        托盘气泡是"用户没在看浏览器"时的兜底：浏览器后台标签页会把
-        setInterval 节流到约每分钟一次，网页里的右下角弹窗可能来不及出现，
-        而 15 秒一到就自动隔离了 —— 那就又变成"用户毫不知情"。
-        通知失败绝不影响判定流程。
+        只保留"带按钮、用户能真正做决定"的通道：
+          1) 桌面原生窗口（tkinter，置顶，屏幕右下角）—— 不依赖浏览器，主通道
+          2) 网页右下角弹窗 —— 用户正看着页面时更顺手
+
+        系统托盘气泡只有提示、没有按钮，用户只能眼看着 15 秒过去，
+        按用户要求已移除（"只留有按钮的弹窗"）。
         """
         pd = PendingDecision(path, threat)
         pd.deadline = pd.created_at + self.timeout
         with self._lock:
             self._pending[pd.id] = pd
         self.stats["asked"] += 1
-        try:
-            from engine.tray_icon import notify as _tray_notify
-            _tray_notify(
-                "御天 - 发现威胁，%d 秒后自动隔离" % int(self.timeout),
-                "%s\n%s" % (pd.threat_name, os.path.basename(path)),
-            )
-        except Exception:
-            pass
         # 桌面决策窗口：用户不在浏览器前时的**唯一可点通道**。
         # 网页弹窗和托盘气泡都只是"通知"——点不到、也没按钮；
         # 少了这个，桌面用户只能眼看着 15 秒后文件被自动隔离。
