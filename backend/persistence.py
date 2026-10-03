@@ -79,10 +79,9 @@ DEFAULT_CONFIG_SAVE = {
     },
     "cloud": {
         # 云查杀引擎优先级（用户可在设置页选择，按顺序降级查询）
-        "engine_order": ["andun", "avic", "threatbook", "otx"],
-        # AndunAI 自建云查杀平台
-        "andun_url": "http://47.93.118.106",
-        "andun_api_key": "",
+        "engine_order": ["avic", "threatbook", "otx"],
+        # AVIC 情报中心 API Key（用户可选填；为空则读环境变量 AVIC_API_KEY）
+        "avic_api_key": "",
     },
     "policy": {
         "threat_action": "quarantine",

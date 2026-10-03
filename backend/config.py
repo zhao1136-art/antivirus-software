@@ -77,14 +77,10 @@ try:
     if _policy_cfg.get("log_retention_days", 0) > 0:
         LOG_RETENTION_DAYS = _policy_cfg["log_retention_days"]
 
-    # 云查杀引擎配置覆盖（引擎优先级 + AndunAI 平台地址）
-    _cloud_cfg = _persistent_config.get("cloud", {})
-    if _cloud_cfg.get("engine_order"):
-        CLOUD_ENGINE_ORDER = list(_cloud_cfg["engine_order"])
-    if _cloud_cfg.get("andun_url"):
-        ANDUN_BASE_URL = _cloud_cfg["andun_url"]
-    if _cloud_cfg.get("andun_api_key"):
-        ANDUN_API_KEY = _cloud_cfg["andun_api_key"]
+    # 云查杀 engines 配置（引擎优先级 / AVIC 凭据）保存在 cloud 段；
+    # 但对应常量（CLOUD_ENGINE_ORDER / AVIC_API_KEY）定义在本模块下方，
+    # 此处先留存原始配置，待常量定义完成后再覆盖，避免被默认值冲掉。
+    _PERSISTED_CLOUD_CFG = _persistent_config.get("cloud", {})
 except Exception:
     pass
 
@@ -241,15 +237,27 @@ CLOUD_ENABLED = os.environ.get("CLOUD_SCAN_ENABLED", "true").lower() == "true"
 CLOUD_CACHE_TTL = 7 * 24 * 3600  # 7天
 
 # AVIC 社区联合情报中心配置
-AVIC_API_KEY = "AVIC-447C8973518745A51A70AE5CD933E4E8"
+# 安全要求：不内置明文密钥（否则会随源码/镜像一起发布泄露）。
+# 解析优先级：data/config_save.json 的 cloud.avic_api_key > 环境变量 AVIC_API_KEY > 空串。
+# 为空串时 AVIC 引擎降级为「未配置」，云查功能其余引擎（微步/OTX）不受影响。
+AVIC_API_KEY = os.environ.get("AVIC_API_KEY", "")
 AVIC_BASE_URL = "https://avic.xiguastudio.top"
 AVIC_ENABLED = True
 
-# AndunAI 自建云查杀平台配置
-ANDUN_BASE_URL = "http://shadu.zh.kg"
-ANDUN_API_KEY = ""
 # 云查杀引擎优先级（按顺序查询，命中即返回）
-CLOUD_ENGINE_ORDER = ["andun", "avic", "threatbook", "otx"]
+CLOUD_ENGINE_ORDER = ["avic", "threatbook", "otx"]
+
+# 用户配置文件（data/config_save.json 的 cloud 段）优先于默认值 / 环境变量。
+# 注意：必须在常量定义之后再覆盖 —— 本文件顶部的持久化加载块早于这些定义，
+# 在那里赋值会被下面的默认值覆盖掉。
+try:
+    _persisted_cloud = globals().get("_PERSISTED_CLOUD_CFG") or {}
+    if _persisted_cloud.get("avic_api_key"):
+        AVIC_API_KEY = _persisted_cloud["avic_api_key"]
+    if _persisted_cloud.get("engine_order"):
+        CLOUD_ENGINE_ORDER = list(_persisted_cloud["engine_order"])
+except Exception:
+    pass
 
 # ===== 系统进程保护配置 =====
 # 进程监控扫描间隔（秒）

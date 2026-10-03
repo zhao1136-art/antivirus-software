@@ -2026,7 +2026,8 @@ def broadcast_progress(task_id: str, progress: int, current_file: str):
 # ---------- 云端 API ----------
 
 class CloudConfigRequest(BaseModel):
-    api_key: str
+    api_key: Optional[str] = ""
+    engine_order: Optional[list] = None
 
 
 @app.get("/api/v1/cloud/status")
@@ -2038,8 +2039,18 @@ async def cloud_status():
 
 @app.post("/api/v1/cloud/config")
 async def cloud_config(req: CloudConfigRequest):
-    """配置云端 API Key"""
-    scheduler.cloud.set_api_key(req.api_key)
+    """配置云端 API Key / 云查杀引擎优先级"""
+    if req.api_key:
+        scheduler.cloud.set_api_key(req.api_key)
+    if req.engine_order:
+        scheduler.cloud.set_engine_order(req.engine_order)
+        # 持久化归一化后的优先级（过滤掉已下线/未知引擎）
+        try:
+            cfg = load_config_save()
+            cfg.setdefault("cloud", {})["engine_order"] = scheduler.cloud.engine_order
+            save_config_save(cfg)
+        except Exception:
+            pass
     return scheduler.cloud.get_status()
 
 
@@ -2270,204 +2281,31 @@ async def otx_get_pulse(pulse_id: str):
         return JSONResponse({"success": False, "error": str(e)}, 500)
 
 
-# ---------- AndunAI 自建云查杀平台 API ----------
-
-class AndunConfigRequest(BaseModel):
-    url: Optional[str] = ""
-    api_key: Optional[str] = ""
-    engine_order: Optional[list] = None
-
-
-@app.get("/api/v1/cloud/andun/status")
-async def andun_status():
-    """AndunAI 平台状态"""
-    try:
-        cs = scheduler.cloud
-        status = cs.get_status().get("andun", {})
-        return {
-            "ok": True,
-            **status,
-            "last_error": cs.last_error if not status.get("available") else None,
-        }
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
-
-@app.post("/api/v1/cloud/andun/config")
-async def andun_config(req: AndunConfigRequest):
-    """配置 AndunAI 平台地址 / 密钥 / 引擎优先级"""
-    try:
-        cs = scheduler.cloud
-        changed = False
-        if req.url:
-            cs.set_andun(url=req.url, api_key=req.api_key or "")
-            changed = True
-        elif req.api_key:
-            cs.set_andun(api_key=req.api_key)
-            changed = True
-        if req.engine_order:
-            cs.set_engine_order(req.engine_order)
-            changed = True
-
-        # 持久化
-        cfg = load_config_save()
-        cloud_cfg = cfg.setdefault("cloud", {})
-        if req.url:
-            cloud_cfg["andun_url"] = req.url
-        if req.api_key:
-            cloud_cfg["andun_api_key"] = req.api_key
-        if req.engine_order:
-            cloud_cfg["engine_order"] = list(req.engine_order)
-        save_config_save(cfg)
-
-        return {"success": True, "changed": changed, "status": cs.get_status()}
-    except Exception as e:
-        return JSONResponse({"success": False, "error": str(e)}, 500)
-
-
-@app.get("/api/v1/cloud/andun/verify")
-async def andun_verify():
-    """主动验证 AndunAI 连接（同步阻塞）"""
-    try:
-        ok = scheduler.cloud.verify_andun()
-        return {"ok": ok, "status": scheduler.cloud.get_status().get("andun", {})}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
-
-class AndunHashRequest(BaseModel):
-    hash_value: str = ""
-
-
-@app.post("/api/v1/cloud/andun/hash")
-async def andun_scan_hash(req: AndunHashRequest):
-    """AndunAI 哈希云查询（本地库 + 在线情报）"""
-    if not req.hash_value:
-        return JSONResponse({"error": "请提供 hash_value"}, 400)
-    cs = scheduler.cloud
-    if not cs.get_status().get("andun", {}).get("configured"):
-        return JSONResponse({"success": False, "error": "未配置 AndunAI 平台地址，云查功能暂不可用，可到「引擎启动」页配置。", "degraded": True}, 400)
-    try:
-        result = cs._andun.query_hash(req.hash_value.strip())
-        return {"found": bool(result.get("found")) if isinstance(result, dict) else False, **result}
-    except Exception as e:
-        return JSONResponse({"success": False, "error": str(e)}, 500)
-
-
-@app.post("/api/v1/cloud/andun/scan")
-async def andun_scan_file(file: UploadFile = File(...)):
-    """上传文件到 AndunAI 平台做多层比对扫描"""
-    cs = scheduler.cloud
-    if not cs.get_status().get("andun", {}).get("configured"):
-        return JSONResponse({"success": False, "error": "未配置 AndunAI 平台地址，云查功能暂不可用，可到「引擎启动」页配置。", "degraded": True}, 400)
-    try:
-        import tempfile
-        ext = os.path.splitext(file.filename or "")[1] or ".tmp"
-        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-            content = await file.read()
-            tmp.write(content)
-            tmp_path = tmp.name
-        try:
-            result = scheduler.cloud.andun_scan_file(tmp_path)
-        finally:
-            try:
-                os.remove(tmp_path)
-            except Exception:
-                pass
-        if result is None:
-            return JSONResponse({"success": False, "error": "AndunAI 平台不可用或扫描失败"}, 502)
-        return result
-    except Exception as e:
-        return JSONResponse({"success": False, "error": str(e)}, 500)
-
-
-class AndunSubmitRequest(BaseModel):
-    sha256: Optional[str] = ""
-    threat_name: Optional[str] = ""
-    threat_type: Optional[str] = ""
-    reporter: Optional[str] = "yutian"
-    description: Optional[str] = ""
-    source: Optional[str] = ""
-    tags: Optional[list] = None
-
-
-@app.post("/api/v1/cloud/andun/submit")
-async def andun_submit(req: AndunSubmitRequest):
-    """上报哈希到 AndunAI 平台（仅情报，不含文件）"""
-    if not req.sha256:
-        return JSONResponse({"error": "请提供 sha256"}, 400)
-    try:
-        result = scheduler.cloud.andun_submit_hash(
-            req.sha256, threat_name=req.threat_name or "",
-            threat_type=req.threat_type or "", reporter=req.reporter or "yutian",
-            description=req.description or "", source=req.source or "", tags=req.tags,
-        )
-        if result is None:
-            return JSONResponse({"success": False, "error": "AndunAI 平台不可用"}, 502)
-        return result
-    except Exception as e:
-        return JSONResponse({"success": False, "error": str(e)}, 500)
-
-
 @app.post("/api/v1/cloud/sample/submit")
-async def cloud_sample_submit(file: UploadFile = File(...),
-                              threat_name: Optional[str] = Form(""),
-                              description: Optional[str] = Form("")):
+async def cloud_sample_submit(file: UploadFile = File(...)):
     """
-    样本回传闭环：上传一个疑似样本文件 →
-      1) 多引擎哈希比对（天听）
-      2) 若平台无权威结论（疑似/未知），自动上报 AndunAI 回传样本，闭环反馈
-    返回研判报告与上报结果。
+    云样本研判：上传一个疑似样本文件 → 本地计算哈希 → 多引擎哈希比对（天听），
+    返回研判报告。
     """
+    import hashlib
     cs = scheduler.cloud
-    cs_status = cs.get_status()
-    if not cs_status.get("andun", {}).get("configured"):
-        return JSONResponse({"success": False, "error": "未配置 AndunAI 平台，样本回传不可用，可到「引擎启动」页配置。", "degraded": True}, 400)
-    import tempfile, hashlib
-    ext = os.path.splitext(file.filename or "")[1] or ".tmp"
-    tmp_path = ""
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-            content = await file.read()
-            tmp.write(content)
-            tmp_path = tmp.name
+        content = await file.read()
         sha256 = hashlib.sha256(content).hexdigest()
         md5 = hashlib.md5(content).hexdigest()
 
-        # 1) 多引擎比对
         lookup = cs.lookup_hash(md5=md5, sha256=sha256) or {}
         known = lookup.get("verdict") in ("malicious", "clean")
-        report = {
+        return {
             "sha256": sha256,
             "md5": md5,
             "size_bytes": len(content),
             "filename": file.filename or "",
+            "known": known,
+            "lookup": lookup,
         }
-
-        # 2) 无权威结论时，回传样本文件到 AndunAI 闭环
-        submitted = None
-        if not known:
-            try:
-                submitted = cs.andun_submit_file(
-                    tmp_path, threat_name=threat_name or "",
-                    description=description or "",
-                    source="yutian-sample-feedback",
-                )
-            except Exception as e:
-                submitted = {"success": False, "error": str(e)}
-        report["known"] = known
-        report["lookup"] = lookup
-        report["submitted"] = submitted
-        report["loop_closed"] = bool(submitted and submitted.get("success"))
-        return report
     except Exception as e:
         return JSONResponse({"success": False, "error": str(e)}, 500)
-    finally:
-        try:
-            if tmp_path:
-                os.remove(tmp_path)
-        except Exception:
-            pass
 
 
 @app.get("/api/v1/cloud/engines")
@@ -2478,7 +2316,6 @@ async def cloud_engines():
         return {
             "engine_order": status.get("engine_order", []),
             "engines": {
-                "andun": status.get("andun", {}),
                 "avic": status.get("avic", {}),
                 "threatbook": status.get("threatbook", {}),
                 "otx": status.get("otx", {}),
@@ -3807,10 +3644,8 @@ async def config_reload():
         _cloud_cfg = _persistent_config.get("cloud", {})
         if _cloud_cfg.get("engine_order"):
             cfg.CLOUD_ENGINE_ORDER = list(_cloud_cfg["engine_order"])
-        if _cloud_cfg.get("andun_url"):
-            cfg.ANDUN_BASE_URL = _cloud_cfg["andun_url"]
-        if _cloud_cfg.get("andun_api_key"):
-            cfg.ANDUN_API_KEY = _cloud_cfg["andun_api_key"]
+        if _cloud_cfg.get("avic_api_key"):
+            cfg.AVIC_API_KEY = _cloud_cfg["avic_api_key"]
 
         _policy_cfg = _persistent_config.get("policy", {})
         if _policy_cfg.get("log_retention_days", 0) > 0:

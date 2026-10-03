@@ -30,7 +30,7 @@ CACHE_TTL_ERROR = 300         # 错误缓存 5分钟
 
 # ── 默认配置 ──
 DEFAULT_AVIC_URL = "https://avic.xiguastudio.top"
-DEFAULT_AVIC_KEY = "AVIC-447C8973518745A51A70AE5CD933E4E8"
+DEFAULT_AVIC_KEY = os.environ.get("AVIC_API_KEY", "")
 DEFAULT_ANDUN_URL = "http://shadu.zh.kg"
 
 # 默认引擎优先级（可按用户选择调整）

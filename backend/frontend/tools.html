@@ -421,17 +421,13 @@
                 <div class="tool-output" id="mailGuardOutput"></div>
             </div>
 
-            <!-- ═══ 云样本回传闭环 ═══ -->
+            <!-- ═══ 云样本多引擎比对 ═══ -->
             <div class="card">
-                <h3 class="card-title"><svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" width="16" height="16" style="margin-right:8px;vertical-align:-2px"><path d="M18 10h-1.3A7.5 7.5 0 1 0 9 17h.3"/><path d="M18 13v6"/><path d="M15 16h6"/></svg>云样本回传闭环</h3>
-                <p class="card-desc">上传疑似样本 → 多引擎哈希比对 → 无权威结论时自动回传 AndunAI 平台闭环（需配置引擎）</p>
+                <h3 class="card-title"><svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" width="16" height="16" style="margin-right:8px;vertical-align:-2px"><path d="M18 10h-1.3A7.5 7.5 0 1 0 9 17h.3"/><path d="M18 13v6"/><path d="M15 16h6"/></svg>云样本多引擎比对</h3>
+                <p class="card-desc">上传疑似样本 → 本地计算哈希 → 多引擎查询（AVIC / 微步在线 / AlienVault OTX）→ 返回研判结论</p>
                 <div class="card-row">
                     <input class="input-text" id="cloudSampleFile" type="file" style="flex:1">
-                    <button class="btn btn-primary btn-sm" onclick="cloudSampleSubmit()">比对并回传</button>
-                </div>
-                <div class="card-row">
-                    <input class="input-text" id="cloudSampleName" placeholder="威胁名（可选）" style="flex:1">
-                    <input class="input-text" id="cloudSampleDesc" placeholder="备注（可选）" style="flex:1">
+                    <button class="btn btn-primary btn-sm" onclick="cloudSampleSubmit()">开始比对</button>
                 </div>
                 <div id="cloudSampleResult" class="card-row" style="display:none"></div>
                 <div class="tool-output" id="cloudSampleOutput"></div>
@@ -934,7 +930,7 @@
             : '暂无历史告警');
     }
 
-    // ═══ 19. 云样本回传闭环 ═══
+    // ═══ 19. 云样本多引擎比对 ═══
     async function cloudSampleSubmit() {
         const fileInput = document.getElementById('cloudSampleFile');
         const box = document.getElementById('cloudSampleResult');
@@ -944,43 +940,31 @@
             return;
         }
         const file = fileInput.files[0];
-        box.innerHTML = '<span class="status-tag warn">正在上传比对并回传...</span>';
+        box.innerHTML = '<span class="status-tag warn">正在上传比对...</span>';
         const formData = new FormData();
         formData.append('file', file);
-        formData.append('threat_name', document.getElementById('cloudSampleName').value);
-        formData.append('description', document.getElementById('cloudSampleDesc').value);
         let resp = null;
         try {
             const r = await fetch(API_BASE + '/api/v1/cloud/sample/submit', { method: 'POST', body: formData });
             resp = await r.json();
         } catch (e) { console.warn(e); }
-        if (!resp) {
+        if (!resp || resp.success === false) {
             box.innerHTML = '<span class="status-tag fail">API 不可用</span>';
+            if (resp && resp.error) showOutput('cloudSampleOutput', resp.error);
             return;
         }
-        if (resp.degraded) {
-            box.innerHTML = '<span class="status-tag warn">未配置 AndunAI 平台（引擎启动页配置）</span>';
-            return;
-        }
-        const verdict = resp.known ? '已命中已知库' : (resp.loop_closed ? '✓ 已自动回传平台' : '回传未成功');
-        box.innerHTML = `<span class="status-tag ${resp.loop_closed ? 'ok' : 'warn'}">${verdict}</span>` +
-            `<span style="font-size:12px;color:var(--text-muted)">SHA256: ${(resp.sha256||'').slice(0,12)}...</span>`;
         const lookup = resp.lookup || {};
+        const verdict = resp.known ? '已命中已知库' : '未知（未命中本地/云端库）';
+        box.innerHTML = `<span class="status-tag ${resp.known ? 'ok' : 'warn'}">${verdict}</span>` +
+            `<span style="font-size:12px;color:var(--text-muted)">SHA256: ${(resp.sha256||'').slice(0,12)}...</span>`;
         showOutput('cloudSampleOutput', [
             `文件: ${resp.filename || '-'}`,
             `大小: ${resp.size_bytes || 0} 字节`,
             `SHA256: ${resp.sha256 || ''}`,
             `MD5: ${resp.md5 || ''}`,
-            `多引擎结论: ${lookup.verdict || '未知'} (${(lookup.engines_checked || 0)} 引擎)`,
+            `多引擎结论: ${lookup.verdict || lookup.threat_level || '未知'} (${(lookup.engines_checked || 0)} 引擎)`,
             `命中家族: ${(lookup.families || []).join(', ') || '无'}`,
-            `回传结果: ${submitted_text(resp.submitted)}`,
         ].join('\n'));
-    }
-
-    function submitted_text(submitted) {
-        if (!submitted) return '无需回传（已有权威结论）';
-        if (submitted.success) return '提交成功，平台已接收样本';
-        return '失败: ' + (submitted.error || submitted.msg || '未知');
     }
 
     // 页面加载时读取所有状态

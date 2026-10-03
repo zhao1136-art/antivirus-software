@@ -52,7 +52,7 @@ def test_batch_hits_appended_to_cloud_hits():
         inst.cloud = FakeCloudBatch({h: {
             "threat_name": "Cloud.Malware",
             "threat_level": "high",
-            "engine": "andun",
+            "engine": "cloud_avic",
         }})
         res = _make_result([fp], [])
         res["_scanned_hashes"][fp] = h

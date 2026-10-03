@@ -114,11 +114,19 @@ const server = http.createServer((req, res) => {
         amsiRegistered = p.endsWith('/register');
         return json(res, { success: true, registered: amsiRegistered });
     }
-    if (req.method === 'GET' && p === '/api/v1/cloud/andun/status') {
-        return json(res, { ok: true, available: true, url: 'http://47.93.118.106' });
+    if (req.method === 'GET' && p === '/api/v1/cloud/engines') {
+        return json(res, {
+            engine_order: ['avic', 'threatbook', 'otx'],
+            engines: {
+                avic: { available: true, configured: true },
+                threatbook: { available: false, configured: false },
+                otx: { available: false, configured: false }
+            },
+            last_error: null
+        });
     }
-    if (req.method === 'GET' && p === '/api/v1/cloud/andun/verify') {
-        return json(res, { ok: true, status: { available: true } });
+    if (req.method === 'GET' && p === '/api/v1/cloud/avic/status') {
+        return json(res, { ok: true, api_key: 'AVIC-xxxx...', base_url: 'https://avic.xiguastudio.top' });
     }
     const scanStatus = p.match(/^\/api\/v1\/scan\/(.+)\/status$/);
     if (req.method === 'GET' && scanStatus) {

@@ -1,2 +1,0 @@
-{"timestamp": "2026-10-03T08:37:14.561405", "type": "protected_process_terminated", "process": "svchost.exe", "pid": 7956, "level": "warning", "message": "受保护进程 svchost.exe (PID:7956) 已终止"}
-{"timestamp": "2026-10-03T08:37:41.700967", "type": "protected_process_terminated", "process": "svchost.exe", "pid": 1672, "level": "warning", "message": "受保护进程 svchost.exe (PID:1672) 已终止"}

@@ -1,5 +1,0 @@
-[御天] 已守护 6 天
-[御天] 本地病毒库文件不存在，跳过自动导入
-[NativeGuard] 已加载: H:\Caelire\backend\engine\native_guard\native_guard.dll
-[ETW] 事中检测已启动（轮询自动降频）
-INFO:     127.0.0.1:52753 - "GET / HTTP/1.1" 200 OK

@@ -95,23 +95,40 @@
 
 ## 三、更早审计发现、尚未处理
 
-### 3.1 🔴 硬编码密钥（已进入 git 历史）
+### 3.1 🟢 硬编码密钥（源码已修复；git 历史仍含明文）
 
-文件：`backend\config.py:244`
+文件：`backend\config.py`（原第 244 行）
 
 ```python
+# 修复前
 AVIC_API_KEY = "AVIC-447C8973518745A51A70AE5CD933E4E8"
 ```
 
-- 是真实 key，不是占位符；已随提交 `a37551c` 写入 git 历史
-- **改文件重提交无效**，需清历史或作废重签
+**已修复（2026-10-03）**：不再内置明文，改为
+
+```python
+# 优先级：data/config_save.json 的 cloud.avic_api_key > 环境变量 AVIC_API_KEY > 空串
+AVIC_API_KEY = os.environ.get("AVIC_API_KEY", "")
+```
+
+- 沿用项目既有持久化机制（`persistence.py` 的 `config_save.json` → `cloud.avic_api_key`）作为首选来源，
+  环境变量作为兜底；两者都没有时为空串，AVIC 引擎降级为「未配置」，其余引擎（微步/OTX）不受影响
+- 同一明文还硬编码在 `backend\engine\cloud_scanner.py` 的 `DEFAULT_AVIC_KEY`：
+  只改 `config.py` 会漏掉这条通路（它会覆盖空值），已一并改为读环境变量
 - 紧邻上一行是正确写法：`CLOUD_API_KEY = os.environ.get("THREATBOOK_API_KEY", "")`
-- **推送 Gitee 之前必须处理**
 
-### 3.2 🟡 明文 HTTP 云查杀
+⚠️ **尚未解决**：该 key 已随提交 `a37551c` 进入 git 历史，**改文件重提交无效**。
+推送 Gitee 之前必须**作废并重签这个 key**（或清理历史）。本 key 应视为已泄露。
 
-文件：`backend\config.py:249` → `ANDUN_BASE_URL = "http://shadu.zh.kg"`
-待查文件信息明文外发，可被中间人读取与篡改。
+其它明文凭据见 3.9（`test_sign.bat` 的 `CERT_PWD`），本次未改。
+
+### 3.2 🟢 明文 HTTP 云查杀（随 AndunAI 引擎移除而消除）
+
+原文件：`backend\config.py` → `ANDUN_BASE_URL = "http://shadu.zh.kg"`
+
+自建云查杀引擎（AndunAI）已整体移除：`ANDUN_BASE_URL` / `ANDUN_API_KEY`、
+`CloudScanner` 内的 andun 通路、`/api/v1/cloud/andun/*` 路由与前端配置项一并删除。
+剩余三个引擎（AVIC / 微步在线 / AlienVault OTX）均使用 HTTPS。
 
 ### 3.3 🟡 单体架构
 

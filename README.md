@@ -76,7 +76,6 @@ f:\Caelire\
 │   │   ├── custom_rules.py           # 自定义规则
 │   │   ├── policy_manager.py         # 策略管理
 │   │   ├── shell_integration.py      # Shell 集成
-│   │   ├── andun_client.py           # 安盾客户端
 │   │   ├── file_guard_client.py      # 文件防护客户端
 │   │   ├── engine.py                 # 引擎核心
 │   │   ├── main.py                   # 主模块

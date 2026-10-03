@@ -21,7 +21,7 @@ from engine.notification import threat_alert
 from config import (
     CLOUD_API_KEY, YARA_RULES_DIR, MAX_WORKERS,
     SCHED_LOOP_SLEEP_SEC, foreground_active,
-    ANDUN_BASE_URL, ANDUN_API_KEY, CLOUD_ENGINE_ORDER,
+    AVIC_API_KEY, CLOUD_ENGINE_ORDER,
 )
 
 # 任务 TTL（秒）：完成后保留 1 小时
@@ -77,8 +77,7 @@ class Scheduler:
         self.scanner = LocalScanner(self.sig_mgr, self.yara)
         self.cloud = CloudScanner(
             api_key=CLOUD_API_KEY,
-            andun_url=ANDUN_BASE_URL,
-            andun_key=ANDUN_API_KEY,
+            avic_key=AVIC_API_KEY,
             engine_order=CLOUD_ENGINE_ORDER,
         )
         self.quarantine = QuarantineManager()

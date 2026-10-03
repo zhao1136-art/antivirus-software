@@ -1126,37 +1126,10 @@
 
                     <div class="setting-row">
                         <div class="setting-info">
-                            <span class="setting-label">AndunAI 自建平台</span>
-                            <span class="setting-desc" id="andunDesc">连接中...</span>
+                            <span class="setting-label">云引擎状态</span>
+                            <span class="setting-desc" id="cloudEngineDesc">检测中...</span>
                         </div>
-                        <span style="color:var(--text-muted);font-weight:600;font-size:12px;" id="andunBadge">● 检测中</span>
-                    </div>
-
-                    <div class="setting-row">
-                        <div class="setting-info" style="flex:1;">
-                            <span class="setting-label">平台地址</span>
-                            <span class="setting-desc">AndunAI 云查杀平台 URL</span>
-                        </div>
-                        <input class="input" id="andunUrl" type="text" value="http://47.93.118.106" style="flex:1;max-width:260px;font-size:13px;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-hover);color:var(--text-primary);">
-                    </div>
-
-                    <div class="setting-row">
-                        <div class="setting-info" style="flex:1;">
-                            <span class="setting-label">API 密钥</span>
-                            <span class="setting-desc">平台 API Key（如启用鉴权）</span>
-                        </div>
-                        <input class="input" id="andunKey" type="password" value="" placeholder="可选" style="flex:1;max-width:260px;font-size:13px;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-hover);color:var(--text-primary);">
-                    </div>
-
-                    <div class="setting-row" style="flex-wrap:wrap;gap:10px;">
-                        <button class="btn btn-primary" id="btnAndunSave" style="flex:1;min-width:200px;">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-                            保存配置
-                        </button>
-                        <button class="btn" id="btnAndunTest" style="flex:1;min-width:200px;">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-                            测试连接
-                        </button>
+                        <span style="color:var(--text-muted);font-weight:600;font-size:12px;" id="cloudEngineBadge">● 检测中</span>
                     </div>
 
                     <div class="setting-row" style="border-bottom:none;">
@@ -1166,10 +1139,7 @@
                         </div>
                     </div>
                     <div id="engineOrderList" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:4px;">
-                        <div class="engine-order-chip" data-engine="andun" style="display:flex;align-items:center;gap:6px;padding:6px 14px;border-radius:20px;background:var(--accent-dim);border:1px solid var(--accent);color:var(--accent);font-size:13px;font-weight:600;cursor:grab;user-select:none;">
-                            <span style="font-size:15px;opacity:0.6;">⠿</span> AndunAI
-                        </div>
-                        <div class="engine-order-chip" data-engine="avic" style="display:flex;align-items:center;gap:6px;padding:6px 14px;border-radius:20px;background:var(--bg-hover);border:1px solid var(--border);color:var(--text-secondary);font-size:13px;font-weight:600;cursor:grab;user-select:none;">
+                        <div class="engine-order-chip" data-engine="avic" style="display:flex;align-items:center;gap:6px;padding:6px 14px;border-radius:20px;background:var(--accent-dim);border:1px solid var(--accent);color:var(--accent);font-size:13px;font-weight:600;cursor:grab;user-select:none;">
                             <span style="font-size:15px;opacity:0.6;">⠿</span> AVIC 情报中心
                         </div>
                         <div class="engine-order-chip" data-engine="threatbook" style="display:flex;align-items:center;gap:6px;padding:6px 14px;border-radius:20px;background:var(--bg-hover);border:1px solid var(--border);color:var(--text-secondary);font-size:13px;font-weight:600;cursor:grab;user-select:none;">
@@ -1179,7 +1149,17 @@
                             <span style="font-size:15px;opacity:0.6;">⠿</span> AlienVault OTX
                         </div>
                     </div>
-                    <div id="andunScanResult" style="display:none;margin-top:16px;padding:16px;background:var(--bg-hover);border-radius:var(--radius-sm);font-size:13px;line-height:1.8;"></div>
+
+                    <div class="setting-row" style="flex-wrap:wrap;gap:10px;">
+                        <button class="btn btn-primary" id="btnCloudEngineSave" style="flex:1;min-width:200px;">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                            保存配置
+                        </button>
+                        <button class="btn" id="btnCloudEngineRefresh" style="flex:1;min-width:200px;">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                            刷新引擎状态
+                        </button>
+                    </div>
                 </div>
 
                 <!-- 关于 -->
@@ -2130,27 +2110,24 @@
             showToast('ML 引擎状态已刷新', 'success');
         });
 
-        // ==================== 云查杀引擎选择（AndunAI / AVIC / 微步 / OTX）====================
+        // ==================== 云查杀引擎选择（AVIC / 微步 / OTX）====================
         try { (function () {
             const engineOrderList = document.getElementById('engineOrderList');
-            const andunUrl = document.getElementById('andunUrl');
-            const andunKey = document.getElementById('andunKey');
-            const andunBadge = document.getElementById('andunBadge');
-            const andunDesc = document.getElementById('andunDesc');
-            const andunScanResult = document.getElementById('andunScanResult');
+            const cloudEngineBadge = document.getElementById('cloudEngineBadge');
+            const cloudEngineDesc = document.getElementById('cloudEngineDesc');
+            const ENGINE_LABELS = { avic: 'AVIC 情报中心', threatbook: '微步在线', otx: 'AlienVault OTX' };
 
-            function setAndunBadge(state) {
-                // state: checking | online | offline | error
-                if (!andunBadge) return;
+            function setCloudBadge(state) {
+                // state: checking | online | offline
+                if (!cloudEngineBadge) return;
                 var map = {
                     checking: { text: '● 检测中', color: 'var(--warning)' },
                     online:   { text: '● 已连接', color: 'var(--accent)' },
-                    offline:  { text: '● 未连接', color: 'var(--text-muted)' },
-                    error:    { text: '● 连接异常', color: 'var(--danger)' }
+                    offline:  { text: '● 未连接', color: 'var(--text-muted)' }
                 };
                 var cfg = map[state] || map.offline;
-                andunBadge.textContent = cfg.text;
-                andunBadge.style.color = cfg.color;
+                cloudEngineBadge.textContent = cfg.text;
+                cloudEngineBadge.style.color = cfg.color;
             }
 
             // 按服务器返回的优先级重排引擎标签
@@ -2202,43 +2179,44 @@
 
             // 加载当前云引擎配置与状态
             async function loadCloudStatus() {
-                var data = await apiGet('/api/v1/cloud/andun/status');
-                if (!data || !data.ok) {
-                    setAndunBadge('offline');
-                    if (andunDesc) andunDesc.textContent = '无法获取云引擎状态（后端未运行）';
+                setCloudBadge('checking');
+                var data = await apiGet('/api/v1/cloud/engines');
+                if (!data) {
+                    setCloudBadge('offline');
+                    if (cloudEngineDesc) cloudEngineDesc.textContent = '无法获取云引擎状态（后端未运行）';
                     return;
                 }
                 if (data.engine_order) applyEngineOrder(data.engine_order);
-                if (data.andun) {
-                    var a = data.andun;
-                    if (a.url && andunUrl) andunUrl.value = a.url;
-                    if (a.available) {
-                        setAndunBadge('online');
-                        if (andunDesc) andunDesc.textContent = '已连接 ' + a.url;
-                    } else if (a.verifying) {
-                        setAndunBadge('checking');
-                        if (andunDesc) andunDesc.textContent = '连接中...';
-                    } else {
-                        setAndunBadge('offline');
-                        if (andunDesc) andunDesc.textContent = data.last_error ? ('未连接: ' + data.last_error) : '未连接';
+                var eng = data.engines || {};
+                var online = [], configured = [];
+                Object.keys(eng).forEach(function (k) {
+                    if (!eng[k]) return;
+                    if (eng[k].available) online.push(ENGINE_LABELS[k] || k);
+                    if (eng[k].configured) configured.push(ENGINE_LABELS[k] || k);
+                });
+                if (online.length) {
+                    setCloudBadge('online');
+                    if (cloudEngineDesc) cloudEngineDesc.textContent = '已连接 ' + online.length + '/3：' + online.join('、');
+                } else {
+                    setCloudBadge('offline');
+                    if (cloudEngineDesc) {
+                        cloudEngineDesc.textContent = configured.length
+                            ? ('已配置但当前不可用（' + configured.join('、') + '）' + (data.last_error ? '：' + data.last_error : ''))
+                            : '未配置 API Key，可到「引擎启动」页配置';
                     }
                 }
             }
 
-            // 保存配置
-            var btnAndunSave = document.getElementById('btnAndunSave');
-            if (btnAndunSave) {
-                btnAndunSave.addEventListener('click', async function () {
-                    var body = { engine_order: getEngineOrder() };
-                    if (andunUrl && andunUrl.value.trim()) body.url = andunUrl.value.trim();
-                    if (andunKey && andunKey.value.trim()) body.api_key = andunKey.value.trim();
-                    btnAndunSave.disabled = true;
-                    btnAndunSave.textContent = '保存中...';
+            // 保存引擎优先级
+            var btnCloudEngineSave = document.getElementById('btnCloudEngineSave');
+            if (btnCloudEngineSave) {
+                btnCloudEngineSave.addEventListener('click', async function () {
+                    btnCloudEngineSave.disabled = true;
+                    btnCloudEngineSave.textContent = '保存中...';
                     try {
-                        var resp = await apiPost('/api/v1/cloud/andun/config', body);
-                        if (resp && resp.success) {
-                            showToast('云查杀引擎配置已保存', 'success');
-                            if (andunKey) andunKey.value = '';
+                        var resp = await apiPost('/api/v1/cloud/config', { engine_order: getEngineOrder() });
+                        if (resp && resp.engine_order) {
+                            showToast('云查杀引擎优先级已保存', 'success');
                             loadCloudStatus();
                         } else {
                             showToast((resp && resp.error) || '保存失败', 'error');
@@ -2246,47 +2224,18 @@
                     } catch (e) {
                         showToast('保存失败: ' + e.message, 'error');
                     } finally {
-                        btnAndunSave.disabled = false;
-                        btnAndunSave.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>保存配置';
+                        btnCloudEngineSave.disabled = false;
+                        btnCloudEngineSave.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>保存配置';
                     }
                 });
             }
 
-            // 测试连接
-            var btnAndunTest = document.getElementById('btnAndunTest');
-            if (btnAndunTest) {
-                btnAndunTest.addEventListener('click', async function () {
-                    setAndunBadge('checking');
-                    if (andunDesc) andunDesc.textContent = '正在验证连接...';
-                    btnAndunTest.disabled = true;
-                    btnAndunTest.textContent = '测试中...';
-                    try {
-                        var resp = await apiGet('/api/v1/cloud/andun/verify');
-                        if (resp && resp.ok) {
-                            setAndunBadge('online');
-                            if (andunDesc) andunDesc.textContent = '连接正常，平台在线';
-                            showToast('AndunAI 平台连接成功', 'success');
-                            if (andunScanResult) {
-                                andunScanResult.style.display = 'block';
-                                andunScanResult.innerHTML = '<div style="font-weight:600;color:var(--accent);margin-bottom:6px;">✓ 连接成功</div><div style="color:var(--text-muted);">平台地址: ' + (andunUrl ? andunUrl.value : '') + '<br>状态: 在线可用</div>';
-                            }
-                        } else {
-                            setAndunBadge('offline');
-                            if (andunDesc) andunDesc.textContent = (resp && resp.error) || '平台不可达';
-                            showToast('AndunAI 平台连接失败', 'error');
-                            if (andunScanResult) {
-                                andunScanResult.style.display = 'block';
-                                andunScanResult.innerHTML = '<div style="font-weight:600;color:var(--danger);margin-bottom:6px;">✗ 连接失败</div><div style="color:var(--text-muted);">' + ((resp && resp.error) || '平台不可达，请检查地址与网络') + '</div>';
-                            }
-                        }
-                    } catch (e) {
-                        setAndunBadge('error');
-                        if (andunDesc) andunDesc.textContent = '验证请求失败';
-                        showToast('验证失败: ' + e.message, 'error');
-                    } finally {
-                        btnAndunTest.disabled = false;
-                        btnAndunTest.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>测试连接';
-                    }
+            // 刷新引擎状态
+            var btnCloudEngineRefresh = document.getElementById('btnCloudEngineRefresh');
+            if (btnCloudEngineRefresh) {
+                btnCloudEngineRefresh.addEventListener('click', function () {
+                    loadCloudStatus();
+                    showToast('云引擎状态已刷新', 'success');
                 });
             }
 

@@ -1,11 +1,10 @@
 """
 天听引擎 - 多源云端威胁情报引擎
 
-主引擎:   AndunAI 自建云查杀平台（优先，用户可选择引擎顺序）
-备用引擎: AVIC 情报中心 (社区联合云安全情报)
-第三引擎: 微步在线 ThreatBook API
-第四引擎: AlienVault OTX (开放威胁情报交换社区)
-策略:     引擎优先级可配置（默认 AndunAI 优先），逐一降级补充
+主引擎:   AVIC 情报中心 (社区联合云安全情报)
+第二引擎: 微步在线 ThreatBook API
+第三引擎: AlienVault OTX (开放威胁情报交换社区)
+策略:     引擎优先级可配置（默认 AVIC 优先），逐一降级补充
 缓存:     本地 SQLite 缓存，各引擎 7天TTL
 """
 import os
@@ -18,24 +17,23 @@ import sqlite3
 from config import SIGNATURES_DB
 from engine.avic_client import AVICClient
 from engine.otx_client import OTXClient
-from engine.andun_client import AndunClient
 
 # ── 缓存 TTL ──
 CACHE_TTL_AVIC = 604800       # AVIC 7天
 CACHE_TTL_THREATBOOK = 604800 # 微步 7天
 CACHE_TTL_OTX = 604800        # OTX 7天
-CACHE_TTL_ANDUN = 604800      # AndunAI 7天
 CACHE_TTL_UNKNOWN = 3600      # 未知结果 1小时（避免频繁查无结果）
 CACHE_TTL_ERROR = 300         # 错误缓存 5分钟
 
 # ── 默认配置 ──
 DEFAULT_AVIC_URL = "https://avic.xiguastudio.top"
-DEFAULT_AVIC_KEY = "AVIC-447C8973518745A51A70AE5CD933E4E8"
-DEFAULT_ANDUN_URL = "http://shadu.zh.kg"
+# AVIC API Key 不内置明文，避免随源码发布泄露：
+# 优先由 config.AVIC_API_KEY（可被 data/config_save.json 的 cloud.avic_api_key 覆盖）提供，
+# 其次读环境变量 AVIC_API_KEY，都没有时为空串（该引擎降级为「未配置」）。
+DEFAULT_AVIC_KEY = os.environ.get("AVIC_API_KEY", "")
 
 # 默认引擎优先级（可按用户选择调整）
-# 原主引擎 AndunAI 自建平台(shadu.zh.kg)已停服, 从默认顺序中移除;
-# 查询优先走可用的 AVIC, 再按需补充 ThreatBook / OTX。若今后重新上线, 经「引擎启动」页配置后可再次加入。
+# 查询优先走可用的 AVIC, 再按需补充 ThreatBook / OTX。
 DEFAULT_ENGINE_ORDER = ["avic", "threatbook", "otx"]
 
 
@@ -45,15 +43,7 @@ class CloudScanner:
     THREATBOOK_URL = "https://x.threatbook.cn/api/v1"
 
     def __init__(self, api_key: str = "", avic_key: str = "", otx_key: str = "",
-                 andun_url: str = "", andun_key: str = "",
                  engine_order: list[str] | None = None):
-        # ── AndunAI 自建平台（可配置优先级第一） ──
-        self._andun_url = andun_url or os.environ.get("ANDUN_URL", DEFAULT_ANDUN_URL)
-        self._andun_key = andun_key or os.environ.get("ANDUN_API_KEY", "")
-        self._andun = AndunClient(base_url=self._andun_url, api_key=self._andun_key, timeout=8)
-        self._andun_available = False
-        self._andun_checked = False
-
         # ── AVIC 客户端 ──
         self._avic_key = avic_key or os.environ.get("AVIC_API_KEY", DEFAULT_AVIC_KEY)
         self._avic = AVICClient(
@@ -73,15 +63,15 @@ class CloudScanner:
         self._otx = OTXClient(api_key=self._otx_key, timeout=15)
         self._otx_available = bool(self._otx_key)
 
-        # ── 引擎优先级（用户可配置，默认 AndunAI 优先） ──
-        self._engine_order = list(engine_order or DEFAULT_ENGINE_ORDER)
+        # ── 引擎优先级（用户可配置，默认 AVIC 优先） ──
+        # 经 set_engine_order 归一化：过滤掉已下线/未知引擎并补全缺失引擎
+        self._engine_order = []
+        self.set_engine_order(engine_order)
 
         # ── 状态 ──
         self._last_error = None
         self._lock = threading.Lock()
         self._stats = {
-            "andun_queries": 0,
-            "andun_hits": 0,
             "avic_queries": 0,
             "avic_hits": 0,
             "tb_queries": 0,
@@ -95,8 +85,7 @@ class CloudScanner:
         self._cache_enabled = True
         self._init_cache_db()
 
-        # ── 后台异步验证 AndunAI / AVIC 连接 ──
-        threading.Thread(target=self._async_verify_andun, daemon=True).start()
+        # ── 后台异步验证 AVIC 连接 ──
         if self._avic_key:
             threading.Thread(target=self._async_verify_avic, daemon=True).start()
 
@@ -105,12 +94,8 @@ class CloudScanner:
     @property
     def available(self) -> bool:
         """任一引擎可用即返回 True"""
-        return (self._andun_available or self._avic_available
+        return (self._avic_available
                 or self._tb_available or self._otx_available)
-
-    @property
-    def andun_available(self) -> bool:
-        return self._andun_available
 
     @property
     def avic_available(self) -> bool:
@@ -206,24 +191,9 @@ class CloudScanner:
         self._avic = AVICClient(base_url=DEFAULT_AVIC_URL, api_key=key, timeout=8)
         self._avic_available = False
 
-    def set_andun(self, url: str = "", api_key: str = ""):
-        """设置 / 更新 AndunAI 平台地址与密钥"""
-        if url:
-            self._andun_url = url.rstrip("/")
-        if api_key:
-            self._andun_key = api_key
-        self._andun = AndunClient(
-            base_url=self._andun_url,
-            api_key=self._andun_key,
-            timeout=8,
-        )
-        self._andun_available = False
-        self._andun_checked = False
-        threading.Thread(target=self._async_verify_andun, daemon=True).start()
-
     def set_engine_order(self, order: list[str] | None):
-        """设置引擎查询优先级（如 ['andun','avic','otx']）"""
-        allowed = {"andun", "avic", "threatbook", "otx"}
+        """设置引擎查询优先级（如 ['avic','threatbook','otx']）"""
+        allowed = {"avic", "threatbook", "otx"}
         valid = [o for o in (order or []) if o in allowed]
         # 补全未指定的引擎
         for o in DEFAULT_ENGINE_ORDER:
@@ -240,13 +210,12 @@ class CloudScanner:
     def get_status(self) -> dict:
         """获取引擎状态（不阻塞，返回当前已知状态）"""
         missing = {
-            "andun": not bool(self._andun_key or self._andun_url),
             "avic": not bool(self._avic_key),
             "threatbook": not bool(self._tb_key),
             "otx": not bool(self._otx_key),
         }
         any_degraded = not (
-            self._andun_available and self._avic_available
+            self._avic_available
             and self._tb_available and self._otx_available
         )
         hint = None
@@ -259,13 +228,6 @@ class CloudScanner:
         return {
             "available": self.available,
             "engine_order": self._engine_order,
-            "andun": {
-                "available": self._andun_available,
-                "configured": bool(self._andun_url),
-                "verifying": not self._andun_checked,
-                "url": self._andun_url,
-                "key": f"{self._andun_key[:8]}..." if self._andun_key else "",
-            },
             "avic": {
                 "available": self._avic_available,
                 "configured": bool(self._avic_key),
@@ -281,7 +243,7 @@ class CloudScanner:
                 "configured": bool(self._otx_key),
                 "base_url": OTXClient.BASE_URL,
             },
-            "provider": "AndunAI (自建平台) + AVIC + ThreatBook + AlienVault OTX",
+            "provider": "AVIC + ThreatBook + AlienVault OTX",
             "degraded": any_degraded,
             "missing_keys": missing,
             "hint": hint,
@@ -292,47 +254,6 @@ class CloudScanner:
     def verify_connection(self) -> bool:
         """主动验证 AVIC 连接（供前端手动触发，同步阻塞）"""
         return self._verify_avic()
-
-    def verify_andun(self) -> bool:
-        """主动验证 AndunAI 连接（同步阻塞）"""
-        return self._verify_andun()
-
-    def _async_verify_andun(self):
-        """后台异步验证 AndunAI 连接（不阻塞主线程）"""
-        try:
-            self._verify_andun()
-        except Exception:
-            pass
-
-    def _verify_andun(self) -> bool:
-        """验证 AndunAI 平台连接"""
-        if self._andun_checked and self._andun_available:
-            return True
-        if not self._andun_url:
-            self._andun_checked = True
-            self._andun_available = False
-            return False
-
-        try:
-            status = self._andun.status()
-            if status.get("ok"):
-                self._andun_available = True
-                self._last_error = None
-            else:
-                self._andun_available = False
-                self._last_error = status.get("error", "AndunAI 服务异常")
-        except requests.exceptions.Timeout:
-            self._andun_available = False
-            self._last_error = "AndunAI 连接超时"
-        except requests.exceptions.ConnectionError:
-            self._andun_available = False
-            self._last_error = "无法连接到 AndunAI 云查杀平台"
-        except Exception as e:
-            self._andun_available = False
-            self._last_error = f"AndunAI: {str(e)[:60]}"
-
-        self._andun_checked = True
-        return self._andun_available
 
     def _async_verify_avic(self):
         """后台异步验证 AVIC 连接（不阻塞主线程）"""
@@ -388,11 +309,7 @@ class CloudScanner:
 
         # 2. 按引擎优先级查询
         for engine in self._engine_order:
-            if engine == "andun" and self._andun_url:
-                result = self._lookup_andun(resource)
-                if result is not None:
-                    return result
-            elif engine == "avic" and self._avic_key:
+            if engine == "avic" and self._avic_key:
                 result = self._lookup_avic(resource)
                 if result is not None:
                     return result
@@ -519,172 +436,6 @@ class CloudScanner:
             return None
         except Exception as e:
             self._last_error = str(e)
-            return None
-
-    # ── AndunAI 查询 ──
-
-    def _lookup_andun(self, resource: str) -> dict | None:
-        """AndunAI 自建平台哈希查询"""
-        try:
-            result = self._andun.query_hash(resource)
-            self._stats["andun_queries"] += 1
-
-            if not self._andun_available:
-                self._andun_available = True
-
-            threat = self._parse_andun_hash_result(resource, result)
-            if threat is not None:
-                self._cache_set(resource, threat, ttl=CACHE_TTL_ANDUN, provider="andun")
-                self._stats["andun_hits"] += 1
-            else:
-                self._cache_set(resource, None, ttl=CACHE_TTL_UNKNOWN, provider="andun")
-            return threat
-        except requests.exceptions.Timeout:
-            self._last_error = "AndunAI 请求超时"
-            self._cache_set(resource, None, ttl=CACHE_TTL_ERROR, provider="andun")
-            return None
-        except requests.exceptions.ConnectionError:
-            self._last_error = "无法连接到 AndunAI 云查杀平台"
-            self._andun_available = False
-            return None
-        except Exception as e:
-            self._last_error = f"AndunAI: {e}"
-            return None
-
-    def _parse_andun_hash_result(self, resource: str, data: dict) -> dict | None:
-        """解析 AndunAI 哈希查询结果（平台返回 found/sources 结构）"""
-        if not isinstance(data, dict):
-            return None
-
-        # 若平台已返回完整威胁信息（ScanResult 风格）
-        if data.get("is_malicious"):
-            return self._parse_andun_scan_result(data)
-
-        if not data.get("found"):
-            # 逐源解析（MalwareBazaar / VirusTotal / 本地库）
-            for src in data.get("sources", []) or []:
-                if not isinstance(src, dict) or not src.get("found"):
-                    continue
-                name = str(src.get("name", "")).lower()
-                # 判断恶意：查 source 内是否有威胁信息
-                src_threat = src.get("threat_name") or src.get("signature") or src.get("result")
-                classification = str(src.get("classification", "")).lower()
-                if src_threat or classification in ("malicious", "suspicious", "malware"):
-                    return self._parse_andun_source(resource, src)
-            return None
-
-        # found=true 且带威胁信息
-        classification = str(data.get("classification", "")).lower()
-        if classification in ("malicious", "suspicious", "malware") or data.get("threat_name"):
-            level_map = {"malicious": "high", "suspicious": "medium", "malware": "high"}
-            threat_level = level_map.get(classification, "medium")
-            return {
-                "path": "",
-                "md5": data.get("md5", ""),
-                "sha256": data.get("sha256", "") or resource,
-                "threat_level": threat_level,
-                "engine": "cloud_andun",
-                "signature": data.get("threat_name") or f"Andun.{classification}",
-                "category": "cloud_detected",
-                "details": {
-                    "threat_name": data.get("threat_name", ""),
-                    "threat_type": data.get("threat_type", ""),
-                    "confidence": data.get("confidence", 0),
-                    "source": "andun",
-                },
-                "action": "quarantine" if threat_level in ("high", "critical") else "prompt"
-            }
-        return None
-
-    def _parse_andun_source(self, resource: str, src: dict) -> dict:
-        """解析 AndunAI 返回的单源威胁信息"""
-        classification = str(src.get("classification", "")).lower()
-        level_map = {"malicious": "high", "suspicious": "medium", "malware": "high"}
-        threat_level = level_map.get(classification, "medium")
-        return {
-            "path": "",
-            "md5": "",
-            "sha256": resource,
-            "threat_level": threat_level,
-            "engine": "cloud_andun",
-            "signature": src.get("threat_name") or src.get("signature") or f"Andun.{classification}",
-            "category": "cloud_detected",
-            "details": {
-                "threat_name": src.get("threat_name", ""),
-                "threat_type": src.get("threat_type", ""),
-                "source": str(src.get("name", "andun")).lower(),
-                "confidence": src.get("confidence", 0),
-            },
-            "action": "quarantine" if threat_level in ("high", "critical") else "prompt"
-        }
-
-    def _parse_andun_scan_result(self, data: dict) -> dict:
-        """解析 AndunAI 文件扫描结果（ScanResult 风格）"""
-        threat_level = "high" if data.get("is_malicious") else "low"
-        return {
-            "path": data.get("filename", ""),
-            "md5": data.get("md5", ""),
-            "sha256": data.get("sha256", ""),
-            "threat_level": threat_level,
-            "engine": "cloud_andun",
-            "signature": data.get("threat_name") or "Andun.Malware",
-            "category": "cloud_detected",
-            "details": {
-                "threat_name": data.get("threat_name", ""),
-                "threat_type": data.get("threat_type", ""),
-                "confidence": data.get("confidence", 0),
-                "detection_layers": data.get("detection_layers", []),
-                "local_match": data.get("local_match"),
-                "yara_match": data.get("yara_match"),
-                "heuristic": data.get("heuristic"),
-                "online_lookup": data.get("online_lookup"),
-                "source": "andun",
-            },
-            "action": "quarantine" if data.get("is_malicious") else "prompt"
-        }
-
-    # ── AndunAI 文件扫描 / 上报 ──
-
-    def andun_scan_file(self, file_path: str) -> dict | None:
-        """上传文件到 AndunAI 平台做多层比对扫描"""
-        if not os.path.isfile(file_path):
-            return None
-        try:
-            result = self._andun.scan_file(file_path)
-            self._stats["andun_queries"] += 1
-            if result.get("is_malicious"):
-                self._stats["andun_hits"] += 1
-            return result
-        except Exception as e:
-            self._last_error = f"AndunAI scan: {e}"
-            return None
-
-    def andun_submit_file(self, file_path: str, threat_name: str = "",
-                          threat_type: str = "", reporter: str = "yutian",
-                          description: str = "", source: str = "",
-                          tags: list | None = None) -> dict | None:
-        """上报样本文件到 AndunAI 平台"""
-        try:
-            return self._andun.submit_file(
-                file_path, threat_name=threat_name, threat_type=threat_type,
-                reporter=reporter, description=description, source=source, tags=tags,
-            )
-        except Exception as e:
-            self._last_error = f"AndunAI submit: {e}"
-            return None
-
-    def andun_submit_hash(self, sha256: str, threat_name: str = "",
-                          threat_type: str = "", reporter: str = "yutian",
-                          description: str = "", source: str = "",
-                          tags: list | None = None) -> dict | None:
-        """上报哈希到 AndunAI 平台（仅情报，不含文件）"""
-        try:
-            return self._andun.submit_hash(
-                sha256, threat_name=threat_name, threat_type=threat_type,
-                reporter=reporter, description=description, source=source, tags=tags,
-            )
-        except Exception as e:
-            self._last_error = f"AndunAI submit: {e}"
             return None
 
     # ── AVIC 查询 ──

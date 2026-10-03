@@ -827,8 +827,8 @@
               desc: 'Windows 事件追踪 · 实时捕获进程行为', status: 'etw', action: 'toggle' },
             { id: 'amsi', name: 'AMSI 无文件拦截', icon: 'amsi',
               desc: 'AMSI Provider · 拦截 PowerShell 等无文件攻击', status: 'amsi', action: 'toggle' },
-            { id: 'andun', name: 'AndunAI 云查杀引擎', icon: 'cloud',
-              desc: '云端海量特征库协同查杀', status: 'andun', action: 'verify' }
+            { id: 'cloud', name: '云查杀引擎 (AVIC/微步/OTX)', icon: 'cloud',
+              desc: 'AVIC 情报中心 · 微步在线 ThreatBook · AlienVault OTX 多源云查杀', status: 'cloud', action: 'verify' }
         ],
         status: {}, // id -> 各引擎原始状态
         icons: {
@@ -841,13 +841,13 @@
 
         /** 并行拉取各引擎状态（实时数据来源 3） */
         async refresh() {
-            const [vigil, etw, amsi, andun] = await Promise.all([
+            const [vigil, etw, amsi, cloud] = await Promise.all([
                 api.get('/api/v1/vigil/status'),
                 api.get('/api/v1/etw/status'),
                 api.get('/api/v1/amsi/status'),
-                api.get('/api/v1/cloud/andun/status')
+                api.get('/api/v1/cloud/engines')
             ]);
-            engines.status = { vigil: vigil, etw: etw, amsi: amsi, andun: andun };
+            engines.status = { vigil: vigil, etw: etw, amsi: amsi, cloud: cloud };
             engines.render();
         },
 
@@ -870,10 +870,15 @@
                     const d = s.amsi;
                     return d && d.registered ? { cls: 'ok', text: '已注册' } : { cls: 'bad', text: '未注册' };
                 }
-                case 'andun': {
-                    const d = s.andun;
+                case 'cloud': {
+                    const d = s.cloud;
                     if (!d) return { cls: 'mute', text: '未知' };
-                    return d.available ? { cls: 'ok', text: '已连接' } : { cls: 'warn', text: '未连接' };
+                    const eng = d.engines || {};
+                    const keys = Object.keys(eng);
+                    const online = keys.filter((k) => eng[k] && eng[k].available).length;
+                    if (online > 0) return { cls: 'ok', text: '已连接 ' + online + '/' + keys.length };
+                    const configured = keys.filter((k) => eng[k] && eng[k].configured).length;
+                    return { cls: 'warn', text: configured > 0 ? '未连接' : '未配置' };
                 }
                 default: return { cls: 'mute', text: '—' };
             }
@@ -955,10 +960,15 @@
                     } else { msg = (d && d.error) || '操作失败'; type = 'error'; }
                     break;
                 }
-                case 'andun': {
-                    const d = await api.get('/api/v1/cloud/andun/verify');
-                    msg = d && d.ok ? 'AndunAI 云引擎连接正常' : '云引擎连接失败';
-                    if (!d || !d.ok) type = 'error';
+                case 'cloud': {
+                    // 主动验证 AVIC 情报中心连通性（同步阻塞接口）
+                    const d = await api.get('/api/v1/cloud/avic/status');
+                    if (d && d.ok) {
+                        msg = '云引擎连接正常（AVIC 情报中心）';
+                    } else {
+                        msg = (d && (d.hint || d.error)) || '云引擎连接失败';
+                        type = 'error';
+                    }
                     break;
                 }
             }

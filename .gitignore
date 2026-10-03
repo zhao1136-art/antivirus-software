@@ -86,3 +86,10 @@ Thumbs.db
 %SystemDrive%/
 _empty_del_temp/
 bingduku/
+# 运行期日志（不应进版本库）
+backend/_run.log
+backend/_verify_*.log
+backend/_body_*.log
+backend/_diag_*.log
+backend/data/logs/
+backend/engine/data/logs/
