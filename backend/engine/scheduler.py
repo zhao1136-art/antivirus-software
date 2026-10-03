@@ -232,13 +232,14 @@ class Scheduler:
                 #    把 42 个 Windows 系统文件搬走了（EXE_in_LNK 命中 88% 的 System32 文件）。
                 quarantined = 0
                 virus_memory = get_virus_memory()
+                pending = []          # [(threat, pd)] 等待用户决定的项
+
+                # 第一轮：闸门一复核 + 登记待决项（**这里不等待**）
                 for threat in all_threats:
                     if threat.get("action") == "quarantine" and threat.get("path"):
                         tpath = threat["path"]
 
                         # 闸门一：系统文件二次复核（**不使用 YARA**）
-                        # 系统目录里的文件不能只凭 YARA 定罪，改用 Authenticode 签名
-                        # 这个独立信源复核；签名有效即判可信，降级为仅告警。
                         if is_system_path(tpath):
                             op = second_opinion(tpath)
                             threat["second_opinion"] = op
@@ -246,31 +247,37 @@ class Scheduler:
                                 threat["action"] = "alert"
                                 threat["suppressed"] = op["reason"]
                                 decision_queue.note_suppressed()
-                                self.logger.log_threat(task_id, threat)
-                                virus_memory.add_threat(threat, task_id=task_id)
                                 continue
-
-                        # 闸门二：交给用户决定，DECISION_TIMEOUT 秒内无决定则自动处理
                         pd = decision_queue.ask(tpath, threat)
                         threat["pending_decision"] = pd.id
                         threat["decision_timeout"] = DECISION_TIMEOUT
-                        action = decision_queue.wait(pd)
-                        threat["decided_by"] = "auto" if pd.auto else "user"
+                        pending.append((threat, pd))
 
-                        if action == ACTION_QUARANTINE:
-                            qr = self.quarantine.quarantine_file(
-                                tpath,
-                                threat_name=threat.get("signature", "Unknown"),
-                                threat_level=threat.get("threat_level", "medium"),
-                                file_hash=threat.get("sha256", ""),
-                                hash_type="sha256"
-                            )
-                            if qr.get("success"):
-                                quarantined += 1
-                                threat["quarantined"] = True
-                        else:
-                            # 用户选择忽略：不隔离，但如实记录
-                            threat["action"] = "alert"
+                # 统一等待：所有待决项共享同一个截止时间。
+                # 逐个 wait() 会变成 N × DECISION_TIMEOUT 的串行阻塞
+                # （42 个命中要卡 10.5 分钟），这里多少个都只等一轮。
+                decision_queue.wait_all([pd for _t, pd in pending])
+
+                # 第二轮：结算并执行
+                for threat, pd in pending:
+                    action = decision_queue.finalize(pd)
+                    threat["decided_by"] = "auto" if pd.auto else "user"
+                    if action == ACTION_QUARANTINE:
+                        qr = self.quarantine.quarantine_file(
+                            threat["path"],
+                            threat_name=threat.get("signature", "Unknown"),
+                            threat_level=threat.get("threat_level", "medium"),
+                            file_hash=threat.get("sha256", ""),
+                            hash_type="sha256"
+                        )
+                        if qr.get("success"):
+                            quarantined += 1
+                            threat["quarantined"] = True
+                    else:
+                        # 用户选择忽略：不隔离，但如实记录
+                        threat["action"] = "alert"
+
+                for threat in all_threats:
                     self.logger.log_threat(task_id, threat)
                     # 记录病毒类型到记忆库
                     virus_memory.add_threat(threat, task_id=task_id)

@@ -269,11 +269,27 @@ class DecisionQueue:
         return True
 
     def wait(self, pd: PendingDecision) -> str:
-        """阻塞至用户决定或超时；返回最终动作。
-
-        超时后返回 ACTION_QUARANTINE（默认自动处理），保证无人值守时防护不失效。
-        """
+        """阻塞至用户决定或超时；返回最终动作。（单个待决项，逐个等待用）"""
         pd._event.wait(timeout=max(0.0, pd.deadline - time.time()))
+        return self.finalize(pd)
+
+    def wait_all(self, pds) -> None:
+        """批量等待：所有待决项**共享同一个截止时间**。
+
+        为什么不能逐个 wait()：一次扫描可能命中几十个文件，
+        逐个等就是 N × timeout 的串行阻塞（42 个命中会卡 10.5 分钟）。
+        这里统一等到最晚的那个截止时刻，总数多少个都只等一轮。
+        """
+        if not pds:
+            return
+        deadline = max(p.deadline for p in pds)
+        for pd in pds:
+            remaining = deadline - time.time()
+            if remaining > 0:
+                pd._event.wait(timeout=remaining)
+
+    def finalize(self, pd: PendingDecision) -> str:
+        """结算一个待决项：已决定则用用户的选择，否则超时按默认动作自动处理。"""
         if not pd.decided:
             pd.action = ACTION_QUARANTINE
             pd.decided = True
