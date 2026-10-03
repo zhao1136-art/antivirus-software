@@ -362,6 +362,14 @@ class RealtimeGuard:
         if quarantine is None:
             quarantine = QuarantineManager()
 
+        # 2026-10-03：实时防护原先"YARA 命中即自动隔离"，会在用户毫不知情的情况下
+        # 把文件直接搬走。现在与扫描路径共用同一套闸门：
+        #   闸门一 系统目录文件二次复核（不使用 YARA）
+        #   闸门二 用户决定，15 秒内无决定则自动处理
+        from engine.threat_decision import (is_system_path, second_opinion,
+                                            QUEUE as decision_queue,
+                                            ACTION_QUARANTINE)
+
         while not self._stop_event.is_set():
             try:
                 item = self._event_queue.get(timeout=1)
@@ -383,11 +391,35 @@ class RealtimeGuard:
             if threats:
                 with self._lock:
                     self._stats["threats_found"] += 1
+
+                # 闸门一：系统目录文件的二次复核（不使用 YARA）。
+                # 复核不出结论时不自动隔离 —— 交给人，宁漏勿滥。
+                op = second_opinion(path) if is_system_path(path) else {"trusted": False}
+                if op.get("trusted"):
+                    with self._lock:
+                        self._stats["suppressed"] = self._stats.get("suppressed", 0) + 1
+                    self._add_event("info", "已放行（系统文件二次复核）: " + os.path.basename(path))
+                    continue
+
+                # 闸门二：用户决定，DECISION_TIMEOUT 秒内无决定则自动处理
+                first = threats[0] if threats and isinstance(threats[0], dict) else {}
+                pd = decision_queue.ask(path, first)
+                decision_queue.wait_all([pd])
+                if decision_queue.finalize(pd) != ACTION_QUARANTINE:
+                    self._add_event("info", "用户选择忽略: " + os.path.basename(path))
+                    continue
+
                 # 自动隔离
                 try:
-                    quarantine.quarantine_file(path, threats)
-                    self._stats["files_blocked"] += 1
-                    self._add_event("danger", f"已隔离: {os.path.basename(path)} ({threats[0].get('signature','?')})")
+                    quarantine.quarantine_file(
+                        path,
+                        threat_name=first.get("signature", "Unknown"),
+                        threat_level=first.get("threat_level", "medium"),
+                        file_hash=first.get("sha256", ""),
+                    )
+                    with self._lock:
+                        self._stats["files_blocked"] += 1
+                    self._add_event("danger", f"已隔离: {os.path.basename(path)} ({first.get('signature','?')})")
                 except Exception as e:
                     self._add_event("error", f"隔离失败: {os.path.basename(path)}: {e}")
 
