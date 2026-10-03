@@ -4885,7 +4885,11 @@ if __name__ == "__main__":
             _log_startup("内嵌浏览器不可用（%s: %s），回退到系统默认浏览器"
                          % (type(_wv_exc).__name__, _wv_exc))
             print("[御天] 内嵌浏览器不可用，已改用系统默认浏览器打开界面")
-            webbrowser.open("http://127.0.0.1:8899")
+            # ⚠️ webbrowser 在本文件只在别处的函数里 import 过，模块级没有 ——
+            #    第一次写这段兜底时忘了，结果 NameError 把兜底本身也带崩了
+            #    （实测：RuntimeError 被接住后又抛 NameError，进程照旧死）。
+            import webbrowser as _wb
+            _wb.open("http://127.0.0.1:8899")
             # 外置浏览器模式下**主线程绝不能退出** —— uvicorn 跑在守护线程里，
             # 主线程一结束整个进程就没了、服务也跟着停。所以在这里挂住。
             # 用户点托盘菜单的「退出」时，_do_exit_with_fadeout 会 os._exit(0)。
