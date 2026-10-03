@@ -1118,8 +1118,41 @@ class LightweightSandbox:
             else:
                 self._log("warning", f"等待异常: result={result}")
 
+            # ── 内存镜像扫描 ──
+            # **必须在下面 finally 的 TerminateJobObject 之前做** —— 进程一死，
+            # 内存就没了。这是抓加壳样本唯一有效的时机：加壳样本的磁盘字节是
+            # 加密的（哈希库和 YARA 全打不中），但它跑起来后内存里就是裸代码。
+            # 进程已自行退出（WAIT_OBJECT_0）时无从扫描，如实记录，不要假装扫过。
+            if result == WAIT_TIMEOUT:
+                try:
+                    from engine.memory_scanner import scan_process_memory
+                    from engine.yara_scanner import YaraScanner
+                    _rules = os.path.join(
+                        os.path.dirname(os.path.abspath(__file__)), "yara_rules")
+                    _mem = scan_process_memory(pid, YaraScanner(_rules))
+                    memory_scan = _mem.to_dict()
+                    memory_scan["interpretation"] = (
+                        "磁盘未命中但内存命中 —— 高度怀疑加壳或注入"
+                        if _mem.hits else
+                        "内存亦未命中")
+                    if _mem.hits:
+                        self._log("warning",
+                                  "内存镜像命中 %d 条规则（磁盘未命中 -> 疑似加壳/注入）"
+                                  % len(_mem.hits))
+                    else:
+                        self._log("info", "内存镜像未命中")
+                except Exception as e:
+                    memory_scan = {"ok": False, "error": str(e)}
+                    degraded.append(f"内存镜像扫描失败: {e}")
+                    self._log("error", f"内存镜像扫描失败: {e}")
+            else:
+                memory_scan = {"ok": False,
+                               "error": "进程已自行退出，无法扫描内存",
+                               "interpretation": "未覆盖内存"}
+
         except Exception as e:
             self._log("error", f"沙箱分析异常: {e}")
+            memory_scan = {"ok": False, "error": "分析异常，未执行内存扫描"}
             behaviors.append({
                 "type": "error",
                 "detail": f"分析异常: {e}",
@@ -1168,6 +1201,32 @@ class LightweightSandbox:
         report = self._generate_report(
             file_path, behaviors, elapsed, report_id, isolation=isolation
         )
+
+        # 12b. 内存镜像扫描结果 + 磁盘/内存对照结论
+        #      "磁盘无、内存有" 是抓加壳样本最有价值的信号 —— 正常软件不会
+        #      出现这种组合，它几乎不可能是巧合。所以这里可以**提升** verdict：
+        #      磁盘没判恶意、而内存里命中了中高置信度规则 => 加壳或注入。
+        report["memory_scan"] = memory_scan
+        _mem_hits = (memory_scan or {}).get("hits") or []
+        _strong = [h for h in _mem_hits
+                   if (h.get("confidence") or "").lower() in ("high", "medium")]
+        if _mem_hits:
+            if _strong and report.get("verdict") in ("clean", "unknown"):
+                report["verdict"] = "malicious"
+                try:
+                    report["confidence"] = max(float(report.get("confidence") or 0), 0.8)
+                except Exception:
+                    report["confidence"] = 0.8
+                if isinstance(report.get("memory_scan"), dict):
+                    report["memory_scan"]["interpretation"] = (
+                        "磁盘无特征但内存命中 —— 高度怀疑加壳或注入")
+            ri = report.setdefault("risk_indicators", [])
+            ri.append("内存镜像命中 %d 条规则（中高置信度 %d 条）"
+                      % (len(_mem_hits), len(_strong)))
+            for h in _mem_hits[:5]:
+                ri.append("内存规则: %s (置信度 %s, 模块 %s)" % (
+                    h.get("rule"), h.get("confidence"), h.get("_module")))
+            self._log("warning", "内存镜像命中 %d 条规则" % len(_mem_hits))
 
         # 用户取消：标记报告并跳过统计/历史写入（避免污染分析历史）
         if was_cancelled:
