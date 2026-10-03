@@ -56,6 +56,17 @@ def _format_size(num: float) -> str:
     return "0 B"
 
 
+def _cancelled(cancel) -> bool:
+    """判断取消令牌是否已置位（兼容 is_cancelled() / is_set() 两种约定）"""
+    if cancel is None:
+        return False
+    if hasattr(cancel, "is_cancelled"):
+        return bool(cancel.is_cancelled())
+    if hasattr(cancel, "is_set"):
+        return bool(cancel.is_set())
+    return False
+
+
 class SystemOptimizer:
     """电脑优化引擎"""
 
@@ -66,14 +77,29 @@ class SystemOptimizer:
 
     # ════════════════════ 系统体检 ════════════════════
 
-    def overview(self) -> dict:
-        """系统体检：磁盘/内存/临时文件/启动项/待重启，输出 0-100 分"""
+    def overview(self, cancel=None) -> dict:
+        """系统体检：磁盘/内存/临时文件/启动项/待重启，输出 0-100 分
+
+        cancel: 可选取消令牌；置位后立即返回 {"cancelled": True}。
+        """
+        if _cancelled(cancel):
+            return {"cancelled": True}
         disk = self._disk_info()
+        if _cancelled(cancel):
+            return {"cancelled": True}
         mem = self._memory_info()
-        temp = self._temp_size()
+        if _cancelled(cancel):
+            return {"cancelled": True}
+        temp = self._temp_size(cancel)
+        if _cancelled(cancel) or temp is None:
+            return {"cancelled": True}
         startup_items = self.list_startup()
+        if _cancelled(cancel):
+            return {"cancelled": True}
         startup_count = len([s for s in startup_items if s["status"] == "enabled"])
         pending_reboot = self._pending_reboot()
+        if _cancelled(cancel):
+            return {"cancelled": True}
 
         checks = []
         # 磁盘
@@ -195,8 +221,11 @@ class SystemOptimizer:
                     "total_text": "未知", "used_percent": 0}
 
     @staticmethod
-    def _temp_size() -> dict:
-        """统计系统临时文件总量"""
+    def _temp_size(cancel=None):
+        """统计系统临时文件总量
+
+        支持取消：令牌置位时返回 None（调用方据此判定为已取消）。
+        """
         roots = []
         for name in ("TEMP", "TMP"):
             p = os.environ.get(name, "").strip().strip('"')
@@ -208,7 +237,11 @@ class SystemOptimizer:
         total = 0
         count = 0
         for root in roots:
+            if _cancelled(cancel):
+                return None
             for dirpath, _dirs, files in os.walk(root, onerror=lambda _e: None):
+                if _cancelled(cancel):
+                    return None
                 for fn in files:
                     try:
                         total += os.path.getsize(os.path.join(dirpath, fn))
@@ -503,8 +536,11 @@ class SystemOptimizer:
 
     # ════════════════════ 内存释放 ════════════════════
 
-    def release_memory(self) -> dict:
-        """对高占用进程执行工作集收缩（SetProcessWorkingSetSize(-1,-1)）"""
+    def release_memory(self, cancel=None) -> dict:
+        """对高占用进程执行工作集收缩（SetProcessWorkingSetSize(-1,-1)）
+
+        cancel: 可选取消令牌；置位后在进程枚举循环中立即停止。
+        """
         PROCESS_QUERY_INFORMATION = 0x0400
         PROCESS_SET_QUOTA = 0x0100
         kernel32 = ctypes.windll.kernel32
@@ -545,6 +581,8 @@ class SystemOptimizer:
                 return {"success": False, "error": "无法枚举进程"}
             try:
                 while True:
+                    if _cancelled(cancel):
+                        break
                     pid = entry.th32ProcessID
                     if pid > 4:  # 跳过 System/Idle
                         handle = kernel32.OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_SET_QUOTA,
@@ -579,6 +617,7 @@ class SystemOptimizer:
 
         return {
             "success": True,
+            "cancelled": _cancelled(cancel),
             "released_bytes": released,
             "released_text": _format_size(released),
             "processed": processed,
@@ -586,12 +625,32 @@ class SystemOptimizer:
 
     # ════════════════════ 一键优化 ════════════════════
 
-    def one_click(self) -> dict:
-        """一键优化：清理临时类垃圾 + 释放内存 + 给出启动项建议（不自动禁用）"""
+    def one_click(self, cancel=None) -> dict:
+        """一键优化：清理临时类垃圾 + 释放内存 + 给出启动项建议（不自动禁用）
+
+        cancel: 可选取消令牌；在三个阶段之间检查，置位后返回已完成的部分结果。
+        """
         from engine.junk_cleaner import JunkCleaner
         cleaner = JunkCleaner()
-        clean_result = cleaner.execute_clean(["temp_files", "crash_dumps", "update_cache"])
-        mem_result = self.release_memory()
+        clean_result = cleaner.execute_clean(["temp_files", "crash_dumps", "update_cache"],
+                                             cancel=cancel)
+        if _cancelled(cancel):
+            return {
+                "success": True,
+                "cancelled": True,
+                "clean": clean_result,
+                "memory": None,
+                "recommendations": [],
+            }
+        mem_result = self.release_memory(cancel=cancel)
+        if _cancelled(cancel):
+            return {
+                "success": True,
+                "cancelled": True,
+                "clean": clean_result,
+                "memory": mem_result,
+                "recommendations": [],
+            }
 
         # 启动项建议：路径不在 Windows / Program Files 下的启用项
         recommendations = []

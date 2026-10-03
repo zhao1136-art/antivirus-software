@@ -59,22 +59,64 @@ class AntiRootkit:
         self._last_scan_result = None
         self._last_scan_time = None
         self._scanning = False
+        # 协作式取消标志：scan() 在各检测阶段之间与枚举循环中读取
+        self._cancel_event = threading.Event()
 
-    def scan(self) -> dict:
-        """执行全面 Rootkit 扫描"""
+    def cancel(self):
+        """请求取消当前 Rootkit 扫描（协作式，阶段/循环边界生效）"""
+        self._cancel_event.set()
+
+    def is_cancelled(self) -> bool:
+        return self._cancel_event.is_set()
+
+    def scan(self, cancel=None) -> dict:
+        """执行全面 Rootkit 扫描
+
+        cancel: 可选外部取消令牌；同时支持实例内 cancel()。
+                取消时返回已完成阶段的部分结果，并带 cancelled=True。
+        """
         if self._scanning:
             return {'status': 'already_scanning'}
+
+        self._cancel_event.clear()
+
+        def _stopped() -> bool:
+            if self._cancel_event.is_set():
+                return True
+            if cancel is None:
+                return False
+            if hasattr(cancel, 'is_cancelled'):
+                return bool(cancel.is_cancelled())
+            if hasattr(cancel, 'is_set'):
+                return bool(cancel.is_set())
+            return False
 
         self._scanning = True
         try:
             result = {
                 'timestamp': datetime.now().isoformat(),
-                'hidden_processes': self.scan_hidden_processes(),
-                'hidden_drivers': self.scan_hidden_drivers(),
-                'suspicious_hooks': self.scan_hooks(),
-                'suspicious_callbacks': self.scan_callback_highjacks(),
+                'hidden_processes': [],
+                'hidden_drivers': [],
+                'suspicious_hooks': [],
+                'suspicious_callbacks': [],
                 'driver_connected': False,
+                'cancelled': False,
             }
+
+            # 分阶段执行，每个阶段前后检查取消标志（阶段内部亦为可中断实现）
+            for key, fn in (
+                ('hidden_processes', self.scan_hidden_processes),
+                ('hidden_drivers', self.scan_hidden_drivers),
+                ('suspicious_hooks', self.scan_hooks),
+                ('suspicious_callbacks', self.scan_callback_highjacks),
+            ):
+                if _stopped():
+                    result['cancelled'] = True
+                    break
+                result[key] = fn()
+                if _stopped():
+                    result['cancelled'] = True
+                    break
 
             total_threats = (
                 len(result['hidden_processes']) +
@@ -284,6 +326,8 @@ class AntiRootkit:
                 # 解析链表
                 offset = 0
                 while True:
+                    if self._cancel_event.is_set():
+                        return procs
                     if offset + ctypes.sizeof(SYSTEM_PROCESS_INFORMATION) > buf_size:
                         break
                     info = SYSTEM_PROCESS_INFORMATION.from_buffer_copy(buf, offset)
@@ -342,6 +386,8 @@ class AntiRootkit:
             ):
                 drivers = []
                 for i in range(array_size):
+                    if self._cancel_event.is_set():
+                        return drivers
                     if driver_array[i]:
                         name_buf = ctypes.create_unicode_buffer(260)
                         psapi.GetDeviceDriverBaseNameW(driver_array[i], name_buf, 260)

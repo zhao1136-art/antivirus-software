@@ -58,6 +58,21 @@ SKIP_DIR_NAMES = {
 
 # ── 工具函数 ──
 
+class _RestoreCancelled(Exception):
+    """内部信号：恢复过程被用户取消（正常路径，非错误）"""
+
+
+def _cancelled(cancel) -> bool:
+    """判断取消令牌是否已置位（兼容 is_cancelled() / is_set() 两种约定）"""
+    if cancel is None:
+        return False
+    if hasattr(cancel, "is_cancelled"):
+        return bool(cancel.is_cancelled())
+    if hasattr(cancel, "is_set"):
+        return bool(cancel.is_set())
+    return False
+
+
 def _get_logger():
     """获取数据恢复专用日志记录器"""
     log_dir = os.path.join(RECOVERY_ROOT, "logs")
@@ -319,15 +334,19 @@ class DataRecovery:
             versions = list(self._index.get(file_path, []))
         return versions
 
-    def restore_version(self, file_path: str, version_id: str) -> bool:
+    def restore_version(self, file_path: str, version_id: str, cancel=None,
+                        progress_callback=None) -> bool:
         """恢复文件到指定版本
 
         Args:
             file_path: 文件路径
             version_id: 版本ID（如 v1_1785839159）
+            cancel: 可选取消令牌（is_cancelled()/is_set()）；置位后立即
+                    停止复制并清理未写完的目标文件（回滚）
+            progress_callback: 可选 (percent, current) 进度回调
 
         Returns:
-            成功返回 True，失败返回 False
+            成功返回 True，失败或取消返回 False
         """
         file_path = os.path.abspath(file_path)
         with self._index_lock:
@@ -349,16 +368,75 @@ class DataRecovery:
             # 恢复前先为当前文件创建一个快照（如果存在）
             if os.path.isfile(file_path):
                 self.take_snapshot(file_path)
+                if _cancelled(cancel):
+                    self._log("info", f"恢复已取消（快照阶段）: {file_path}")
+                    return False
 
-            # 恢复内容
-            shutil.copy2(backup_path, file_path)
+            # 恢复内容：分块复制，保证大文件可被中途取消
+            self._copy_file_chunked(backup_path, file_path, cancel, progress_callback)
+            if _cancelled(cancel):
+                self._log("info", f"恢复已取消: {file_path} <- {version_id}")
+                return False
+            try:
+                shutil.copystat(backup_path, file_path)
+            except OSError:
+                pass
             with self._stats_lock:
                 self._stats["files_restored"] += 1
             self._log("info", f"文件已恢复: {file_path} <- {version_id}")
             return True
+        except _RestoreCancelled:
+            # 取消是正常路径：不记为失败，也不写错误日志
+            self._log("info", f"恢复已取消: {file_path} <- {version_id}")
+            return False
         except Exception as e:
             self._log("error", f"恢复文件失败: {file_path} <- {version_id} -> {e}")
             return False
+
+    @staticmethod
+    def _copy_file_chunked(src: str, dst: str, cancel=None,
+                           progress_callback=None, chunk_size: int = 1024 * 1024):
+        """分块复制文件（1MB/块），每块之间检查取消令牌
+
+        取消时不留下半截目标文件：删除写入中的临时文件后原样退出。
+        目标文件采用同目录临时文件 + 原子替换，避免破坏现有内容。
+        """
+        import tempfile
+        total = os.path.getsize(src) or 1
+        done = 0
+        tmp_dir = os.path.dirname(os.path.abspath(dst)) or "."
+        fh, tmp_path = tempfile.mkstemp(prefix=".yt_restore_", dir=tmp_dir)
+        try:
+            try:
+                fin = open(src, "rb")
+            except OSError:
+                os.close(fh)
+                raise
+            with fin, os.fdopen(fh, "wb") as fout:
+                while True:
+                    if _cancelled(cancel):
+                        raise _RestoreCancelled()
+                    chunk = fin.read(chunk_size)
+                    if not chunk:
+                        break
+                    fout.write(chunk)
+                    done += len(chunk)
+                    if progress_callback:
+                        progress_callback(min(99, int(done / total * 100)), dst)
+                fout.flush()
+                os.fsync(fout.fileno())
+            if _cancelled(cancel):
+                raise _RestoreCancelled()
+            os.replace(tmp_path, dst)
+            tmp_path = None
+            if progress_callback:
+                progress_callback(100, dst)
+        finally:
+            if tmp_path and os.path.isfile(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
 
     def delete_version(self, file_path: str, version_id: str) -> bool:
         """删除指定版本

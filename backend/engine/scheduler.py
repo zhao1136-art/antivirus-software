@@ -198,6 +198,22 @@ class Scheduler:
                     progress_callback=on_progress
                 )
 
+                # 取消是正常路径：保留已扫出的部分结果，状态必须是 cancelled，
+                # 不能被下面的 completed 覆盖（否则前端会看到"扫描完成"）。
+                if result.get("cancelled") or task.status == "cancelled":
+                    result["cancelled"] = True
+                    task.result = result
+                    task.status = "cancelled"
+                    task.completed_at = datetime.now().isoformat()
+                    task._completed_ts = time.time()
+                    with self._lock:
+                        self._active_count = max(0, self._active_count - 1)
+                    try:
+                        self.logger.log_scan_complete(task_id, result)
+                    except Exception:
+                        pass
+                    return
+
                 # 2. 云端引擎联动
                 cloud_hits = []
                 cloud_checked = 0
@@ -247,8 +263,13 @@ class Scheduler:
                     threat_alert(all_threats, quarantined)
 
             except Exception as e:
-                task.status = "failed"
-                task.error = str(e)
+                # 取消过程中抛出的异常不应报"失败"（取消是正常路径）
+                if task.status == "cancelled" or self.scanner._is_cancelled():
+                    task.status = "cancelled"
+                    task.error = None
+                else:
+                    task.status = "failed"
+                    task.error = str(e)
 
             task.completed_at = datetime.now().isoformat()
             task._completed_ts = time.time()

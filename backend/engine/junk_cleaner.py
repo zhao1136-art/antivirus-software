@@ -176,13 +176,15 @@ class CleanTask:
 
     def __init__(self, task_id: str):
         self.task_id = task_id
-        self.status = "queued"   # queued | running | completed | failed
+        self.status = "queued"   # queued | running | completed | cancelled | failed
         self.progress = 0
         self.current_item = ""
         self.result = None       # {"categories": [...], "total_bytes": n, "total_files": n}
         self.error = None
         self.created_at = datetime.now().isoformat()
         self.completed_at = None
+        # 协作式取消标志：扫描主循环在每个检查点读取它
+        self.cancel_event = threading.Event()
 
     def to_dict(self) -> dict:
         return {
@@ -194,6 +196,7 @@ class CleanTask:
             "created_at": self.created_at,
             "completed_at": self.completed_at,
             "error": self.error,
+            "cancelled": self.cancel_event.is_set(),
         }
 
 
@@ -223,10 +226,31 @@ class JunkCleaner:
     def get_task(self, task_id: str):
         return self._tasks.get(task_id)
 
+    def cancel_task(self, task_id: str) -> bool:
+        """取消清理扫描任务（协作式：置标志，扫描主循环自行退出）"""
+        task = self._tasks.get(task_id)
+        if not task or task.status not in ("queued", "running"):
+            return False
+        task.cancel_event.set()
+        # 尚未进入扫描循环的任务直接落状态；已在循环中的由 worker 收尾
+        if task.status == "queued":
+            task.status = "cancelled"
+            task.completed_at = datetime.now().isoformat()
+        return True
+
+    @staticmethod
+    def _is_cancelled(task) -> bool:
+        return bool(task is not None and task.cancel_event.is_set())
+
     # ── 扫描 ──
 
     def _scan_worker(self, task: CleanTask, progress_callback=None):
         """后台扫描线程"""
+        if self._is_cancelled(task):
+            task.status = "cancelled"
+            task.completed_at = datetime.now().isoformat()
+            return
+
         task.status = "running"
         try:
             def cb(progress: int, item: str):
@@ -235,7 +259,19 @@ class JunkCleaner:
                 if progress_callback:
                     progress_callback(task.task_id, progress, item)
 
-            categories = self._scan_all(cb)
+            categories = self._scan_all(cb, task)
+            if self._is_cancelled(task):
+                # 取消时保留已扫出的部分结果，但状态标记为 cancelled
+                task.result = {
+                    "categories": categories,
+                    "total_bytes": sum(c["total_bytes"] for c in categories),
+                    "total_files": sum(c["file_count"] for c in categories),
+                    "cancelled": True,
+                }
+                task.status = "cancelled"
+                task.completed_at = datetime.now().isoformat()
+                return
+
             task.result = {
                 "categories": categories,
                 "total_bytes": sum(c["total_bytes"] for c in categories),
@@ -248,21 +284,23 @@ class JunkCleaner:
             task.error = str(e)
             task.completed_at = datetime.now().isoformat()
 
-    def _scan_all(self, progress_callback) -> list:
+    def _scan_all(self, progress_callback, task=None) -> list:
         """按分类依次扫描，进度按分类数量均分"""
         defs = CATEGORY_DEFS
         results = []
         total = len(defs)
         for idx, cat in enumerate(defs):
+            if self._is_cancelled(task):
+                break
             if progress_callback:
                 progress_callback(int(idx / total * 100), cat["name"])
-            results.append(self._scan_category(cat))
+            results.append(self._scan_category(cat, task))
             if progress_callback:
                 progress_callback(int((idx + 1) / total * 100), "")
         return results
 
-    def _scan_category(self, cat: dict) -> dict:
-        """扫描单个分类，返回统计与明细"""
+    def _scan_category(self, cat: dict, task=None) -> dict:
+        """扫描单个分类，返回统计与明细（支持中途取消，返回部分统计）"""
         cat_id = cat["id"]
         if cat_id == "recycle_bin":
             # 回收站无法直接统计大小，仅标记为可清空
@@ -286,7 +324,11 @@ class JunkCleaner:
         cutoff = time.time() - MIN_FILE_AGE_SECONDS
 
         for root in roots:
+            if self._is_cancelled(task):
+                break
             for dirpath, _dirnames, filenames in os.walk(root, onerror=lambda _e: None):
+                if self._is_cancelled(task):
+                    break
                 for fn in filenames:
                     if pattern and not pattern(fn):
                         continue
@@ -319,10 +361,24 @@ class JunkCleaner:
 
     # ── 清理执行 ──
 
-    def execute_clean(self, category_ids: list) -> dict:
-        """执行清理：仅允许清理白名单分类，返回释放统计"""
+    def execute_clean(self, category_ids: list, cancel=None, progress_callback=None) -> dict:
+        """执行清理：仅允许清理白名单分类，返回释放统计
+
+        cancel: 可选取消令牌（需提供 is_cancelled()/is_set()）；置位后
+                在检查点停止删除并返回已完成的统计（cancelled=True）。
+        progress_callback: 可选 (percent, current_path) 进度回调。
+        """
         if not category_ids:
             return {"success": False, "error": "未选择任何清理项"}
+
+        def _cancelled() -> bool:
+            if cancel is None:
+                return False
+            if hasattr(cancel, "is_cancelled"):
+                return bool(cancel.is_cancelled())
+            if hasattr(cancel, "is_set"):
+                return bool(cancel.is_set())
+            return False
 
         allowed = {c["id"] for c in CATEGORY_DEFS}
         for cid in category_ids:
@@ -333,8 +389,11 @@ class JunkCleaner:
         cleaned_files = 0
         failed = []
         cat_records = []
+        total_cats = max(1, len(category_ids))
 
-        for cid in category_ids:
+        for cat_idx, cid in enumerate(category_ids):
+            if _cancelled():
+                break
             cat = next(c for c in CATEGORY_DEFS if c["id"] == cid)
             if cid == "recycle_bin":
                 ok, err = self._empty_recycle_bin()
@@ -350,11 +409,24 @@ class JunkCleaner:
             cutoff = time.time() - MIN_FILE_AGE_SECONDS
             cat_freed = 0
             cat_files = 0
+            checked = 0
 
             for root in roots:
+                if _cancelled():
+                    break
                 root_real = os.path.realpath(root)
                 for dirpath, _dirnames, filenames in os.walk(root, onerror=lambda _e: None):
+                    if _cancelled():
+                        break
                     for fn in filenames:
+                        if _cancelled():
+                            break
+                        checked += 1
+                        if progress_callback and checked % 40 == 0:
+                            progress_callback(
+                                int((cat_idx + 0.5) / total_cats * 100),
+                                os.path.join(dirpath, fn),
+                            )
                         if pattern and not pattern(fn):
                             continue
                         full = os.path.join(dirpath, fn)
@@ -381,6 +453,10 @@ class JunkCleaner:
             cleaned_files += cat_files
             cat_records.append({"id": cid, "name": cat["name"],
                                 "freed_bytes": cat_freed, "cleaned_files": cat_files})
+            if progress_callback:
+                progress_callback(int((cat_idx + 1) / total_cats * 100), "")
+
+        was_cancelled = _cancelled()
 
         record = {
             "timestamp": datetime.now().isoformat(),
@@ -389,11 +465,13 @@ class JunkCleaner:
             "freed_text": format_size(freed_bytes),
             "cleaned_files": cleaned_files,
             "failed_count": len(failed),
+            "cancelled": was_cancelled,
         }
         self._append_history(record)
 
         return {
             "success": True,
+            "cancelled": was_cancelled,
             "freed_bytes": freed_bytes,
             "freed_text": format_size(freed_bytes),
             "cleaned_files": cleaned_files,

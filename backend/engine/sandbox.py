@@ -280,6 +280,17 @@ def _format_size(size: int) -> str:
     return f"{size:.1f}TB"
 
 
+def _token_cancelled(cancel) -> bool:
+    """判断取消令牌是否已置位（兼容 is_cancelled() / is_set() 两种约定）"""
+    if cancel is None:
+        return False
+    if hasattr(cancel, "is_cancelled"):
+        return bool(cancel.is_cancelled())
+    if hasattr(cancel, "is_set"):
+        return bool(cancel.is_set())
+    return False
+
+
 # ══════════════════════════════════════════════════════════════
 #  LightweightSandbox — 轻量内嵌沙箱主类
 # ══════════════════════════════════════════════════════════════
@@ -415,7 +426,8 @@ class LightweightSandbox:
 
     # ── 主分析入口 ──
 
-    def analyze_file(self, file_path: str, timeout: int = DEFAULT_ANALYSIS_TIMEOUT) -> dict:
+    def analyze_file(self, file_path: str, timeout: int = DEFAULT_ANALYSIS_TIMEOUT,
+                     cancel=None) -> dict:
         """在沙箱中分析文件
 
         流程：
@@ -424,7 +436,7 @@ class LightweightSandbox:
           3. 创建受限进程 (CREATE_SUSPENDED)
           4. 将进程分配到 Job
           5. 恢复进程执行
-          6. 等待 timeout 秒
+          6. 等待 timeout 秒（分片轮询，可被 cancel 令牌提前打断）
           7. 收集行为日志
           8. 终止 Job（杀死所有子进程）
           9. 生成报告
@@ -432,6 +444,8 @@ class LightweightSandbox:
         Args:
             file_path: 要分析的可执行文件路径
             timeout: 分析超时时间（秒）
+            cancel: 可选取消令牌（is_cancelled()/is_set()）；置位后立即
+                    终止沙箱进程并返回 cancelled=True 的部分报告
 
         Returns:
             分析报告字典，包含 verdict / confidence / behaviors / risk_indicators
@@ -478,6 +492,8 @@ class LightweightSandbox:
         h_process = 0
         h_thread = 0
         pid = 0
+        result = WAIT_TIMEOUT
+        was_cancelled = False
 
         try:
             # 1. 创建并配置 Job Object
@@ -550,9 +566,25 @@ class LightweightSandbox:
             # 5. 恢复进程主线程执行
             _kernel32.ResumeThread(h_thread)
 
-            # 6. 等待进程结束或超时
-            wait_ms = timeout * 1000
-            result = _kernel32.WaitForSingleObject(h_process, wait_ms)
+            # 6. 等待进程结束、超时或被取消（分片轮询以支持中途取消）
+            deadline = time.time() + timeout
+            while True:
+                if cancel is not None and _token_cancelled(cancel):
+                    was_cancelled = True
+                    self._log("info", f"沙箱分析已被用户取消: {file_path}")
+                    break
+                remain = deadline - time.time()
+                if remain <= 0:
+                    result = WAIT_TIMEOUT
+                    break
+                slice_ms = int(min(0.2, max(0.02, remain)) * 1000)
+                r = _kernel32.WaitForSingleObject(h_process, slice_ms)
+                if r == WAIT_OBJECT_0:
+                    result = r
+                    break
+                if r not in (WAIT_TIMEOUT, WAIT_OBJECT_0):
+                    result = r
+                    break
 
             # 7. 停止行为监控
             monitor_stop.set()
@@ -562,7 +594,13 @@ class LightweightSandbox:
             exit_code = wintypes.DWORD()
             _kernel32.GetExitCodeProcess(h_process, ctypes.byref(exit_code))
 
-            if result == WAIT_TIMEOUT:
+            if was_cancelled:
+                behaviors.append({
+                    "type": "cancelled",
+                    "detail": "用户取消分析，沙箱进程已被强制终止",
+                    "severity": "low",
+                })
+            elif result == WAIT_TIMEOUT:
                 self._log("warning", f"分析超时，强制终止: {file_path}")
                 behaviors.append({
                     "type": "timeout",
@@ -597,6 +635,14 @@ class LightweightSandbox:
         report = self._generate_report(
             file_path, behaviors, elapsed, report_id
         )
+
+        # 用户取消：标记报告并跳过统计/历史写入（避免污染分析历史）
+        if was_cancelled:
+            report["cancelled"] = True
+            with self._status_lock:
+                self._current_analysis = None
+            self._log("info", f"沙箱分析已取消: {file_path} (耗时 {elapsed}s)")
+            return report
 
         # 更新统计与历史
         self._update_stats_and_history(report)

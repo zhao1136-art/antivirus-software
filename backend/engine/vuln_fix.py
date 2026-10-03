@@ -22,6 +22,17 @@ from datetime import datetime
 
 IS_WINDOWS = sys.platform == "win32"
 
+
+def _cancelled(cancel) -> bool:
+    """判断取消令牌是否已置位（兼容 is_cancelled() / is_set() 两种约定）"""
+    if cancel is None:
+        return False
+    if hasattr(cancel, "is_cancelled"):
+        return bool(cancel.is_cancelled())
+    if hasattr(cancel, "is_set"):
+        return bool(cancel.is_set())
+    return False
+
 DATA_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "data",
@@ -84,8 +95,8 @@ class VulnFix:
             pass
 
     # ── 扫描 ─────────────────────────────────────────────────
-    def _read_installed_hotfixes(self) -> set[str]:
-        """从注册表枚举已安装热修复补丁的 KB 编号"""
+    def _read_installed_hotfixes(self, cancel=None) -> set[str]:
+        """从注册表枚举已安装热修复补丁的 KB 编号（支持中途取消）"""
         installed: set[str] = set()
         if not IS_WINDOWS:
             return installed
@@ -94,6 +105,8 @@ class VulnFix:
             with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, HOTFIX_ROOT) as key:
                 count, _, _ = winreg.QueryInfoKey(key)
                 for i in range(count):
+                    if _cancelled(cancel):
+                        break
                     name = winreg.EnumKey(key, i)
                     if name and name.lower().startswith("kb"):
                         installed.add(name.upper())
@@ -119,10 +132,17 @@ class VulnFix:
                 })
         return missing
 
-    def scan(self, force: bool = True) -> dict:
-        """执行漏洞扫描，返回报告"""
+    def scan(self, force: bool = True, cancel=None) -> dict:
+        """执行漏洞扫描，返回报告
+
+        cancel: 可选取消令牌；置位后停止枚举并返回 cancelled=True。
+        """
         with self._lock:
-            installed = self._read_installed_hotfixes()
+            installed = self._read_installed_hotfixes(cancel)
+            if _cancelled(cancel):
+                return {"cancelled": True, "scan_time": None,
+                        "installed_count": len(installed), "missing_count": 0,
+                        "missing": [], "all_patched": False}
             missing = self._scan_builtin(installed, self._ignore)
 
         self._installed = installed

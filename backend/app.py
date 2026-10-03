@@ -680,6 +680,275 @@ def _init_usb_scanner():
 
 _thr.Thread(target=_start_guards, daemon=True).start()
 
+# ---------- 通用可取消异步任务（清理/体检/优化/恢复/沙箱/漏洞等复用） ----------
+#
+# 背景：体检、一键优化、清理执行、沙箱分析等端点内部是同步阻塞调用，前端只能
+# await 整个 HTTP 响应，期间没有任何取消通路。这里提供统一的可取消任务封装：
+#   POST /api/v1/jobs                    创建任务（body: {kind, params}）
+#   GET  /api/v1/jobs/{task_id}/status   查询进度 / 状态 / 结果
+#   POST /api/v1/jobs/{task_id}/cancel   取消（协作式）
+# 取消是真取消：各 engine 对应方法接受 cancel 令牌，在主循环检查点退出，
+# 而不是只改前端状态、后端继续闷头跑。
+
+class _CancelToken:
+    """协作式取消令牌（同时兼容 is_cancelled() 与 threading.Event 的 is_set()）"""
+
+    __slots__ = ("_event",)
+
+    def __init__(self):
+        self._event = _thr.Event()
+
+    def cancel(self):
+        self._event.set()
+
+    def is_cancelled(self) -> bool:
+        return self._event.is_set()
+
+    def is_set(self) -> bool:
+        return self._event.is_set()
+
+    def set(self):
+        self._event.set()
+
+    def clear(self):
+        self._event.clear()
+
+    def wait(self, timeout=None) -> bool:
+        return self._event.wait(timeout)
+
+
+class _AsyncJob:
+    """通用异步任务记录（字段与 ScanTask / CleanTask 对齐，前端可复用同一套渲染）"""
+
+    def __init__(self, task_id: str, kind: str, params: dict = None):
+        self.task_id = task_id
+        self.kind = kind
+        self.params = params or {}
+        self.status = "queued"   # queued | running | completed | cancelled | failed
+        self.progress = 0
+        self.current = ""
+        self.result = None
+        self.error = None
+        self.cancelled = False
+        self.created_at = time.strftime("%Y-%m-%dT%H:%M:%S")
+        self.completed_at = None
+        self._created_ts = time.time()
+        self._completed_ts = 0.0
+        self.token = _CancelToken()
+
+    def to_dict(self) -> dict:
+        return {
+            "task_id": self.task_id,
+            "kind": self.kind,
+            "status": self.status,
+            "progress": self.progress,
+            "current": self.current,
+            "result": self.result,
+            "error": self.error,
+            "cancelled": bool(self.cancelled or self.token.is_cancelled()),
+            "created_at": self.created_at,
+            "completed_at": self.completed_at,
+        }
+
+
+class _AsyncJobRegistry:
+    """通用异步任务登记表：独立线程执行 + 协作式取消 + TTL/容量清理"""
+
+    TTL_SECONDS = 3600
+    MAX_JOBS = 200
+
+    def __init__(self):
+        self._jobs: dict = {}
+        self._lock = _thr.Lock()
+
+    def _cleanup_locked(self):
+        now = time.time()
+        for tid, job in list(self._jobs.items()):
+            if job._completed_ts and now - job._completed_ts > self.TTL_SECONDS:
+                self._jobs.pop(tid, None)
+        if len(self._jobs) >= self.MAX_JOBS:
+            finished = sorted(
+                (j for j in self._jobs.values() if j._completed_ts > 0),
+                key=lambda j: j._completed_ts,
+            )
+            drop = max(1, len(finished) - self.MAX_JOBS // 2)
+            for j in finished[:drop]:
+                self._jobs.pop(j.task_id, None)
+
+    def submit(self, kind: str, runner, params: dict = None) -> _AsyncJob:
+        """runner(token, report) -> result；report(progress, current) 上报进度"""
+        job = _AsyncJob("job_" + os.urandom(4).hex(), kind, params)
+        with self._lock:
+            self._cleanup_locked()
+            self._jobs[job.task_id] = job
+
+        def _report(progress=None, current=None):
+            if progress is not None:
+                try:
+                    job.progress = max(0, min(100, int(progress)))
+                except (TypeError, ValueError):
+                    pass
+            if current is not None:
+                job.current = str(current)
+
+        def _run():
+            job.status = "running"
+            try:
+                result = runner(job.token, _report)
+                if job.token.is_cancelled():
+                    job.status = "cancelled"
+                    job.cancelled = True
+                    if result is not None:
+                        job.result = result
+                else:
+                    job.result = result
+                    job.status = "completed"
+                    job.progress = 100
+            except Exception as e:
+                if job.token.is_cancelled():
+                    job.status = "cancelled"
+                    job.cancelled = True
+                else:
+                    job.status = "failed"
+                    job.error = str(e)
+            finally:
+                job.completed_at = time.strftime("%Y-%m-%dT%H:%M:%S")
+                job._completed_ts = time.time()
+
+        _thr.Thread(target=_run, daemon=True, name="yutian-job-" + str(kind)).start()
+        return job
+
+    def get(self, task_id: str):
+        return self._jobs.get(task_id)
+
+    def cancel(self, task_id: str) -> bool:
+        job = self._jobs.get(task_id)
+        if not job or job.status not in ("queued", "running"):
+            return False
+        job.token.cancel()
+        job.cancelled = True
+        if job.status == "queued":
+            job.status = "cancelled"
+            job.completed_at = time.strftime("%Y-%m-%dT%H:%M:%S")
+            job._completed_ts = time.time()
+        return True
+
+
+_jobs = _AsyncJobRegistry()
+
+
+class JobCreateRequest(BaseModel):
+    """通用异步任务创建请求"""
+
+    kind: str
+    params: Optional[dict] = None
+
+
+def _job_clean_execute(token, report, params: dict):
+    """清理执行（可取消）：删除白名单分类下的垃圾文件"""
+    ids = params.get("category_ids") or []
+    report(3, "正在清理选中分类")
+    return junk_cleaner.execute_clean(
+        ids, cancel=token,
+        progress_callback=lambda p, c: report(3 + int((p or 0) * 0.95), c),
+    )
+
+
+def _job_optimize_overview(token, report, params: dict):
+    """系统体检（可取消）"""
+    report(20, "正在检查磁盘与内存")
+    return system_optimizer.overview(cancel=token)
+
+
+def _job_optimize_one_click(token, report, params: dict):
+    """一键优化（可取消）"""
+    report(10, "正在清理临时文件")
+    return system_optimizer.one_click(cancel=token)
+
+
+def _job_optimize_memory(token, report, params: dict):
+    """内存释放（可取消）"""
+    report(10, "正在收缩进程工作集")
+    return system_optimizer.release_memory(cancel=token)
+
+
+def _job_recovery_restore(token, report, params: dict):
+    """版本恢复（可取消，分块复制）"""
+    ok = data_recovery.restore_version(
+        params.get("file_path", ""), params.get("version_id", ""),
+        cancel=token,
+        progress_callback=lambda p, c: report(p, c),
+    )
+    return {"ok": bool(ok), "cancelled": token.is_cancelled()}
+
+
+def _job_sandbox_analyze(token, report, params: dict):
+    """沙箱分析（可取消：立即终止受限进程）"""
+    report(5, "正在启动受限沙箱")
+    timeout = params.get("timeout") or 30
+    try:
+        timeout = int(timeout)
+    except (TypeError, ValueError):
+        timeout = 30
+    return sandbox.analyze_file(params.get("file_path", ""), timeout, cancel=token)
+
+
+def _job_vulnfix_scan(token, report, params: dict):
+    """漏洞扫描（可取消）"""
+    report(30, "正在枚举已安装补丁")
+    return vuln_fix.scan(cancel=token)
+
+
+def _job_rootkit_scan(token, report, params: dict):
+    """反 Rootkit 扫描（可取消：阶段边界 + 枚举循环）"""
+    report(10, "正在检测隐藏进程/驱动/钩子")
+    return anti_rootkit.scan(cancel=token)
+
+
+_JOB_HANDLERS = {
+    "clean-execute": _job_clean_execute,
+    "optimize-overview": _job_optimize_overview,
+    "optimize-one-click": _job_optimize_one_click,
+    "optimize-memory": _job_optimize_memory,
+    "recovery-restore": _job_recovery_restore,
+    "sandbox-analyze": _job_sandbox_analyze,
+    "vulnfix-scan": _job_vulnfix_scan,
+    "rootkit-scan": _job_rootkit_scan,
+}
+
+
+@app.post("/api/v1/jobs")
+async def jobs_create(req: JobCreateRequest):
+    """创建通用可取消异步任务"""
+    handler = _JOB_HANDLERS.get(req.kind)
+    if handler is None:
+        return JSONResponse({"error": f"未知任务类型: {req.kind}"}, 400)
+    params = req.params or {}
+    job = _jobs.submit(
+        req.kind,
+        lambda token, report: handler(token, report, params),
+        params,
+    )
+    return {"task_id": job.task_id, "kind": job.kind, "status": job.status}
+
+
+@app.get("/api/v1/jobs/{task_id}/status")
+async def jobs_status(task_id: str):
+    """查询通用异步任务状态"""
+    job = _jobs.get(task_id)
+    if not job:
+        return JSONResponse({"error": "任务不存在"}, 404)
+    return job.to_dict()
+
+
+@app.post("/api/v1/jobs/{task_id}/cancel")
+async def jobs_cancel(task_id: str):
+    """取消通用异步任务（协作式，任务体在检查点退出）"""
+    if not _jobs.cancel(task_id):
+        return JSONResponse({"error": "任务不存在或已结束"}, 400)
+    return {"task_id": task_id, "status": "cancelled"}
+
+
 # ---------- 扫描 API ----------
 
 @app.post("/api/v1/scan/quick")
@@ -1858,6 +2127,14 @@ async def clean_status(task_id: str):
     if not task:
         return JSONResponse({"error": "任务不存在"}, 404)
     return task.to_dict()
+
+
+@app.post("/api/v1/clean/{task_id}/cancel")
+async def clean_cancel(task_id: str):
+    """取消垃圾清理扫描任务（协作式：扫描主循环在检查点退出）"""
+    if not junk_cleaner.cancel_task(task_id):
+        return JSONResponse({"error": "无法取消该任务"}, 400)
+    return {"task_id": task_id, "status": "cancelled"}
 
 
 @app.post("/api/v1/clean/execute")

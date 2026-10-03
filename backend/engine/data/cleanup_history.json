@@ -1,5 +1,73 @@
 [
   {
+    "timestamp": "2026-10-03T09:59:02.369095",
+    "categories": [],
+    "total_freed": 0,
+    "freed_text": "0 B",
+    "cleaned_files": 0,
+    "failed_count": 0,
+    "cancelled": true
+  },
+  {
+    "timestamp": "2026-10-03T09:58:59.708580",
+    "categories": [
+      {
+        "id": "temp_files",
+        "name": "系统临时文件",
+        "freed_bytes": 0,
+        "cleaned_files": 0
+      }
+    ],
+    "total_freed": 0,
+    "freed_text": "0 B",
+    "cleaned_files": 0,
+    "failed_count": 0,
+    "cancelled": false
+  },
+  {
+    "timestamp": "2026-10-03T09:58:58.476886",
+    "categories": [],
+    "total_freed": 0,
+    "freed_text": "0 B",
+    "cleaned_files": 0,
+    "failed_count": 0,
+    "cancelled": true
+  },
+  {
+    "timestamp": "2026-10-03T09:58:46.432624",
+    "categories": [],
+    "total_freed": 0,
+    "freed_text": "0 B",
+    "cleaned_files": 0,
+    "failed_count": 0,
+    "cancelled": true
+  },
+  {
+    "timestamp": "2026-10-03T09:58:46.387895",
+    "categories": [
+      {
+        "id": "temp_files",
+        "name": "系统临时文件",
+        "freed_bytes": 0,
+        "cleaned_files": 0
+      }
+    ],
+    "total_freed": 0,
+    "freed_text": "0 B",
+    "cleaned_files": 0,
+    "failed_count": 0,
+    "cancelled": false
+  },
+  {
+    "timestamp": "2026-10-03T09:58:44.884512",
+    "categories": [],
+    "total_freed": 0,
+    "freed_text": "0 B",
+    "cleaned_files": 0,
+    "failed_count": 0,
+    "cancelled": true
+  },
+  {
     "timestamp": "2026-08-23T14:24:31.051476",
     "categories": [
       {
@@ -16,29 +84,4 @@
       },
       {
         "id": "update_cache",
-        "name": "Windows 更新缓存",
-        "freed_bytes": 0,
-        "cleaned_files": 0
-      }
-    ],
-    "total_freed": 0,
-    "freed_text": "0 B",
-    "cleaned_files": 0,
-    "failed_count": 6
-  },
-  {
-    "timestamp": "2026-08-23T14:24:28.383310",
-    "categories": [
-      {
-        "id": "temp_files",
-        "name": "系统临时文件",
-        "freed_bytes": 2073889585,
-        "cleaned_files": 1755
-      }
-    ],
-    "total_freed": 2073889585,
-    "freed_text": "1.9 GB",
-    "cleaned_files": 1755,
-    "failed_count": 6
-  }
-]
+        "name":
