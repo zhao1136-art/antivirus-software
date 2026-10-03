@@ -1372,36 +1372,81 @@ class LightweightSandbox:
             risk_indicators / isolation
         """
         # 计算风险评分
+        #
+        # 2026-10-03 实测修正：notepad.exe 原先被判 malicious，分数刚好 70：
+        #     读自己的资源 notepad.exe.mun + 语言包  (medium×2 = 30)
+        #   + 进程被超时终止                        (low     =  5)
+        #   + 超时本身                              (medium  = 15)
+        #   + 超时固定加成                          (        = 20)
+        #   = 70 → 踩在 >= 70 判 malicious 的线上，一分不差。
+        # 但这三件事全是**正常 GUI 程序的标准行为** —— GUI 程序永远不会自己退出，
+        # 读自己的资源更是必然。所以这里加两道约束：
+        #   ① 读系统目录 / 自己所在目录 / Program Files 的 file_access 不计风险
+        #   ② 判 malicious **必须**拿到至少一个强指标
+        #      （高危行为、子进程、网络连接），光靠"超时 + 读文件"堆分不够
+        _sysroot = os.environ.get("SystemRoot", r"C:\Windows").lower()
+        _trusted_dirs = [
+            d.lower() for d in (
+                os.environ.get("ProgramFiles", ""),
+                os.environ.get("ProgramFiles(x86)", ""),
+                os.environ.get("ProgramData", ""),
+                os.path.dirname(os.path.abspath(file_path)),
+            ) if d
+        ]
+
+        def _benign_access(detail: str) -> bool:
+            """读系统目录 / 自己所在目录 / Program Files —— 不算风险"""
+            d = (detail or "").lower()
+            if _sysroot and _sysroot in d:
+                return True
+            return any(t and t in d for t in _trusted_dirs)
+
         risk_score = 0
         risk_indicators: list[str] = []
+        strong_kinds: set = set()      # 强指标：只有它们有资格支撑 malicious
+        benign_count = 0
 
         # 各类行为计数
         behavior_counts: dict[str, int] = {}
         for b in behaviors:
             btype = b.get("type", "unknown")
+            severity = b.get("severity", "low")
+
+            # ① 正常文件读取不计风险（仍然出现在报告里，只是不加分）
+            if btype == "file_access" and _benign_access(str(b.get("detail", ""))):
+                benign_count += 1
+                continue
+
             behavior_counts[btype] = behavior_counts.get(btype, 0) + 1
 
             # 根据严重程度累加风险分
-            severity = b.get("severity", "low")
             if severity == "high":
                 risk_score += 30
+                strong_kinds.add("high:" + btype)
             elif severity == "medium":
                 risk_score += 15
             elif severity == "low":
                 risk_score += 5
 
+        if benign_count:
+            risk_indicators.append("正常文件读取 %d 次（系统/自身目录，不计风险）" % benign_count)
+
         # 高风险行为指标
         if behavior_counts.get("child_process", 0) > 0:
             risk_indicators.append("创建子进程")
             risk_score += 10
+            strong_kinds.add("child_process")
         if behavior_counts.get("network", 0) > 0:
             risk_indicators.append("发起网络连接")
             risk_score += 20
+            strong_kinds.add("network")
         if behavior_counts.get("file_access", 0) >= 5:
-            risk_indicators.append("大量文件访问")
+            risk_indicators.append("大量文件访问（非系统目录）")
             risk_score += 15
         if behavior_counts.get("timeout", 0) > 0:
-            # 超时被杀 = 行为不可知，不能因为"只看到超时"就判 clean
+            # 超时被杀 = 行为不可知，不能因为"只看到超时"就判 clean。
+            # ⚠️ 但超时**不是强指标** —— GUI 程序（记事本、画图…）永远不会
+            # 自己退出，把它当恶意证据会把所有带界面的程序全判成病毒。
             risk_indicators.append("运行超时未退出（行为不可知）")
             risk_score += 20
         if behavior_counts.get("error", 0) > 0:
@@ -1415,12 +1460,17 @@ class LightweightSandbox:
             # 分析过程本身出错：不下安全结论
             verdict = "unknown"
             confidence = 0.0
-        elif risk_score >= 70:
+        elif risk_score >= 70 and strong_kinds:
+            # ② 必须拿到强指标才敢判 malicious
             verdict = "malicious"
             confidence = round(risk_score / 100, 2)
-        elif risk_score >= 30:
+            risk_indicators.append("强指标: " + ", ".join(sorted(strong_kinds)))
+        elif risk_score >= 30 or behavior_counts.get("timeout", 0) > 0:
             verdict = "suspicious"
             confidence = round(risk_score / 100, 2)
+            if behavior_counts.get("timeout", 0) > 0 and not strong_kinds:
+                risk_indicators.append(
+                    "仅有超时、无强指标 —— 不足以判恶意（GUI 程序本就不会自行退出）")
         elif not behaviors:
             # 进程跑完却没有采集到任何行为：无法判定，不能算 clean
             verdict = "unknown"
