@@ -9,7 +9,7 @@
 --quarantine-on-detect 打开自动隔离。
 
 CPU 占用由 --level 控制（low 5% / medium 10% / high 15%，指占系统总容量），
-运行时可在本地状态页上改。
+运行时由主产品（backend/frontend/guard.html）通过控制 API 改，本程序不再自带界面。
 """
 from __future__ import annotations
 
@@ -226,12 +226,13 @@ def main(argv=None):
     ap.add_argument("--max-mb", type=int, default=64, help="单文件扫描上限 MB")
     ap.add_argument("--level", choices=list(LEVELS), default=DEFAULT_LEVEL,
                     help="CPU 占用上限档位：low 5%% / medium 10%% / high 15%%（占系统总容量）")
-    ap.add_argument("--ui-port", type=int, default=8022, help="本地状态页端口，0 表示不启动")
+    ap.add_argument("--ui-port", "--control-port", dest="ui_port", type=int, default=8022,
+                    help="控制 API 端口（--ui-port 是历史名，二者等价），0 表示不启动")
     ap.add_argument("--quarantine-on-detect", action="store_true",
                     help="检出即隔离（默认关闭：规则集存在误报）")
     ap.add_argument("--no-tray", action="store_true", help="不启动托盘")
     ap.add_argument("--no-window", action="store_true",
-                    help="不打开桌面窗口（只提供状态页地址）")
+                    help="（历史参数，已无效果：本程序不再打开自带界面）")
     ap.add_argument("--no-native", action="store_true", help="强制使用纯 Python 匹配后端")
     ap.add_argument("--min-literal", type=int, default=6,
                     help="字面量最小长度（默认 6：更短的串没有鉴别力，只会误报）")
@@ -288,11 +289,18 @@ def main(argv=None):
 
     ui = None
     if args.ui_port:
-        ui = StatusServer(probe.status, lambda lv: bool(throttle.set_level(lv)))
+        # 档位回调：非法档位必须返回失败，否则 Throttle.set_level 会静默回落到默认档
+        def _set_level(lv):
+            lv = str(lv or "").strip().lower()
+            if lv not in LEVELS:
+                return None
+            return throttle.set_level(lv)
+
+        ui = StatusServer(probe.status, _set_level)
         if ui.start():
-            print("  状态页: %s  （低 5%% / 中 10%% / 高 15%%）" % ui.url)
+            print("  控制 API: %s  （GET /api/status · POST /api/throttle）" % ui.url)
         else:
-            print("  状态页启动失败（端口 %d 起被占用），继续无界面运行" % args.ui_port)
+            print("  控制 API 启动失败（端口 %d 起被占用），继续无接口运行" % args.ui_port)
             ui = None
 
     stop_ev = threading.Event()
@@ -323,26 +331,8 @@ def main(argv=None):
         except KeyboardInterrupt:
             pass
 
-    # 启动软件就要看得见界面：优先开桌面窗口，退而求其次开浏览器。
-    # 都没有时仍继续后台运行 —— 界面缺失不该让防护停摆。
-    if ui is not None and not args.no_window:
-        try:
-            import webview
-            webview.create_window("御天实时防护", ui.url, width=900, height=740)
-            print("  界面: 已打开桌面窗口（关闭窗口即退出）")
-            webview.start()          # 阻塞直到窗口全部关闭
-            stop_ev.set()
-        except Exception as exc:
-            print("  桌面窗口不可用（%s: %s）" % (type(exc).__name__, exc))
-            try:
-                import webbrowser
-                webbrowser.open(ui.url)
-                print("  界面: 已用默认浏览器打开 %s" % ui.url)
-            except Exception as exc2:
-                print("  界面: 无法自动打开（%s），请手动访问 %s" % (exc2, ui.url))
-            _wait_loop()
-    else:
-        _wait_loop()
+    # 自带界面已移除：界面在主产品（guard.html）里，这里只保持后台防护 + 控制 API。
+    _wait_loop()
 
     print("")
     print("正在停止…")

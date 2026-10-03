@@ -193,6 +193,29 @@
         }
         .toast.show { transform: translateX(0); }
     
+        /* ── 实时防护 · CPU 节流（档位按钮） ── */
+        .rtg-levels { display: flex; gap: 12px; flex-wrap: wrap; }
+        .rtg-level {
+            flex: 1 1 150px; padding: 14px 12px; cursor: pointer; font-family: inherit;
+            background: var(--bg-secondary); border: 1px solid var(--border);
+            border-radius: var(--radius-md); color: var(--text-primary);
+            text-align: center; transition: var(--transition);
+        }
+        .rtg-level:hover:not(:disabled) { border-color: var(--accent); transform: translateY(-1px); }
+        .rtg-level.on { background: var(--accent-dim); border-color: var(--accent); }
+        .rtg-level:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+        .rtg-level .rtg-name { display: block; font-size: 15px; font-weight: 700; }
+        .rtg-level .rtg-pct { display: block; font-size: 12px; color: var(--text-secondary); margin-top: 3px; }
+        .rtg-level.on .rtg-pct { color: var(--accent); }
+        .rtg-meter { height: 8px; border-radius: 5px; background: var(--bg-hover); overflow: hidden; margin: 16px 0 14px; }
+        .rtg-meter i { display: block; height: 100%; width: 0; background: var(--accent); transition: width 0.4s ease; }
+        .rtg-meter.over i { background: var(--warning); }
+        .rtg-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 14px; }
+        .rtg-stats .k { font-size: 12px; color: var(--text-secondary); }
+        .rtg-stats .v { font-size: 17px; font-weight: 700; margin-top: 2px; }
+        .rtg-live { font-size: 13px; color: var(--text-secondary); margin-top: 12px; }
+        .rtg-off { color: var(--warning); }
+
         /* ---------- 移动端汉堡菜单（与其余页面统一，断点 768） ---------- */
         .nav-toggle {
             display: none; position: fixed; top: 14px; left: 14px; z-index: 200;
@@ -332,6 +355,34 @@
                     <span>取消优化</span>
                 </button>
             </div>
+        </div>
+
+        <!-- 实时防护 · CPU 节流（rtguard，后端 /api/v1/rtguard/*） -->
+        <div class="card" style="margin-bottom:24px">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:18px">
+                <div>
+                    <div style="font-size:15px;font-weight:700;margin-bottom:4px">实时防护 · CPU 节流</div>
+                    <div style="font-size:13px;color:var(--text-secondary)" id="rtgHint">正在读取实时防护状态…</div>
+                </div>
+                <div style="display:flex;gap:10px;align-items:center">
+                    <span class="tag warn" id="rtgStateTag">检测中</span>
+                    <button class="btn btn-primary" id="rtgStartBtn" onclick="rtgStart()" style="display:none">启动实时防护</button>
+                </div>
+            </div>
+            <div class="rtg-levels" id="rtgLevels">
+                <button class="rtg-level" data-level="low" onclick="rtgSetLevel('low')">
+                    <span class="rtg-name">低</span><span class="rtg-pct" data-pct="low">5%</span>
+                </button>
+                <button class="rtg-level" data-level="medium" onclick="rtgSetLevel('medium')">
+                    <span class="rtg-name">中</span><span class="rtg-pct" data-pct="medium">10%</span>
+                </button>
+                <button class="rtg-level" data-level="high" onclick="rtgSetLevel('high')">
+                    <span class="rtg-name">高</span><span class="rtg-pct" data-pct="high">15%</span>
+                </button>
+            </div>
+            <div class="rtg-meter" id="rtgMeter"><i id="rtgMeterFill"></i></div>
+            <div class="rtg-live" id="rtgLive">—</div>
+            <div class="rtg-stats" id="rtgStats" style="margin-top:16px"></div>
         </div>
 
         <!-- 清理历史 -->
@@ -554,6 +605,116 @@ async function cancelOneClick() {
     await apiPost('/api/v1/jobs/' + oneClickJobId + '/cancel');
     showToast('已请求取消优化，正在停止…', false, true);
 }
+
+// ── 实时防护（rtguard）联动：三个档位按钮 + 实时占用 ──
+const RTG_FALLBACK_LEVELS = {
+    low: { label: '低 5%', pct: 5 },
+    medium: { label: '中 10%', pct: 10 },
+    high: { label: '高 15%', pct: 15 }
+};
+const RTG_STATS = [['规则', 'rules'], ['已扫描', 'scanned'], ['可疑', 'suspicious'],
+                   ['恶意', 'malicious'], ['隔离区', 'quarantine'], ['缓存命中', 'cache_hits']];
+let rtgBusy = false;
+
+function rtgRender(d) {
+    const ok = !!(d && d.available);
+    const levels = (d && d.levels && Object.keys(d.levels).length) ? d.levels : RTG_FALLBACK_LEVELS;
+    document.querySelectorAll('.rtg-level').forEach(btn => {
+        const lv = levels[btn.dataset.level];
+        if (lv) {
+            const m = /^(.*?)\s*(\d+(?:\.\d+)?)%\s*$/.exec(lv.label || '');
+            if (m && m[1]) btn.querySelector('.rtg-name').textContent = m[1];
+            btn.querySelector('.rtg-pct').textContent = '上限 ' + lv.pct + '%';
+        }
+        btn.classList.toggle('on', ok && d.level === btn.dataset.level);
+        btn.disabled = !ok || rtgBusy;
+    });
+
+    const tag = document.getElementById('rtgStateTag');
+    tag.textContent = ok ? '运行中' : '未运行';
+    tag.className = 'tag ' + (ok ? 'ok' : 'warn');
+    document.getElementById('rtgStartBtn').style.display = ok ? 'none' : 'inline-flex';
+
+    const live = document.getElementById('rtgLive');
+    live.textContent = '';
+    const stats = document.getElementById('rtgStats');
+    const fill = document.getElementById('rtgMeterFill');
+    const meter = document.getElementById('rtgMeter');
+
+    if (!ok) {
+        const span = document.createElement('span');
+        span.className = 'rtg-off';
+        span.textContent = '实时防护未运行';
+        live.appendChild(span);
+        if (d && d.error) live.appendChild(document.createTextNode(' · ' + d.error));
+        document.getElementById('rtgHint').textContent = '点「启动实时防护」即可拉起（默认低 5%）';
+        fill.style.width = '0%';
+        meter.classList.remove('over');
+        rtgRenderStats(stats, null);
+        return;
+    }
+
+    const actual = Number(d.actual_pct || 0);
+    const target = Number(d.target_pct || 1);
+    live.textContent = '实际 ' + d.actual_pct + '% / 目标 ' + d.target_pct + '% · 允许 ' +
+        d.budget_cores + ' 核（' + d.cores + ' 核机器）' +
+        (d.uptime_h === undefined || d.uptime_h === null ? '' : ' · 已运行 ' + d.uptime_h + ' 小时');
+    fill.style.width = Math.min(100, actual / Math.max(target, 1) * 100) + '%';
+    meter.classList.toggle('over', actual > target * 1.5);
+    document.getElementById('rtgHint').textContent =
+        '当前档位：' + (d.label || d.level || '--') + '（占系统 CPU 上限 ' + d.target_pct + '%）';
+    rtgRenderStats(stats, d.stats || {});
+}
+
+function rtgRenderStats(grid, s) {
+    grid.innerHTML = '';
+    RTG_STATS.forEach(pair => {
+        const v = s ? s[pair[1]] : null;
+        const cell = document.createElement('div');
+        const k = document.createElement('div');
+        k.className = 'k';
+        k.textContent = pair[0];
+        const val = document.createElement('div');
+        val.className = 'v';
+        val.textContent = (v === undefined || v === null) ? '--' : v;
+        cell.appendChild(k);
+        cell.appendChild(val);
+        grid.appendChild(cell);
+    });
+}
+
+async function rtgTick() {
+    rtgRender(await apiGet('/api/v1/rtguard/status'));
+}
+
+async function rtgSetLevel(level) {
+    if (rtgBusy) return;
+    rtgBusy = true;
+    document.querySelectorAll('.rtg-level').forEach(b => { b.disabled = true; });
+    const r = await apiPost('/api/v1/rtguard/throttle', { level: level });
+    rtgBusy = false;
+    if (!r || !r.success) showToast((r && r.error) || '档位切换失败', true);
+    else showToast('实时防护 CPU 上限已切换为 ' + ((r.status && r.status.label) || level));
+    await rtgTick();
+}
+
+async function rtgStart() {
+    const btn = document.getElementById('rtgStartBtn');
+    if (rtgBusy) return;
+    rtgBusy = true;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> 启动中…';
+    const r = await apiPost('/api/v1/rtguard/start', { level: 'low' });
+    rtgBusy = false;
+    btn.disabled = false;
+    btn.textContent = '启动实时防护';
+    if (!r || !r.success) showToast((r && r.error) || '实时防护启动失败', true);
+    else showToast(r.already_running ? '实时防护已在运行' : '实时防护已启动');
+    await rtgTick();
+}
+
+rtgTick();
+setInterval(function () { if (!document.hidden) rtgTick(); }, 3000);
 
 loadOverview();
 loadHistory();

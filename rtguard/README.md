@@ -66,6 +66,21 @@ python -m rtguard --quarantine-on-detect
 
 主要参数：`--rules` `--dirs` `--workers 1~4` `--max-mb` `--min-literal` `--no-tray` `--no-native` `--verbose`
 
+## 控制 API（界面在主产品里）
+
+本程序**不再自带前端页面**：档位按钮和实时占用显示都在主产品的 `backend\frontend\guard.html`，
+由主产品后端（`backend\app.py` 的 `/api/v1/rtguard/*`）代理到这里的控制 API。
+
+只监听 **127.0.0.1**，端口由 `--control-port`（历史名 `--ui-port`，二者等价）配置，默认 8022：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/status` | 状态快照：`level` `target_pct` `actual_pct` `budget_cores` `cores` `stats` `levels`（顶层摊平，同时保留 `throttle`/`stats` 嵌套） |
+| POST | `/api/throttle` | body `{"level": "low"\|"medium"\|"high"}`，切换档位并返回新状态；非法档位返回 400 |
+| POST | `/api/level` | 同上，历史名，保留兼容 |
+
+不带界面启动：`F:\Python314\pythonw.exe run_rtguard.py --level low --control-port 8022`（工作目录 `rtguard\`）。
+
 ## 已知限制与取舍
 
 * **只匹配双引号字面量。** YARA 的十六进制模式（`$a = { 4D 5A ?? }`）与正则模式（`$a = /re/`）不参与匹配 —— 本模块自带一个最小规则解析器，不做完整语法解析。

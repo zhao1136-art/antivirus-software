@@ -2719,6 +2719,213 @@ async def deep_libpeconv():
         return JSONResponse({"error": str(e)})
 
 
+# ---------- rtguard 联动（实时防护 CPU 节流） ----------
+# rtguard 是独立进程（<仓库>/rtguard），只监听 127.0.0.1 的控制 API：
+#     GET  /api/status    -> 档位 + 实测占用 + 扫描统计
+#     POST /api/throttle  -> {"level": "low"|"medium"|"high"}
+# 这里做三件事：状态代理、档位转发、按需拉起（pythonw.exe，无控制台、脱离本进程会话）。
+# 只用标准库转发，超时短，rtguard 不在跑时降级而不报 500。
+import subprocess as _sp
+import urllib.request as _urlreq
+
+_RTGUARD_HOST = "127.0.0.1"
+_RTGUARD_PORT = 8022
+_RTGUARD_TIMEOUT = 2.5              # 转发超时必须短，否则会把主产品后端拖住
+_RTGUARD_BOOT_TIMEOUT = 30.0        # 首次拉起要加载规则集（实测约 2 s），留足余量
+_RTGUARD_LEVELS = {"low": ("低 5%", 5.0), "medium": ("中 10%", 10.0), "high": ("高 15%", 15.0)}
+_RTGUARD_DEFAULT_LEVEL = "low"
+_RTGUARD_LOCK = _thr.Lock()
+
+
+def _rtguard_fallback_levels():
+    return {k: {"label": v[0], "pct": v[1]} for k, v in _RTGUARD_LEVELS.items()}
+
+
+def _rtguard_root():
+    """rtguard 目录：开发模式 ../rtguard，打包模式 exe 同级 rtguard。"""
+    if getattr(sys, "frozen", False):
+        return os.path.join(os.path.dirname(sys.executable), "rtguard")
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "rtguard")
+
+
+def _rtguard_pythonw():
+    """无控制台的解释器：用 python.exe 起控制台进程，控制台一被拆就静默死。"""
+    for cand in (os.path.join(os.path.dirname(sys.executable), "pythonw.exe"),
+                 r"F:\Python314\pythonw.exe"):
+        if os.path.isfile(cand):
+            return cand
+    return sys.executable
+
+
+def _rtguard_http(method, path, payload=None, timeout=_RTGUARD_TIMEOUT):
+    url = f"http://{_RTGUARD_HOST}:{_RTGUARD_PORT}{path}"
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    req = _urlreq.Request(url, data=data, method=method)
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+    with _urlreq.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _rtguard_unavailable(error="rtguard 未运行"):
+    return {
+        "available": False,
+        "error": error,
+        "level": None,
+        "label": None,
+        "target_pct": None,
+        "actual_pct": None,
+        "cores": None,
+        "budget_cores": None,
+        "levels": _rtguard_fallback_levels(),
+        "stats": {},
+        "alerts": [],
+    }
+
+
+def _rtguard_normalize(raw):
+    """把 rtguard 的快照收敛成前端契约（只搬关键字，不重算档位/占用）。"""
+    raw = raw if isinstance(raw, dict) else {}
+    th = raw.get("throttle")
+    if not isinstance(th, dict):
+        th = raw
+    return {
+        "available": True,
+        "level": th.get("level"),
+        "label": th.get("label"),
+        "target_pct": th.get("target_pct"),
+        "actual_pct": th.get("actual_pct"),
+        "cores": th.get("cores"),
+        "budget_cores": th.get("budget_cores"),
+        "levels": th.get("levels") or _rtguard_fallback_levels(),
+        "stats": raw.get("stats") or {},
+        "uptime_h": raw.get("uptime_h"),
+        "backend": raw.get("backend"),
+        "alerts": raw.get("alerts") or [],
+    }
+
+
+def _rtguard_probe():
+    """在跑返回归一化状态，否则 None（任何异常都按“没在跑”处理）"""
+    try:
+        return _rtguard_normalize(_rtguard_http("GET", "/api/status"))
+    except Exception:
+        return None
+
+
+def _rtguard_spawn(level):
+    """用 pythonw.exe 拉起 rtguard，日志追加到 rtguard\\_run.log"""
+    root = _rtguard_root()
+    entry = os.path.join(root, "run_rtguard.py")
+    if not os.path.isfile(entry):
+        return False, f"rtguard 入口不存在: {entry}"
+    level = level if level in _RTGUARD_LEVELS else _RTGUARD_DEFAULT_LEVEL
+    env = os.environ.copy()
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUNBUFFERED"] = "1"   # 否则子进程 stdout 走块缓冲，日志要等退出才落盘
+    # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+    flags = 0x00000008 | 0x00000200 | 0x08000000
+    try:
+        logf = open(os.path.join(root, "_run.log"), "ab", buffering=0)
+    except Exception:
+        logf = _sp.DEVNULL
+    try:
+        _sp.Popen([_rtguard_pythonw(), entry, "--level", level, "--ui-port", str(_RTGUARD_PORT)],
+                  cwd=root, env=env, stdin=_sp.DEVNULL, stdout=logf, stderr=_sp.STDOUT,
+                  creationflags=flags, close_fds=True)
+    except Exception as exc:
+        return False, f"启动 rtguard 失败: {exc}"
+    finally:
+        try:
+            if logf is not _sp.DEVNULL:
+                logf.close()
+        except Exception:
+            pass
+    return True, ""
+
+
+def _rtguard_ensure_started(level=_RTGUARD_DEFAULT_LEVEL):
+    """确保 rtguard 在跑：已响应就不再拉起；整体加锁，连续调用不会起出第二个实例。"""
+    with _RTGUARD_LOCK:
+        st = _rtguard_probe()
+        if st is not None:
+            return {"started": False, "already_running": True, "status": st}
+        ok, err = _rtguard_spawn(level)
+        if not ok:
+            return {"started": False, "already_running": False, "error": err}
+        deadline = time.time() + _RTGUARD_BOOT_TIMEOUT
+        while time.time() < deadline:
+            time.sleep(0.4)
+            st = _rtguard_probe()
+            if st is not None:
+                return {"started": True, "already_running": False, "status": st}
+    return {"started": True, "already_running": False,
+            "error": f"rtguard 启动超时（{_RTGUARD_BOOT_TIMEOUT:.0f}s 内未监听 {_RTGUARD_PORT}）",
+            "status": _rtguard_unavailable("rtguard 启动超时")}
+
+
+@app.get("/api/v1/rtguard/status")
+async def rtguard_status():
+    """实时防护状态（rtguard 未运行时降级为 available:false，不报 500）"""
+    st = await asyncio.to_thread(_rtguard_probe)
+    if st is None:
+        return _rtguard_unavailable()
+    return st
+
+
+@app.post("/api/v1/rtguard/start")
+async def rtguard_start(data: dict = Body(default={})):
+    """拉起 rtguard（pythonw，脱离本进程会话）。已在跑就直接返回，不重复拉起。"""
+    try:
+        level = str((data or {}).get("level") or _RTGUARD_DEFAULT_LEVEL).strip().lower()
+    except Exception:
+        level = _RTGUARD_DEFAULT_LEVEL
+    if level not in _RTGUARD_LEVELS:
+        level = _RTGUARD_DEFAULT_LEVEL
+    res = await asyncio.to_thread(_rtguard_ensure_started, level)
+    st = res.get("status") or _rtguard_unavailable()
+    if not res.get("started") and not res.get("already_running"):
+        return {"success": False, "available": False,
+                "error": res.get("error") or "rtguard 启动失败", "status": st}
+    return {"success": bool(st.get("available")),
+            "available": bool(st.get("available")),
+            "started": bool(res.get("started")),
+            "already_running": bool(res.get("already_running")),
+            "error": res.get("error") or "",
+            "status": st}
+
+
+@app.post("/api/v1/rtguard/throttle")
+async def rtguard_throttle(data: dict = Body(default={})):
+    """切换实时防护 CPU 档位；rtguard 没跑就先拉起来再切（按钮点了就得有反应）"""
+    try:
+        level = str((data or {}).get("level", "")).strip().lower()
+    except Exception:
+        level = ""
+    if level not in _RTGUARD_LEVELS:
+        return JSONResponse({"success": False, "available": False,
+                             "error": f"非法档位: {level}（只支持 low/medium/high）"}, 400)
+    st = await asyncio.to_thread(_rtguard_probe)
+    if st is None:
+        res = await asyncio.to_thread(_rtguard_ensure_started, level)
+        st = res.get("status") or _rtguard_unavailable()
+        if not st.get("available"):
+            return {"success": False, "available": False,
+                    "error": res.get("error") or "rtguard 未运行", "status": st}
+        return {"success": st.get("level") == level, "available": True,
+                "started": True, "level": st.get("level"), "status": st}
+    try:
+        raw = await asyncio.to_thread(_rtguard_http, "POST", "/api/throttle",
+                                      {"level": level}, 5.0)
+    except Exception as exc:
+        return {"success": False, "available": False, "error": f"rtguard 未响应: {exc}",
+                "status": _rtguard_unavailable(f"rtguard 未响应: {exc}")}
+    st = _rtguard_normalize(raw)
+    return {"success": bool(raw.get("ok", True)), "available": True,
+            "level": st.get("level"), "status": st}
+
+
 # ---------- 根路由 ----------
 
 @app.get("/")

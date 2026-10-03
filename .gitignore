@@ -95,3 +95,4 @@ backend/data/logs/
 backend/engine/data/logs/
 backend/engine/data/sandbox_history.json
 backend/_tmp/
+rtguard/_run.log
