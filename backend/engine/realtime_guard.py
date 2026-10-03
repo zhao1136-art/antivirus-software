@@ -392,6 +392,14 @@ class RealtimeGuard:
                 with self._lock:
                     self._stats["threats_found"] += 1
 
+                # 闸门零：低置信度规则只告警（与扫描路径同一套判据）
+                _first = threats[0] if threats and isinstance(threats[0], dict) else {}
+                if (_first.get("confidence") or "medium").lower() == "low":
+                    with self._lock:
+                        self._stats["suppressed"] = self._stats.get("suppressed", 0) + 1
+                    self._add_event("info", "低置信度规则，仅告警: " + os.path.basename(path))
+                    continue
+
                 # 闸门一：系统目录文件的二次复核（不使用 YARA）。
                 # 复核不出结论时不自动隔离 —— 交给人，宁漏勿滥。
                 op = second_opinion(path) if is_system_path(path) else {"trusted": False}

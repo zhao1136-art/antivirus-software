@@ -80,6 +80,9 @@ class YaraRule:
         self.condition_raw: str = ""
         self.condition_type: str = "any"  # any / all / N / custom
         self.condition_n: int = 1
+        # 规则质量分级（engine.rule_quality），load_rules 末尾统一算出来。
+        # 低置信度规则在处置层被降级为"仅告警"，不再自动隔离。
+        self.quality: dict | None = None
 
     @property
     def total_patterns(self) -> int:
@@ -134,7 +137,46 @@ class YaraScanner:
                         loaded += len(parsed)
                     except Exception:
                         pass
+        self._apply_rule_quality()
         return loaded
+
+    def _apply_rule_quality(self):
+        """给每条规则算置信度（见 engine.rule_quality）。
+
+        背景：2026-10-03 拿 585 个确定合法的系统文件（System32 / SysWOW64 /
+        PowerShell 模块）去扫这套规则集，EXE_in_LNK 命中 88%、Archive_in_LNK
+        命中 84%，AndroRAT_Android_Trojan（**安卓**木马规则）命中了 9 个
+        Windows 系统 DLL。共同特征是字面量极短 —— 1153 个字面量里 51 个
+        不足 5 字节（js / exe / ftp / .7z / vbs），在任何正常文件里都出现。
+
+        这里按字面量长度与数量定档；低置信度规则交给处置层降级为仅告警，
+        不再自动隔离。**宁可漏报，不可滥杀。**
+        """
+        try:
+            from engine.rule_quality import analyze_literals
+        except Exception:
+            return
+        stats = {"high": 0, "medium": 0, "low": 0}
+        for rule in self.rules:
+            vals = [v for (_n, v, _t) in rule.strings if v]
+            rule.quality = analyze_literals(vals, rule.condition_type, rule.condition_n)
+            t = rule.quality["tier"]
+            stats[t] = stats.get(t, 0) + 1
+        self.quality_stats = stats
+        try:
+            import logging
+            logging.getLogger("yutian").info(
+                "规则置信度分级: high=%d medium=%d low=%d",
+                stats.get("high", 0), stats.get("medium", 0), stats.get("low", 0))
+        except Exception:
+            pass
+
+    def rule_confidence(self, rule_name: str) -> str:
+        """按规则名取置信度（处置层用）"""
+        for r in self.rules:
+            if r.name == rule_name:
+                return (r.quality or {}).get("tier", "medium")
+        return "medium"
 
     def _index_rule(self, rule: YaraRule):
         """按文件类型将规则索引到对应的分类中"""
@@ -293,7 +335,10 @@ class YaraScanner:
                     "malware_type": rule.malware_type,
                     "source_file": rule.source_file,
                     "matched_patterns": matched,
-                    "meta": rule.meta
+                    "meta": rule.meta,
+                    # 置信度交给处置层决定"该不该动手"：low 只告警、不隔离
+                    "confidence": (rule.quality or {}).get("tier", "medium"),
+                    "quality_reason": (rule.quality or {}).get("reason", ""),
                 })
         return results
 

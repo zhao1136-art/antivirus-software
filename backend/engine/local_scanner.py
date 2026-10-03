@@ -492,6 +492,10 @@ class LocalScanner:
                         "yara_source": best.get("source_file", ""),
                         "file_size": size
                     },
+                    # 规则质量分级由 yara_scanner 算出；这里必须显式带过去，
+                    # 否则处置层拿到的永远是默认值 —— 闸门零会形同虚设。
+                    "confidence": best.get("confidence", "medium"),
+                    "quality_reason": best.get("quality_reason", ""),
                     "action": "quarantine"
                 })
                 if depth == 0: self._cache_store(sha256_hash, threats)
@@ -627,6 +631,9 @@ class LocalScanner:
                                             "matched_patterns": hit.get("matched_patterns", []),
                                             "extracted_from": dex_name,
                                         },
+                                        # 同上：置信度必须带过去
+                                        "confidence": hit.get("confidence", "medium"),
+                                        "quality_reason": hit.get("quality_reason", ""),
                                         "action": "quarantine",
                                     })
                         except Exception:

@@ -239,6 +239,16 @@ class Scheduler:
                     if threat.get("action") == "quarantine" and threat.get("path"):
                         tpath = threat["path"]
 
+                        # 闸门零：低置信度规则只告警，不进入任何处置流程。
+                        # 实测依据：EXE_in_LNK 的有效鉴别力只有 6 字节，在 400 个
+                        # 合法 System32 文件上命中 400 次（100%）。这类规则不该有
+                        # 搬走用户文件的能力。
+                        if (threat.get("confidence") or "medium").lower() == "low":
+                            threat["action"] = "alert"
+                            threat["suppressed"] = threat.get("quality_reason", "规则鉴别力不足")
+                            decision_queue.note_suppressed()
+                            continue
+
                         # 闸门一：系统文件二次复核（**不使用 YARA**）
                         if is_system_path(tpath):
                             op = second_opinion(tpath)
