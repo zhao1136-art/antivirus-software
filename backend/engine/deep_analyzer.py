@@ -79,6 +79,31 @@ def engines_status() -> dict:
 
 # ===================== 1. capa 行为分析 =====================
 
+def _capa_rules_dir():
+    """定位 capa 规则目录。
+
+    ⚠️ pip 装的 capa wheel **不带 rules/**（规则在独立的 mandiant/capa-rules
+    仓库里），所以规则必须由项目自带。解压后常多一层目录名，两种都认。
+    """
+    base = os.path.join(_ANALYZER_DIR, "capa_rules")
+    for cand in (base,
+                 os.path.join(base, "capa-rules-master"),
+                 os.path.join(base, "capa-rules-9.4.0")):
+        if not os.path.isdir(cand):
+            continue
+        for _root, _dirs, _files in os.walk(cand):
+            if any(f.endswith((".yml", ".yaml")) for f in _files):
+                return cand
+    try:
+        from capa.main import get_default_root
+        d = os.path.join(str(get_default_root()), "rules")
+        if os.path.isdir(d):
+            return d
+    except Exception:
+        pass
+    return None
+
+
 def capa_analyze(file_path: str) -> dict:
     """
     使用 capa 分析 PE 文件的能力（ATT&CK 映射）
@@ -90,12 +115,25 @@ def capa_analyze(file_path: str) -> dict:
         import capa.engine
         import capa.loader
 
-        rules = capa.rules.RuleSet(capa.rules.get_default_rules_path())
-        extractor = capa.loader.get_extractor(file_path, "auto", False, disable_progress=True)
+        from pathlib import Path as _P
+        _rd = _capa_rules_dir()
+        if not _rd:
+            return {"status": "unavailable",
+                    "error": "找不到 capa 规则目录（capa wheel 不带 rules/，"
+                             "需下载 mandiant/capa-rules 放到 engine/capa_rules/）",
+                    "file": file_path}
+        rules = capa.rules.get_rules([_P(_rd)])
+        try:
+            _sig = capa.main.get_signatures()
+        except Exception:
+            _sig = []
+        extractor = capa.loader.get_extractor(
+            _P(file_path), "auto", "auto", "vivisect", _sig, disable_progress=True)
         
-        capabilities, counts = capa.engine.find_capabilities(rules, extractor, disable_progress=True)
+        import capa.capabilities.common as _cc
+        capabilities = _cc.find_capabilities(rules, extractor, disable_progress=True)
         
-        meta = capa.loader.collect_metadata([], file_path, "auto", rules)
+        meta = {}   # collect_metadata 在 capa 9.x 签名已变，这里不再调用
         
         result = {
             "file": file_path,
@@ -104,11 +142,14 @@ def capa_analyze(file_path: str) -> dict:
             "capabilities": {},
         }
         
-        meta["analysis"]["extractor"] = str(meta.get("analysis", {}).get("extractor", ""))
+        # meta 不再使用（capa 9.x 的 collect_metadata 签名已变）
         
-        for name, capa_matches in capabilities.items():
-            rule = rules.get(name)
-            if not rule:
+        # capa 9.x 的 find_capabilities 返回 Capabilities **dataclass**
+        # （字段 matches / feature_counts / library_functions），不是 dict —— 内容在 .matches
+        for name, capa_matches in capabilities.matches.items():
+            try:
+                rule = rules[name]      # capa 9.x 的 RuleSet 只有 __getitem__，没有 .get()
+            except Exception:
                 continue
             ns = rule.meta.get("namespace", "")
             for addr, _ in capa_matches:
