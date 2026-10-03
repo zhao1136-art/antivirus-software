@@ -217,6 +217,24 @@
         .mem-stats { display: flex; gap: 28px; margin-top: 16px; }
         .mem-stat .num { font-family: 'Syne', sans-serif; font-size: 20px; font-weight: 700; color: var(--accent); }
         .mem-stat .label { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+    
+        /* ---------- 移动端汉堡菜单（与其余页面统一，断点 768） ---------- */
+        .nav-toggle {
+            display: none; position: fixed; top: 14px; left: 14px; z-index: 200;
+            width: 42px; height: 42px; border-radius: 12px; cursor: pointer;
+            align-items: center; justify-content: center;
+            background: var(--bg-card, #1b2027); border: 1px solid var(--border, #2c343f);
+            color: var(--text-primary, #e6e9ee); box-shadow: 0 6px 18px rgba(0,0,0,0.3);
+        }
+        .nav-toggle svg { width: 20px; height: 20px; }
+        .nav-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 150; }
+        .nav-overlay.show { display: block; }
+        @media (max-width: 768px) {
+            .nav-toggle { display: flex; }
+            .sidebar { transform: translateX(-100%); transition: transform 0.3s cubic-bezier(0.4,0,0.2,1); }
+            .sidebar.open { transform: translateX(0); box-shadow: 0 0 40px rgba(0,0,0,0.4); }
+            .main { margin-left: 0; max-width: 100%; }
+        }
     </style>
 </head>
 <body>
@@ -752,6 +770,27 @@ async function cancelMemory() {
 
 // 初始化
 loadOverview();
+</script>
+    <button class="nav-toggle" id="navToggle" aria-label="打开导航" aria-expanded="false">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+</button>
+<div class="nav-overlay" id="navOverlay"></div>
+<script>
+// 移动端汉堡菜单切换：按钮展开/收起侧栏，点遮罩或按 Esc 关闭
+(function () {
+    var btn = document.getElementById('navToggle');
+    var overlay = document.getElementById('navOverlay');
+    var sidebar = document.querySelector('.sidebar');
+    if (!btn || !sidebar) return;
+    function setOpen(open) {
+        sidebar.classList.toggle('open', open);
+        if (overlay) overlay.classList.toggle('show', open);
+        btn.setAttribute('aria-expanded', String(open));
+    }
+    btn.addEventListener('click', function () { setOpen(!sidebar.classList.contains('open')); });
+    if (overlay) overlay.addEventListener('click', function () { setOpen(false); });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') setOpen(false); });
+})();
 </script>
     <script src="/static/decision_popup.js"></script>
 </body>
