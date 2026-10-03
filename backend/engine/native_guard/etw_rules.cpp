@@ -31,18 +31,41 @@ extern bool g_etwEverStarted;
 // ========================================================================
 
 // 读取 payload 内某偏移处的 UNICODE_STRING（Length/Buffer 指针）
+//
+// 安全约束（这条曾经导致主进程被访问违例带走）：
+//   Buffer 是 payload 里存着的一个**指针值**，不受本进程控制。ETW 事件里的
+//   UNICODE_STRING 常常来自目标进程（见 KPROC_START_IMAGE_OFF /
+//   KPROC_LOAD_IMAGE_OFF / 模块链等调用点），那个地址在我们进程里是野指针，
+//   直接解引用必然 0xC0000005 —— 实测崩溃在本函数读 buf[i]，
+//   native_guard.dll 偏移 0xa3b1，两次运行同一偏移。
+//   原实现只做了 `if (!buf) return false;`，即只查了 NULL，从未校验指针指向哪里。
+//   而 `strLen > len - off` 那个边界是错的：它假设字符串紧跟在描述符之后位于
+//   payload 内，可字符串实际在 buf 指向的地址，所以那个检查给的是虚假安全感。
+//
+// 现在的策略：只接受「Buffer 落在 payload 自身范围内」这一种情形，
+// 其余一律判为不可用并返回 false，**绝不解引用外部指针**。
+// 代价是拿不到远程进程里的名字（退化为空），但绝不会再崩掉整个进程 ——
+// 对防护软件来说，丢一个名字远好过把自己带走。
 static bool read_unicode_string_at(const BYTE* data, DWORD len, DWORD off,
                                    char* out, DWORD outSize) {
-    out[0] = 0;
-    if (!data || off + 16 > len) return false;
-    USHORT strLen = *(USHORT*)(data + off);       // Length
-    if (strLen == 0 || strLen > len - off) return false;
+    if (outSize) out[0] = 0;
+    if (!data || !outSize) return false;
+    if (off > len || len - off < 16) return false;      // 防 off+16 溢出
+    USHORT strLen = *(USHORT*)(data + off);             // Length
+    if (strLen == 0) return false;
 #ifdef _WIN64
-    const wchar_t* buf = *(const wchar_t**)(data + off + 8);
+    const BYTE* bufRaw = *(const BYTE* const*)(data + off + 8);
 #else
-    const wchar_t* buf = *(const wchar_t**)(data + off + 4);
+    const BYTE* bufRaw = *(const BYTE* const*)(data + off + 4);
 #endif
-    if (!buf) return false;
+    if (!bufRaw) return false;
+
+    // —— 唯一安全的情形：Buffer 指向 payload 内部 ——
+    if (bufRaw < data || bufRaw >= data + len) return false;
+    DWORD pos = (DWORD)(bufRaw - data);
+    if (strLen > len - pos) return false;               // 字符串本身也必须落在 payload 内
+
+    const wchar_t* buf = (const wchar_t*)bufRaw;
     DWORD chars = strLen / 2;
     if (chars >= outSize) chars = outSize - 1;
     DWORD i = 0;

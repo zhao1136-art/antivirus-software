@@ -230,6 +230,8 @@ def main(argv=None):
     ap.add_argument("--quarantine-on-detect", action="store_true",
                     help="检出即隔离（默认关闭：规则集存在误报）")
     ap.add_argument("--no-tray", action="store_true", help="不启动托盘")
+    ap.add_argument("--no-window", action="store_true",
+                    help="不打开桌面窗口（只提供状态页地址）")
     ap.add_argument("--no-native", action="store_true", help="强制使用纯 Python 匹配后端")
     ap.add_argument("--min-literal", type=int, default=6,
                     help="字面量最小长度（默认 6：更短的串没有鉴别力，只会误报）")
@@ -314,11 +316,33 @@ def main(argv=None):
     except Exception:
         pass
 
-    try:
-        while not stop_ev.is_set():
-            stop_ev.wait(1.0)
-    except KeyboardInterrupt:
-        pass
+    def _wait_loop():
+        try:
+            while not stop_ev.is_set():
+                stop_ev.wait(1.0)
+        except KeyboardInterrupt:
+            pass
+
+    # 启动软件就要看得见界面：优先开桌面窗口，退而求其次开浏览器。
+    # 都没有时仍继续后台运行 —— 界面缺失不该让防护停摆。
+    if ui is not None and not args.no_window:
+        try:
+            import webview
+            webview.create_window("御天实时防护", ui.url, width=900, height=740)
+            print("  界面: 已打开桌面窗口（关闭窗口即退出）")
+            webview.start()          # 阻塞直到窗口全部关闭
+            stop_ev.set()
+        except Exception as exc:
+            print("  桌面窗口不可用（%s: %s）" % (type(exc).__name__, exc))
+            try:
+                import webbrowser
+                webbrowser.open(ui.url)
+                print("  界面: 已用默认浏览器打开 %s" % ui.url)
+            except Exception as exc2:
+                print("  界面: 无法自动打开（%s），请手动访问 %s" % (exc2, ui.url))
+            _wait_loop()
+    else:
+        _wait_loop()
 
     print("")
     print("正在停止…")
