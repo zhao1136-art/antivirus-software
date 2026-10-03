@@ -22,6 +22,10 @@ from urllib.parse import urlparse
 from datetime import datetime
 from collections import deque
 
+# URL 启发式关键词与判定逻辑已抽取至独立引擎；
+# 此处导入 PHISH_MARKERS / RISK_KEYWORDS 仅为保持本模块命名空间向后兼容。
+from engine.heuristic_engine import PHISH_MARKERS, RISK_KEYWORDS, get_heuristic_engine
+
 IS_WINDOWS = sys.platform == 'win32'
 
 # ── 数据目录定位（与 adblock / download_guard 保持一致）────────────
@@ -53,17 +57,8 @@ BUILTIN_BLOCKED_DOMAINS = {
 }
 
 # 钓鱼/恶意 URL 启发式关键词（命中即提升风险）
-PHISH_MARKERS = [
-    "verify", "secure", "account", "billing", "lotto", "prize",
-    "airdrop", "vip", "free-", "refund", "bonus", "gift-card",
-    "-confirm-", "-verify-", "web-wallet", "login-update",
-]
-
-# 高风险内容关键词（赌博/色情/诈骗等）
-RISK_KEYWORDS = [
-    "casino", "poker", "baccarat", "lottery", "bingo",
-    "porn", "xxx", "loan-", "credit-fast", "bitcoin-double",
-]
+# PHISH_MARKERS / RISK_KEYWORDS 的定义已迁移至 engine/heuristic_engine.py，
+# 由文件顶部的 import 在此模块内重新导出，外部 `from engine.url_guard import ...` 不受影响。
 
 
 class UrlGuard:
@@ -75,6 +70,7 @@ class UrlGuard:
         self._checked_count = 0
         self._blocked_count = 0
         self._history: deque = deque(maxlen=60)
+        self.heuristic_engine = get_heuristic_engine()  # 独立启发式引擎（逻辑已抽取）
 
         # 阻断域名表（持久化）与白名单
         self._blocked: dict[str, dict] = {}   # host -> {time, reason}
@@ -153,19 +149,8 @@ class UrlGuard:
             return []
 
     def _heuristic(self, url: str, host: str) -> list[str]:
-        """URL/域名启发式风险特征"""
-        flags: list[str] = []
-        low = url.lower()
-        # 特定高风险内容关键词
-        if any(k in low for k in RISK_KEYWORDS):
-            flags.append("命中高风险内容关键词")
-        if any(m in low for m in PHISH_MARKERS):
-            # 钓鱼标识需配合可疑组合才报告，避免过度告警
-            suspicious = (host.count("-") >= 2) or any(t in host for t in
-                        ("secure", "verify", "login", "account", "bonus", "airdrop"))
-            if suspicious:
-                flags.append("疑似钓鱼特征(安全类关键词+连字符域名)")
-        return flags
+        """URL/域名启发式风险特征（委托给独立启发式引擎）"""
+        return self.heuristic_engine.analyze_url(url, host)
 
     # ── 对外主接口 ────────────────────────────────────────────
     def check_url(self, url_or_domain: str) -> dict:
