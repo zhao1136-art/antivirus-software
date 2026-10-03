@@ -14,6 +14,7 @@
 
 所以这里用 tkinter 起一个**置顶的原生窗口**，完全独立于浏览器页面：
 一行一个待决威胁，带倒计时和「立即隔离 / 忽略」两个按钮。
+窗口贴在屏幕**右下角**，与网页弹窗位置一致。
 
 实现要点
 --------
@@ -129,12 +130,18 @@ class DesktopDecisionWindow:
         state = {"rows": {}, "alive": True}
 
         def _place():
-            """窗口贴右上角"""
+            """窗口贴**右下角**，与网页右下角弹窗位置一致。
+
+            底部留 64px 给任务栏 —— 不留的话窗口会被任务栏压住，
+            而「立即隔离 / 忽略」两个按钮正好在那一行。
+            """
             try:
                 win.update_idletasks()
                 sw = win.winfo_screenwidth()
+                sh = win.winfo_screenheight()
                 w = max(win.winfo_reqwidth(), 360)
-                win.geometry("+%d+%d" % (sw - w - 24, 24))
+                h = max(win.winfo_reqheight(), 120)
+                win.geometry("+%d+%d" % (sw - w - 24, sh - h - 64))
             except Exception:
                 pass
 
