@@ -246,12 +246,26 @@ class DecisionQueue:
                       "auto": 0, "suppressed": 0}
 
     def ask(self, path: str, threat: dict) -> PendingDecision:
-        """登记一个待决项（不阻塞）"""
+        """登记一个待决项（不阻塞），并尽力弹一个系统托盘气泡。
+
+        托盘气泡是"用户没在看浏览器"时的兜底：浏览器后台标签页会把
+        setInterval 节流到约每分钟一次，网页里的右下角弹窗可能来不及出现，
+        而 15 秒一到就自动隔离了 —— 那就又变成"用户毫不知情"。
+        通知失败绝不影响判定流程。
+        """
         pd = PendingDecision(path, threat)
         pd.deadline = pd.created_at + self.timeout
         with self._lock:
             self._pending[pd.id] = pd
         self.stats["asked"] += 1
+        try:
+            from engine.tray_icon import notify as _tray_notify
+            _tray_notify(
+                "御天 - 发现威胁，%d 秒后自动隔离" % int(self.timeout),
+                "%s\n%s" % (pd.threat_name, os.path.basename(path)),
+            )
+        except Exception:
+            pass
         return pd
 
     def decide(self, pending_id: str, action: str) -> bool:

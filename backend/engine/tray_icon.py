@@ -7,6 +7,7 @@ import sys
 import ctypes
 import ctypes.wintypes as wt
 import threading
+import time
 
 IS_WINDOWS = sys.platform == 'win32'
 
@@ -21,6 +22,10 @@ NIF_ICON = 0x0002
 NIF_MESSAGE = 0x0001
 NIF_TIP = 0x0004
 NIF_SHOWTIP = 0x0080
+NIM_MODIFY = 1
+NIF_INFO = 0x0010
+NIIF_WARNING = 0x02
+NIIF_INFO = 0x01
 
 # 鼠标消息
 WM_LBUTTONUP = 0x0202
@@ -33,6 +38,37 @@ TPM_RETURNCMD = 0x0100
 
 user32 = None
 shell32 = None
+
+
+# ── 按需的托盘气泡通知（"用户没在看页面"时的兜底通道）──
+_notifier = None
+_notifier_lock = threading.Lock()
+
+
+def notify(title: str, text: str, warning: bool = True) -> bool:
+    """弹一个系统托盘气泡。首次调用会按需拉起一个常驻的隐藏托盘图标。
+
+    浏览器后台标签页会把 setInterval 节流到约每分钟一次，网页里的右下角
+    弹窗在 15 秒决策窗口内可能来不及出现；托盘气泡不受浏览器限制。
+    """
+    global _notifier
+    if not IS_WINDOWS:
+        return False
+    try:
+        with _notifier_lock:
+            if _notifier is None:
+                t = TrayIcon()
+                t.start()
+                for _ in range(60):          # 等窗口创建好，最多约 3 秒
+                    if getattr(t, "_hwnd", None):
+                        break
+                    time.sleep(0.05)
+                _notifier = t
+            return _notifier.notify(title, text, warning)
+    except Exception:
+        return False
+
+
 if IS_WINDOWS:
     user32 = ctypes.WinDLL('user32', use_last_error=True)
     shell32 = ctypes.WinDLL('shell32', use_last_error=True)
@@ -213,6 +249,28 @@ class TrayIcon:
 
         except Exception:
             pass
+
+    def notify(self, title: str, text: str, warning: bool = True) -> bool:
+        """弹一个系统托盘气泡（图标已存在时用 NIM_MODIFY + NIF_INFO）。
+
+        为什么需要它：浏览器后台标签页会把 setInterval 节流到约每分钟一次，
+        网页里的右下角弹窗在 15 秒决策窗口内可能来不及出现；
+        托盘气泡不受浏览器限制，是"用户没在看页面"时的兜底通道。
+        """
+        if not IS_WINDOWS or not getattr(self, "_hwnd", None):
+            return False
+        try:
+            nid = NOTIFYICONDATAW()
+            nid.cbSize = ctypes.sizeof(NOTIFYICONDATAW)
+            nid.hWnd = self._hwnd
+            nid.uID = 1
+            nid.uFlags = NIF_INFO
+            nid.szInfo = (text or "")[:255]
+            nid.szInfoTitle = (title or "")[:63]
+            nid.dwInfoFlags = NIIF_WARNING if warning else NIIF_INFO
+            return bool(shell32.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(nid)))
+        except Exception:
+            return False
 
     def _handle_tray_msg(self, hwnd, wparam, lparam):
         """处理托盘图标的鼠标/菜单事件"""
