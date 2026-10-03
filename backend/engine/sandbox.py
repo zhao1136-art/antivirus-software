@@ -1,19 +1,30 @@
 """
-御天 轻量内嵌沙箱（Windows Job Object）
+御天 内嵌沙箱（Windows Job Object + Low Integrity + 防火墙阻断）
 
 在受限环境中运行可疑文件，监控其行为，自动生成分析报告。
 
 功能：
   1. Windows Job Object 限制（内存 256MB / CPU 10 秒 / 进程数 / 关闭即杀）
   2. UI 限制（禁止读写剪贴板、全局原子、ExitWindows 等）
-  3. ETW 监控行为（简化实现：用 psutil 监控子进程 / 文件操作 / 网络连接）
-  4. 自动生成分析报告（verdict / confidence / behaviors / risk_indicators）
-  5. 历史分析记录持久化到 data/sandbox_history.json
-  6. 支持分析超时控制与强制终止
+  3. 低完整性级别（Low IL, S-1-16-4096）受限令牌启动
+     —— CreateRestrictedToken + SetTokenInformation(TokenIntegrityLevel)
+        + CreateProcessAsUserW / CreateProcessWithTokenW
+     —— 样本默认写不进用户目录 / Program Files / HKLM，也改不了 HKCU Run
+  4. 独立低完整性工作目录 %TEMP%\\yutian_sandbox\\<task_id>\\（ACL 打 Low 标签）
+  5. 出网阻断：netsh advfirewall 按 program + dir=out + action=block 加规则，
+     分析结束在 finally 中删除；规则名带 task id，避免并发分析互删
+  6. 行为监控（简化 ETW：用 psutil 监控子进程 / 文件操作 / 网络连接）
+  7. 自动生成分析报告（verdict / confidence / behaviors / risk_indicators / isolation）
+  8. 历史分析记录持久化到 data/sandbox_history.json
+  9. 支持分析超时控制与强制终止
 
 注意：
   - 仅支持 Windows 平台（依赖 Job Object / ctypes / Windows API）
-  - 非 PE 文件或分析失败时返回 clean 报告，不抛异常
+  - 非 PE 文件、文件缺失或分析失败时返回 verdict="unknown"，
+    不抛异常，也绝不当成 clean（分析不出来不等于安全）
+  - 隔离能力可能降级（无管理员权限时防火墙规则加不上、受限令牌进程
+    创建失败时会退回同等完整性启动）。降级原因一律写入报告的
+    isolation.degraded_reason，不静默跳过
   - psutil 为可选依赖，缺失时行为监控降级
 """
 import os
@@ -43,6 +54,11 @@ JOB_CPU_TIME_LIMIT_SEC = 10                    # CPU 时间上限 (秒)
 JOB_ACTIVE_PROCESS_LIMIT = 1                   # 最大活动进程数
 DEFAULT_ANALYSIS_TIMEOUT = 30                  # 默认分析超时 (秒)
 MAX_HISTORY_RECORDS = 500                      # 历史记录最大条数
+
+# 隔离参数
+SANDBOX_ROOT_DIRNAME = "yutian_sandbox"        # %TEMP% 下的沙箱根目录
+NETWORK_RULE_PREFIX = "caelire_sandbox_block"  # 防火墙规则名前缀（后接 task id）
+NETWORK_RULE_TIMEOUT_SEC = 15                  # netsh 调用超时 (秒)
 
 # ── Windows API 常量 ──
 # Job Object 限制标志
@@ -80,6 +96,45 @@ INFINITE = 0xFFFFFFFF
 PROCESS_QUERY_INFORMATION = 0x0400
 PROCESS_TERMINATE = 0x0001
 STILL_ACTIVE = 259
+
+# ── 令牌 / 完整性级别常量（Low IL 隔离）──
+TOKEN_ASSIGN_PRIMARY = 0x0001
+TOKEN_DUPLICATE = 0x0002
+TOKEN_QUERY = 0x0008
+TOKEN_ADJUST_DEFAULT = 0x0080
+TOKEN_ADJUST_SESSIONID = 0x0100
+TOKEN_ALL_ACCESS = 0x000F01FF
+
+# CreateRestrictedToken 标志
+DISABLE_MAX_PRIVILEGE = 0x00000001
+SANDBOX_INERT = 0x00000002
+LUA_TOKEN = 0x00000004
+
+# 令牌信息类
+TokenIntegrityLevel = 25
+SE_GROUP_INTEGRITY = 0x00000020
+
+# 完整性级别 SID（字符串形式，用 ConvertStringSidToSidW 解析）
+INTEGRITY_SID_LOW = "S-1-16-4096"              # 低完整性
+INTEGRITY_SID_MEDIUM = "S-1-16-8192"           # 中完整性（仅用于比较/说明）
+
+# 进程创建标志补充
+CREATE_UNICODE_ENVIRONMENT = 0x00000400
+LOGON_WITH_PROFILE = 0x00000001
+
+# ── 防火墙常量 ──
+NET_FW_RULE_DIR_IN = 1
+NET_FW_RULE_DIR_OUT = 2
+NET_FW_ACTION_BLOCK = 0
+NET_FW_PROFILE2_ALL = 0x7FFFFFFF
+
+# ── 环境变量块分隔 ──
+_ENV_BLOCK_SEP = "\0"
+
+# ── 隔离状态取值 ──
+ISOLATION_LEVEL_LOW = "low"
+ISOLATION_LEVEL_MEDIUM = "medium"
+ISOLATION_LEVEL_NONE = "none"
 
 
 # ── ctypes 结构体定义 ──
@@ -169,10 +224,26 @@ class PROCESS_INFORMATION(ctypes.Structure):
     ]
 
 
+class SID_AND_ATTRIBUTES(ctypes.Structure):
+    """SID 及其属性（用于令牌完整性级别）"""
+    _fields_ = [
+        ("Sid", ctypes.c_void_p),
+        ("Attributes", wintypes.DWORD),
+    ]
+
+
+class TOKEN_MANDATORY_LABEL(ctypes.Structure):
+    """令牌强制完整性标签（SetTokenInformation / TokenIntegrityLevel 用）"""
+    _fields_ = [
+        ("Label", SID_AND_ATTRIBUTES),
+    ]
+
+
 # ── Windows API 函数原型 ──
 
 if IS_WINDOWS:
     _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
 
     # CreateJobObjectW(lpJobAttributes, lpName) -> HANDLE
     _kernel32.CreateJobObjectW.restype = wintypes.HANDLE
@@ -190,6 +261,19 @@ if IS_WINDOWS:
     _kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
     _kernel32.AssignProcessToJobObject.argtypes = [
         wintypes.HANDLE, wintypes.HANDLE
+    ]
+
+    # IsProcessInJob(ProcessHandle, JobHandle, Result)
+    _kernel32.IsProcessInJob.restype = wintypes.BOOL
+    _kernel32.IsProcessInJob.argtypes = [
+        wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)
+    ]
+
+    # QueryInformationJobObject(hJob, class, buf, len, retlen) -> BOOL
+    _kernel32.QueryInformationJobObject.restype = wintypes.BOOL
+    _kernel32.QueryInformationJobObject.argtypes = [
+        wintypes.HANDLE, wintypes.INT, ctypes.c_void_p, wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD)
     ]
 
     # CreateProcessW(...)
@@ -228,7 +312,76 @@ if IS_WINDOWS:
         wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)
     ]
 
-    # IsDebuggerPresent 风格的简单可用性检查不需要
+    # GetCurrentProcess() -> HANDLE（伪句柄，无需关闭）
+    _kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    _kernel32.GetCurrentProcess.argtypes = []
+
+    # ── 令牌相关（advapi32）──
+
+    # OpenProcessToken(ProcessHandle, DesiredAccess, TokenHandle)
+    _advapi32.OpenProcessToken.restype = wintypes.BOOL
+    _advapi32.OpenProcessToken.argtypes = [
+        wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)
+    ]
+
+    # CreateRestrictedToken(ExistingTokenHandle, Flags, DisableSidCount,
+    #   SidsToDisable, DeletePrivilegeCount, PrivilegesToDelete,
+    #   RestrictedSidCount, SidsToRestrict, NewTokenHandle)
+    _advapi32.CreateRestrictedToken.restype = wintypes.BOOL
+    _advapi32.CreateRestrictedToken.argtypes = [
+        wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+        wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p,
+        ctypes.POINTER(wintypes.HANDLE)
+    ]
+
+    # ConvertStringSidToSidW(StringSid, Sid)
+    # 注意：不要用 CreateWellKnownSid(WinLowLabelSid=69)，本机实测它返回的
+    # 是 S-1-16-16384（中+完整性），必须按字符串解析 S-1-16-4096。
+    _advapi32.ConvertStringSidToSidW.restype = wintypes.BOOL
+    _advapi32.ConvertStringSidToSidW.argtypes = [
+        wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_void_p)
+    ]
+
+    # SetTokenInformation(TokenHandle, TokenInformationClass,
+    #   TokenInformation, TokenInformationLength)
+    _advapi32.SetTokenInformation.restype = wintypes.BOOL
+    _advapi32.SetTokenInformation.argtypes = [
+        wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD
+    ]
+
+    # CreateProcessAsUserW(hToken, lpApplicationName, lpCommandLine,
+    #   lpProcessAttributes, lpThreadAttributes, bInheritHandles,
+    #   dwCreationFlags, lpEnvironment, lpCurrentDirectory,
+    #   lpStartupInfo, lpProcessInformation)
+    _advapi32.CreateProcessAsUserW.restype = wintypes.BOOL
+    _advapi32.CreateProcessAsUserW.argtypes = [
+        wintypes.HANDLE, wintypes.LPCWSTR, wintypes.LPWSTR, ctypes.c_void_p,
+        ctypes.c_void_p, wintypes.BOOL, wintypes.DWORD, ctypes.c_void_p,
+        wintypes.LPCWSTR, ctypes.c_void_p, ctypes.c_void_p
+    ]
+
+    # CreateProcessWithTokenW(hToken, dwLogonFlags, lpApplicationName,
+    #   lpCommandLine, dwCreationFlags, lpEnvironment, lpCurrentDirectory,
+    #   lpStartupInfo, lpProcessInformation)
+    _advapi32.CreateProcessWithTokenW.restype = wintypes.BOOL
+    _advapi32.CreateProcessWithTokenW.argtypes = [
+        wintypes.HANDLE, wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPWSTR,
+        wintypes.DWORD, ctypes.c_void_p, wintypes.LPCWSTR, ctypes.c_void_p,
+        ctypes.c_void_p
+    ]
+
+    # GetTokenInformation(TokenHandle, Class, buf, len, retlen)
+    _advapi32.GetTokenInformation.restype = wintypes.BOOL
+    _advapi32.GetTokenInformation.argtypes = [
+        wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD)
+    ]
+
+    # ConvertSidToStringSidW(Sid, StringSid)  —— 仅用于诊断输出
+    _advapi32.ConvertSidToStringSidW.restype = wintypes.BOOL
+    _advapi32.ConvertSidToStringSidW.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(ctypes.c_wchar_p)
+    ]
 
 
 # ── psutil 可选导入 ──
@@ -289,6 +442,242 @@ def _token_cancelled(cancel) -> bool:
     if hasattr(cancel, "is_set"):
         return bool(cancel.is_set())
     return False
+
+
+# ══════════════════════════════════════════════════════════════
+#  隔离能力（Low IL 受限令牌 / 防火墙出网阻断 / 低完整性工作目录）
+# ══════════════════════════════════════════════════════════════
+
+def _empty_isolation(level: str = ISOLATION_LEVEL_NONE,
+                     reason: str = "") -> dict:
+    """构造隔离状态字典（所有报告都会带上它）"""
+    return {
+        "job_object": False,
+        "network_blocked": False,
+        "integrity_level": level,
+        "degraded_reason": reason,
+        "low_il_workdir": None,
+        "firewall_rule": None,
+        "firewall_rule_removed": None,
+        "created_via": None,
+    }
+
+
+def _run_netsh(args: list[str]) -> tuple[int, str, str]:
+    """执行 netsh 并返回 (returncode, stdout, stderr)
+
+    样本绝对路径可能含非 ASCII / 空格，netsh 的 = 语法接受这种写法，
+    因此这里不做转义，只保证参数以列表形式传递（不经过 shell）。
+    """
+    try:
+        proc = subprocess.run(
+            ["netsh"] + args,
+            capture_output=True,
+            text=True,
+            encoding="mbcs",
+            errors="replace",
+            timeout=NETWORK_RULE_TIMEOUT_SEC,
+        )
+        return proc.returncode, proc.stdout or "", proc.stderr or ""
+    except FileNotFoundError:
+        return -1, "", "netsh.exe not found"
+    except subprocess.TimeoutExpired:
+        return -1, "", f"netsh timeout ({NETWORK_RULE_TIMEOUT_SEC}s)"
+    except Exception as e:
+        return -1, "", f"{type(e).__name__}: {e}"
+
+
+def _network_rule_name(task_id: str) -> str:
+    """生成唯一防火墙规则名（带 task id，避免并发分析互删规则）"""
+    safe = "".join(ch if (ch.isalnum() or ch in "_-") else "_" for ch in str(task_id))
+    return f"{NETWORK_RULE_PREFIX}_{safe}_{os.getpid()}"
+
+
+def _network_block_rule(rule_name: str, program_path: str) -> tuple[bool, str]:
+    """按程序路径阻断出网（dir=out, action=block）
+
+    Returns:
+        (是否生效, 失败原因)；成功时原因为空字符串
+    """
+    if not IS_WINDOWS:
+        return False, "非 Windows 平台"
+    rc, out, err = _run_netsh([
+        "advfirewall", "firewall", "add", "rule",
+        f"name={rule_name}",
+        "dir=out",
+        "action=block",
+        f"program={program_path}",
+        "enable=yes",
+        "profile=any",
+    ])
+    if rc == 0:
+        return True, ""
+    detail = (err.strip() or out.strip() or f"netsh 退出码 {rc}")
+    if rc != 0 and ("denied" in detail.lower() or "拒绝" in detail
+                    or "requires elevation" in detail.lower()
+                    or rc == 5 or rc == 1):
+        detail = f"{detail} (可能缺少管理员权限/被安全软件拦截)"
+    return False, detail[:400]
+
+
+def _network_unblock_rule(rule_name: str) -> tuple[bool, str]:
+    """删除出网阻断规则（必须在 finally 中调用）
+
+    Returns:
+        (是否已删除或本就不存在, 失败原因)
+    """
+    if not IS_WINDOWS:
+        return True, ""
+    rc, out, err = _run_netsh([
+        "advfirewall", "firewall", "delete", "rule", f"name={rule_name}"
+    ])
+    if rc == 0:
+        return True, ""
+    detail = (err.strip() or out.strip() or f"netsh 退出码 {rc}")
+    # 规则本来就不存在（添加就失败的情况）不算删除失败
+    if "no rules match" in detail.lower() or "没有与指定条件匹配" in detail:
+        return True, ""
+    return False, detail[:400]
+
+
+def _network_rule_exists(rule_name: str) -> bool:
+    """检查防火墙规则是否还存在（仅用于自检 / 报告）"""
+    if not IS_WINDOWS:
+        return False
+    rc, out, err = _run_netsh([
+        "advfirewall", "firewall", "show", "rule", f"name={rule_name}"
+    ])
+    if rc != 0:
+        return False
+    return rule_name in out
+
+
+def _create_low_il_token() -> tuple[int, str]:
+    """创建低完整性级别（Low IL）受限令牌
+
+    步骤：OpenProcessToken -> CreateRestrictedToken(DISABLE_MAX_PRIVILEGE)
+          -> ConvertStringSidToSidW("S-1-16-4096")
+          -> SetTokenInformation(TokenIntegrityLevel)
+
+    Returns:
+        (令牌句柄, 失败原因)；失败时句柄为 0
+    """
+    if not IS_WINDOWS:
+        return 0, "非 Windows 平台"
+
+    base_token = wintypes.HANDLE()
+    if not _advapi32.OpenProcessToken(
+            _kernel32.GetCurrentProcess(), TOKEN_ALL_ACCESS,
+            ctypes.byref(base_token)):
+        return 0, f"OpenProcessToken 失败 (错误码 {ctypes.get_last_error()})"
+
+    restricted = wintypes.HANDLE()
+    try:
+        if not _advapi32.CreateRestrictedToken(
+                base_token, DISABLE_MAX_PRIVILEGE,
+                0, None, 0, None, 0, None, ctypes.byref(restricted)):
+            return 0, f"CreateRestrictedToken 失败 (错误码 {ctypes.get_last_error()})"
+
+        sid_low = ctypes.c_void_p()
+        if not _advapi32.ConvertStringSidToSidW(INTEGRITY_SID_LOW,
+                                                ctypes.byref(sid_low)):
+            _kernel32.CloseHandle(restricted)
+            return 0, (f"ConvertStringSidToSidW({INTEGRITY_SID_LOW}) 失败 "
+                       f"(错误码 {ctypes.get_last_error()})")
+
+        label = TOKEN_MANDATORY_LABEL()
+        label.Label.Sid = sid_low.value
+        label.Label.Attributes = SE_GROUP_INTEGRITY
+        if not _advapi32.SetTokenInformation(
+                restricted, TokenIntegrityLevel, ctypes.byref(label),
+                ctypes.sizeof(label)):
+            err = ctypes.get_last_error()
+            _kernel32.CloseHandle(restricted)
+            return 0, (f"SetTokenInformation(TokenIntegrityLevel={INTEGRITY_SID_LOW}) "
+                       f"失败 (错误码 {err})")
+
+        return int(restricted.value or 0), ""
+    finally:
+        _kernel32.CloseHandle(base_token)
+
+
+def _prepare_low_il_workdir(task_id: str) -> tuple[str, str]:
+    """创建独立低完整性工作目录并用 icacls 打 Low 标签
+
+    低完整性进程只能在该目录（以及其它显式标记 Low 的目录）里写文件，
+    这正是我们要的效果。
+
+    Returns:
+        (目录路径, 失败原因)；失败原因为空表示 ACL 打标成功
+    """
+    work_dir = os.path.join(
+        os.environ.get("TEMP") or os.path.expanduser("~"),
+        SANDBOX_ROOT_DIRNAME, str(task_id)
+    )
+    try:
+        os.makedirs(work_dir, exist_ok=True)
+    except Exception as e:
+        return work_dir, f"创建沙箱工作目录失败: {type(e).__name__}: {e}"
+
+    if not IS_WINDOWS:
+        return work_dir, "非 Windows 平台"
+
+    try:
+        proc = subprocess.run(
+            ["icacls", work_dir, "/setintegritylevel", "(OI)(CI)Low"],
+            capture_output=True, text=True, encoding="mbcs", errors="replace",
+            timeout=NETWORK_RULE_TIMEOUT_SEC,
+        )
+        if proc.returncode == 0:
+            return work_dir, ""
+        detail = (proc.stderr or proc.stdout or "").strip() or f"icacls 退出码 {proc.returncode}"
+        return work_dir, f"设置低完整性 ACL 失败: {detail[:300]}"
+    except Exception as e:
+        return work_dir, f"设置低完整性 ACL 异常: {type(e).__name__}: {e}"
+
+
+def _build_sandbox_environment(work_dir: str | None) -> ctypes.Array:
+    """构造沙箱子进程环境块
+
+    Windows 要求环境块按变量名（不区分大小写）排序、各项以 NUL 分隔、
+    整体以双 NUL 结尾；调用方还必须带上 CREATE_UNICODE_ENVIRONMENT，
+    否则 CreateProcess* 会直接返回 ERROR_INVALID_PARAMETER(87)。
+
+    TEMP/TMP 指向沙箱工作目录，避免样本被低完整性 ACL 卡住临时文件写入。
+    """
+    env = dict(os.environ)
+    if work_dir:
+        env["TEMP"] = work_dir
+        env["TMP"] = work_dir
+        env["YUTIAN_SANDBOX_WORKDIR"] = work_dir
+    block = "".join(
+        f"{key}={env[key]}{_ENV_BLOCK_SEP}"
+        for key in sorted(env, key=lambda k: k.upper()) if key
+    ) + _ENV_BLOCK_SEP
+    return ctypes.create_unicode_buffer(block)
+
+
+def _cleanup_sandbox_workdir(work_dir: str) -> str:
+    """尽力清理沙箱工作目录（不删除未知内容之外的东西）
+
+    Returns:
+        空字符串表示已处理干净，否则为失败原因
+    """
+    if not work_dir or not os.path.isdir(work_dir):
+        return ""
+    import shutil
+    try:
+        shutil.rmtree(work_dir, ignore_errors=False)
+        return ""
+    except Exception as e:
+        first = f"{type(e).__name__}: {e}"
+        try:
+            shutil.rmtree(work_dir, ignore_errors=True)
+            if not os.path.isdir(work_dir):
+                return ""
+        except Exception:
+            pass
+        return first[:300]
 
 
 # ══════════════════════════════════════════════════════════════
@@ -395,7 +784,6 @@ class LightweightSandbox:
                 self._log("error", f"SetInformationJobObject(Extended) 失败: {ctypes.get_last_error()}")
                 _kernel32.CloseHandle(h_job)
                 return 0
-
             # 3. 配置 UI 限制（禁止剪贴板、全局原子、ExitWindows、系统参数）
             ui_restrictions = JOBOBJECT_BASIC_UI_RESTRICTIONS()
             ui_restrictions.UIRestrictionsClass = (
@@ -431,15 +819,19 @@ class LightweightSandbox:
         """在沙箱中分析文件
 
         流程：
-          1. 创建 Job Object
-          2. 设置限制（内存/CPU/UI）
-          3. 创建受限进程 (CREATE_SUSPENDED)
-          4. 将进程分配到 Job
-          5. 恢复进程执行
-          6. 等待 timeout 秒（分片轮询，可被 cancel 令牌提前打断）
-          7. 收集行为日志
-          8. 终止 Job（杀死所有子进程）
-          9. 生成报告
+          1. 建独立低完整性工作目录（icacls 打 Low 标签）
+          2. 加防火墙出网阻断规则（按样本绝对路径，规则名带 task id）
+          3. 创建 Job Object（内存/CPU/进程数/关闭即杀/UI 限制）
+          4. 创建 Low IL 受限令牌（CreateRestrictedToken + TokenIntegrityLevel）
+          5. 用该令牌创建挂起进程（CreateProcessAsUserW，失败则
+             CreateProcessWithTokenW，再失败降级为同等完整性启动）
+          6. 将进程分配到 Job
+          7. 恢复进程执行
+          8. 等待 timeout 秒（分片轮询，可被 cancel 令牌提前打断）
+          9. 收集行为日志
+         10. 终止 Job（杀死所有子进程）
+         11. finally：删除防火墙规则 + 清理工作目录
+         12. 生成报告（含 isolation 字段，降级原因如实写入）
 
         Args:
             file_path: 要分析的可执行文件路径
@@ -448,29 +840,34 @@ class LightweightSandbox:
                     终止沙箱进程并返回 cancelled=True 的部分报告
 
         Returns:
-            分析报告字典，包含 verdict / confidence / behaviors / risk_indicators
+            分析报告字典，包含 verdict / confidence / behaviors /
+            risk_indicators / isolation；分析不了时 verdict 为 "unknown"
         """
         file_path = os.path.abspath(file_path)
         report_id = f"sandbox_{int(time.time() * 1000)}"
 
-        # 非 Windows 平台直接返回 clean
+        # 非 Windows 平台：无法分析，返回 unknown（不是 clean）
         if not IS_WINDOWS:
-            return self._make_clean_report(
+            with self._stats_lock:
+                self._stats["analysis_failed"] += 1
+            return self._make_unknown_report(
                 file_path, report_id, "非 Windows 平台，无法运行沙箱"
             )
 
-        # 文件不存在
+        # 文件不存在：无法分析，返回 unknown（不是 clean）
         if not os.path.isfile(file_path):
-            return self._make_clean_report(
+            with self._stats_lock:
+                self._stats["analysis_failed"] += 1
+            return self._make_unknown_report(
                 file_path, report_id, "文件不存在"
             )
 
-        # 非 PE 文件返回 clean 报告
+        # 非 PE 文件：无法在沙箱中执行，返回 unknown（不是 clean）
         if not _is_pe_file(file_path):
             with self._stats_lock:
-                self._stats["clean_results"] += 1
-            return self._make_clean_report(
-                file_path, report_id, "非 PE 文件，跳过沙箱分析"
+                self._stats["analysis_failed"] += 1
+            return self._make_unknown_report(
+                file_path, report_id, "非 PE 文件，无法沙箱执行"
             )
 
         self._logger = _get_logger()
@@ -488,72 +885,161 @@ class LightweightSandbox:
         self._log("info", f"开始沙箱分析: {file_path} (超时 {timeout}s)")
 
         behaviors: list[dict] = []
+        isolation = _empty_isolation()
+        degraded: list[str] = []
         h_job = 0
         h_process = 0
         h_thread = 0
         pid = 0
         result = WAIT_TIMEOUT
         was_cancelled = False
+        low_box_dir = ""
+        firewall_rule = ""
+        firewall_added = False
+        cleanup_error = ""
 
         try:
-            # 1. 创建并配置 Job Object
+            # 1. 独立低完整性工作目录
+            low_box_dir, acl_err = _prepare_low_il_workdir(report_id)
+            isolation["low_il_workdir"] = low_box_dir
+            if acl_err:
+                degraded.append(f"低完整性工作目录 ACL 未生效: {acl_err}")
+
+            # 2. 出网阻断（按样本路径，规则名唯一）
+            firewall_rule = _network_rule_name(report_id)
+            isolation["firewall_rule"] = firewall_rule
+            blocked, block_err = _network_block_rule(firewall_rule, file_path)
+            firewall_added = blocked
+            isolation["network_blocked"] = blocked
+            if blocked:
+                self._log("info", f"网络隔离已生效（防火墙规则 {firewall_rule}）")
+            else:
+                degraded.append(f"网络隔离未生效: {block_err}")
+                self._log("error", f"网络隔离未生效: {block_err}")
+
+            # 3. 创建并配置 Job Object
             h_job = self._setup_job()
             if not h_job:
+                isolation["degraded_reason"] = "; ".join(degraded)
                 with self._stats_lock:
                     self._stats["analysis_failed"] += 1
-                return self._make_clean_report(
-                    file_path, report_id, "创建 Job Object 失败"
+                return self._make_unknown_report(
+                    file_path, report_id, "创建 Job Object 失败",
+                    isolation=isolation
                 )
+            isolation["job_object"] = True
 
-            # 2. 创建挂起的进程
+            # 4. 创建 Low IL 受限令牌
+            h_token, token_err = _create_low_il_token()
+            if token_err:
+                degraded.append(f"低完整性令牌不可用: {token_err}；以当前完整性运行")
+
             startup_info = STARTUPINFO()
             startup_info.cb = ctypes.sizeof(STARTUPINFO)
             startup_info.dwFlags = 0x00000001  # STARTF_USESHOWWINDOW
             startup_info.wShowWindow = 0  # SW_HIDE
             proc_info = PROCESS_INFORMATION()
 
-            creation_flags = (
-                CREATE_SUSPENDED
-                | CREATE_NO_WINDOW
-                | CREATE_BREAKAWAY_FROM_JOB
-            )
+            creation_flags = (CREATE_SUSPENDED | CREATE_NO_WINDOW
+                              | CREATE_UNICODE_ENVIRONMENT)
+            # 注意：这里刻意不使用 CREATE_BREAKAWAY_FROM_JOB。
+            # 本进程自身通常已位于某个 Job（例如启动器给的 Job），而“允许
+            # 脱离”的权限取决于父 Job 的 JOB_OBJECT_LIMIT_BREAKAWAY_OK；
+            # 一旦父 Job 未开放，CreateProcess* 会直接失败（错误码 5）。
+            # 实测：不请求脱离时子进程仍能通过 AssignProcessToJobObject
+            # 加入本沙箱 Job（嵌套 Job），资源限制照常生效。
 
-            # CreateProcessW 需要可变字符串作为命令行
+            # CreateProcess* 需要可变字符串作为命令行
             cmd_line = ctypes.create_unicode_buffer(f'"{file_path}"')
+            env_block = _build_sandbox_environment(low_box_dir or None) \
+                if low_box_dir else None
+            env_ptr = ctypes.cast(env_block, ctypes.c_void_p) if env_block else None
 
-            success = _kernel32.CreateProcessW(
-                None,                       # lpApplicationName
-                cmd_line,                   # lpCommandLine (可变)
-                None, None,                 # 进程/线程属性
-                False,                      # 不继承句柄
-                creation_flags,
-                None,                       # 环境块
-                None,                       # 当前目录
-                ctypes.byref(startup_info),
-                ctypes.byref(proc_info)
-            )
+            success = False
+            created_via = ""
+
+            if h_token:
+                # 5a. 正统路径：用 Low IL 令牌创建挂起进程
+                success = _advapi32.CreateProcessAsUserW(
+                    h_token, None, cmd_line, None, None, False,
+                    creation_flags, env_ptr, low_box_dir or None,
+                    ctypes.byref(startup_info), ctypes.byref(proc_info)
+                )
+                if success:
+                    created_via = "CreateProcessAsUserW(low_il)"
+                else:
+                    err_a = ctypes.get_last_error()
+                    # 5b. 退路：CreateProcessWithTokenW（不支持 CREATE_SUSPENDED）
+                    ok_b = _advapi32.CreateProcessWithTokenW(
+                        h_token, 0, None, cmd_line,
+                        creation_flags & ~CREATE_SUSPENDED,
+                        env_ptr, low_box_dir or None,
+                        ctypes.byref(startup_info), ctypes.byref(proc_info)
+                    )
+                    if ok_b:
+                        success = True
+                        created_via = "CreateProcessWithTokenW(low_il,no_suspend)"
+                        proc_info.hThread = 0
+                        degraded.append(
+                            "CreateProcessAsUser 失败 "
+                            f"(错误码 {err_a})，改用 CreateProcessWithTokenW："
+                            "样本未挂起即运行，Job 分配前存在极短窗口"
+                        )
+                        self._log("warning",
+                                  f"CreateProcessAsUser 失败 {err_a}，已退到 "
+                                  "CreateProcessWithTokenW")
+                    else:
+                        err_b = ctypes.get_last_error()
+                        degraded.append(
+                            f"低完整性进程创建失败 (CreateProcessAsUser={err_a}, "
+                            f"CreateProcessWithTokenW={err_b})"
+                        )
+                _kernel32.CloseHandle(h_token)
+
+            if not success:
+                # 5c. 降级：同等完整性启动（隔离等级不足，如实记录）
+                success = _kernel32.CreateProcessW(
+                    None, cmd_line, None, None, False, creation_flags,
+                    env_ptr, low_box_dir or None,
+                    ctypes.byref(startup_info), ctypes.byref(proc_info)
+                )
+                if success:
+                    created_via = "CreateProcessW(no_low_il)"
+                    degraded.append("已降级为当前完整性启动，文件系统/注册表隔离不足")
+                    self._log("error", "低完整性隔离不可用，降级为同等完整性启动")
+
+            isolation["created_via"] = created_via
 
             if not success:
                 err = ctypes.get_last_error()
-                self._log("error", f"CreateProcess 失败: {err}")
-                _kernel32.CloseHandle(h_job)
+                self._log("error", f"创建进程失败: {err}")
+                isolation["degraded_reason"] = "; ".join(degraded)
                 with self._stats_lock:
                     self._stats["analysis_failed"] += 1
-                return self._make_clean_report(
-                    file_path, report_id, f"创建进程失败 (错误码 {err})"
+                return self._make_unknown_report(
+                    file_path, report_id, f"创建进程失败 (错误码 {err})",
+                    isolation=isolation
                 )
+
+            # 记录实际隔离等级
+            if created_via == "CreateProcessW(no_low_il)":
+                isolation["integrity_level"] = ISOLATION_LEVEL_NONE
+            else:
+                isolation["integrity_level"] = ISOLATION_LEVEL_LOW
 
             h_process = proc_info.hProcess
             h_thread = proc_info.hThread
             pid = proc_info.dwProcessId
 
-            # 3. 将进程分配到 Job
+            # 6. 将进程分配到 Job
             success = _kernel32.AssignProcessToJobObject(h_job, h_process)
             if not success:
-                self._log("warning", f"AssignProcessToJobObject 失败: {ctypes.get_last_error()}")
+                err = ctypes.get_last_error()
+                degraded.append(f"AssignProcessToJobObject 失败 (错误码 {err})")
+                self._log("warning", f"AssignProcessToJobObject 失败: {err}")
                 # 继续执行，仍可监控
 
-            # 4. 启动行为监控线程（独立线程）
+            # 7. 启动行为监控线程（独立线程）
             monitor_stop = threading.Event()
             monitor_thread = threading.Thread(
                 target=self._monitor_process,
@@ -594,6 +1080,26 @@ class LightweightSandbox:
             exit_code = wintypes.DWORD()
             _kernel32.GetExitCodeProcess(h_process, ctypes.byref(exit_code))
 
+            # 记录"进程确实跑起来了"这条证据，避免样本静默退出时
+            # 报告里空无一物（无行为 != 安全）
+            if was_cancelled:
+                pass
+            elif result == WAIT_OBJECT_0:
+                behaviors.append({
+                    "type": "process_exit",
+                    "detail": (f"沙箱进程正常退出，退出码 {exit_code.value}"
+                               f"（低完整性 {isolation.get('integrity_level')} 隔离下运行）"),
+                    "severity": "low",
+                    "timestamp": time.time(),
+                })
+            elif result == WAIT_TIMEOUT:
+                behaviors.append({
+                    "type": "process_exit",
+                    "detail": "进程被超时强制终止，退出码不可信",
+                    "severity": "low",
+                    "timestamp": time.time(),
+                })
+
             if was_cancelled:
                 behaviors.append({
                     "type": "cancelled",
@@ -629,11 +1135,38 @@ class LightweightSandbox:
             if h_thread:
                 _kernel32.CloseHandle(h_thread)
 
+            # 10. 删除网络阻断规则（必须在 finally 中，绝不留在系统上）
+            if firewall_rule:
+                removed, unblock_err = _network_unblock_rule(firewall_rule)
+                isolation["firewall_rule_removed"] = removed
+                if not removed:
+                    # 规则没删掉 = 系统上仍留着一条阻断规则，必须显式告警
+                    isolation["network_blocked"] = False
+                    cleanup_error = f"防火墙规则 {firewall_rule} 删除失败: {unblock_err}"
+                else:
+                    # 复核：确认系统上确实查不到这条规则
+                    if _network_rule_exists(firewall_rule):
+                        isolation["firewall_rule_removed"] = False
+                        isolation["network_blocked"] = False
+                        cleanup_error = f"防火墙规则 {firewall_rule} 删除后仍能查到"
+                if cleanup_error:
+                    degraded.append(cleanup_error)
+                    self._log("error", cleanup_error)
+                else:
+                    self._log("info", f"防火墙规则已删除: {firewall_rule}")
+
+            # 11. 清理沙箱工作目录
+            if low_box_dir:
+                wd_err = _cleanup_sandbox_workdir(low_box_dir)
+                if wd_err:
+                    degraded.append(f"沙箱工作目录清理失败: {wd_err}")
+
+        isolation["degraded_reason"] = "; ".join(degraded)
         elapsed = round(time.time() - start_time, 2)
 
-        # 10. 生成报告
+        # 12. 生成报告
         report = self._generate_report(
-            file_path, behaviors, elapsed, report_id
+            file_path, behaviors, elapsed, report_id, isolation=isolation
         )
 
         # 用户取消：标记报告并跳过统计/历史写入（避免污染分析历史）
@@ -760,19 +1293,24 @@ class LightweightSandbox:
     # ── 报告生成 ──
 
     def _generate_report(self, file_path: str, behaviors: list[dict],
-                         elapsed: float, report_id: str) -> dict:
+                         elapsed: float, report_id: str,
+                         isolation: dict | None = None) -> dict:
         """生成分析报告
 
         根据收集到的行为判定 verdict 与 confidence。
+        进程被成功启动但没有任何可观测行为时返回 unknown（而不是 clean）：
+        "没看到行为"不等于"安全"。
 
         Args:
             file_path: 分析的文件路径
             behaviors: 行为列表
             elapsed: 实际耗时（秒）
             report_id: 报告 ID
+            isolation: 隔离状态字典（写入报告的 isolation 字段）
 
         Returns:
-            报告字典，包含 verdict / confidence / behaviors / risk_indicators
+            报告字典，包含 verdict / confidence / behaviors /
+            risk_indicators / isolation
         """
         # 计算风险评分
         risk_score = 0
@@ -804,8 +1342,9 @@ class LightweightSandbox:
             risk_indicators.append("大量文件访问")
             risk_score += 15
         if behavior_counts.get("timeout", 0) > 0:
-            risk_indicators.append("运行超时未退出")
-            risk_score += 10
+            # 超时被杀 = 行为不可知，不能因为"只看到超时"就判 clean
+            risk_indicators.append("运行超时未退出（行为不可知）")
+            risk_score += 20
         if behavior_counts.get("error", 0) > 0:
             risk_indicators.append("运行异常")
 
@@ -813,12 +1352,21 @@ class LightweightSandbox:
         risk_score = min(risk_score, 100)
 
         # 判定 verdict
-        if risk_score >= 70:
+        if behavior_counts.get("error", 0) > 0:
+            # 分析过程本身出错：不下安全结论
+            verdict = "unknown"
+            confidence = 0.0
+        elif risk_score >= 70:
             verdict = "malicious"
             confidence = round(risk_score / 100, 2)
         elif risk_score >= 30:
             verdict = "suspicious"
             confidence = round(risk_score / 100, 2)
+        elif not behaviors:
+            # 进程跑完却没有采集到任何行为：无法判定，不能算 clean
+            verdict = "unknown"
+            confidence = 0.0
+            risk_indicators.append("未观测到任何行为，无法判定")
         else:
             verdict = "clean"
             confidence = round(1 - risk_score / 100, 2)
@@ -834,35 +1382,42 @@ class LightweightSandbox:
             "behaviors": behaviors,
             "risk_indicators": risk_indicators,
             "behavior_counts": behavior_counts,
+            "isolation": isolation if isolation is not None else _empty_isolation(),
             "elapsed_sec": elapsed,
             "timestamp": time.time(),
             "datetime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
         return report
 
-    def _make_clean_report(self, file_path: str, report_id: str,
-                           reason: str) -> dict:
-        """生成 clean 报告（用于非 PE 文件或分析失败的情况）
+    def _make_unknown_report(self, file_path: str, report_id: str,
+                             reason: str, isolation: dict | None = None) -> dict:
+        """生成 unknown 报告（非 PE 文件 / 文件缺失 / 分析失败）
+
+        这里绝不能返回 clean：分析不出来不等于安全。
 
         Args:
             file_path: 文件路径
             report_id: 报告 ID
-            reason: 跳过原因
+            reason: 无法分析的原因
+            isolation: 隔离状态字典
 
         Returns:
-            clean 报告字典
+            verdict="unknown" 的报告字典
         """
         return {
             "report_id": report_id,
             "file_path": file_path,
             "file_name": os.path.basename(file_path),
             "file_size": os.path.getsize(file_path) if os.path.isfile(file_path) else 0,
-            "verdict": "clean",
-            "confidence": 1.0,
+            "verdict": "unknown",
+            "confidence": 0.0,
             "risk_score": 0,
             "behaviors": [],
             "risk_indicators": [],
             "behavior_counts": {},
+            "isolation": isolation if isolation is not None else _empty_isolation(
+                reason="未进入沙箱执行，无隔离"
+            ),
             "elapsed_sec": 0,
             "timestamp": time.time(),
             "datetime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -877,13 +1432,15 @@ class LightweightSandbox:
         Args:
             report: 分析报告
         """
-        verdict = report.get("verdict", "clean")
+        verdict = report.get("verdict", "unknown")
         with self._stats_lock:
             self._stats["total_analyzed"] += 1
             if verdict == "malicious":
                 self._stats["malicious_detected"] += 1
             elif verdict == "suspicious":
                 self._stats["suspicious_detected"] += 1
+            elif verdict == "unknown":
+                self._stats["analysis_failed"] += 1
             else:
                 self._stats["clean_results"] += 1
 
@@ -897,6 +1454,7 @@ class LightweightSandbox:
             "risk_score": report.get("risk_score"),
             "risk_indicators": report.get("risk_indicators", []),
             "behavior_counts": report.get("behavior_counts", {}),
+            "isolation": report.get("isolation", _empty_isolation()),
             "elapsed_sec": report.get("elapsed_sec"),
             "timestamp": report.get("timestamp"),
             "datetime": report.get("datetime"),
@@ -964,6 +1522,15 @@ class LightweightSandbox:
                 "active_process_limit": JOB_ACTIVE_PROCESS_LIMIT,
                 "default_timeout": DEFAULT_ANALYSIS_TIMEOUT,
                 "max_history_records": MAX_HISTORY_RECORDS,
+            },
+            "isolation_capabilities": {
+                "job_object": True,
+                "network_block": IS_WINDOWS,
+                "low_integrity": IS_WINDOWS,
+                "integrity_sid": INTEGRITY_SID_LOW,
+                "sandbox_root": os.path.join(
+                    os.environ.get("TEMP") or "", SANDBOX_ROOT_DIRNAME
+                ),
             },
         }
 

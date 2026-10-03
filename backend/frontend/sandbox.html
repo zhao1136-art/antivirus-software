@@ -84,18 +84,29 @@
         /* 判定结果大标签 */
         .verdict{display:flex;align-items:center;gap:20px;padding:20px;border-radius:var(--radius-md);margin-bottom:20px}
         .verdict.clean{background:var(--accent-dim);border:1px solid rgba(0,188,212,0.3)}
+        .verdict.unknown{background:rgba(148,163,184,0.12);border:1px solid rgba(148,163,184,0.35)}
         .verdict.suspicious{background:rgba(255,204,0,0.1);border:1px solid rgba(255,204,0,0.3)}
         .verdict.malicious{background:var(--danger-dim);border:1px solid rgba(255,77,109,0.3)}
         .verdict-icon{width:56px;height:56px;border-radius:50%;display:grid;place-items:center;flex-shrink:0}
         .verdict.clean .verdict-icon{background:var(--accent);color:#000}
+        .verdict.unknown .verdict-icon{background:#94a3b8;color:#000}
         .verdict.suspicious .verdict-icon{background:var(--warning);color:#000}
         .verdict.malicious .verdict-icon{background:var(--danger);color:#fff}
         .verdict-icon svg{width:30px;height:30px}
         .verdict-label{font-family:'Syne',sans-serif;font-size:22px;font-weight:700}
         .verdict.clean .verdict-label{color:var(--accent)}
+        .verdict.unknown .verdict-label{color:#94a3b8}
         .verdict.suspicious .verdict-label{color:var(--warning)}
         .verdict.malicious .verdict-label{color:var(--danger)}
         .verdict-score{font-size:13px;color:var(--text-secondary);margin-top:4px}
+        .isolation-panel{margin-top:14px;padding:14px 16px;border-radius:var(--radius-md);background:rgba(148,163,184,0.08);border:1px solid rgba(148,163,184,0.25)}
+        .isolation-panel.degraded{background:rgba(255,77,109,0.08);border-color:rgba(255,77,109,0.35)}
+        .isolation-panel .iso-title{font-family:'Syne',sans-serif;font-size:12px;letter-spacing:0.5px;text-transform:uppercase;color:var(--text-secondary);margin-bottom:10px}
+        .isolation-panel .iso-grid{display:grid;grid-template-columns:auto 1fr;gap:6px 18px;font-size:12.5px}
+        .isolation-panel .iso-grid span:nth-child(odd){color:var(--text-secondary)}
+        .isolation-panel .iso-grid .ok{color:var(--accent)}
+        .isolation-panel .iso-grid .bad{color:var(--danger)}
+        .isolation-panel .iso-degraded{margin-top:10px;font-size:12.5px;color:var(--danger)}
         .indicator-list{list-style:none;padding:0}
         .indicator-list li{padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;margin-bottom:6px;font-size:13px;display:flex;align-items:center;gap:10px}
         .indicator-list li .dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
@@ -211,6 +222,7 @@
         <!-- 分析报告 -->
         <div class="card report-section" id="reportSection">
             <h3 class="card-title"><svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" width="16" height="16" style="margin-right:8px;vertical-align:-2px"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>分析报告</h3>
+            <div id="isolationBox" class="isolation-panel" style="display:none"></div>
             <div id="verdictBox"></div>
             <div class="sb-grid" style="margin-top:20px">
                 <div>
@@ -430,16 +442,46 @@
         const verdict = (report.verdict || report.classification || 'clean').toLowerCase();
         const score = report.score != null ? report.score : (report.risk_score != null ? report.risk_score : 0);
         const verdictBox = document.getElementById('verdictBox');
-        const cls = verdict.includes('mal') ? 'malicious' : (verdict.includes('susp') ? 'suspicious' : 'clean');
-        const label = cls === 'malicious' ? '恶意' : (cls === 'suspicious' ? '可疑' : '安全');
+        const cls = verdict.includes('mal') ? 'malicious'
+            : (verdict.includes('susp') ? 'suspicious'
+               : ((verdict.includes('unknown') || verdict.includes('未知')) ? 'unknown' : 'clean'));
+        const label = cls === 'malicious' ? '恶意'
+            : (cls === 'suspicious' ? '可疑' : (cls === 'unknown' ? '未知（未能分析）' : '安全'));
         const iconPath = cls === 'malicious'
             ? '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>'
             : (cls === 'suspicious' ? '<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>'
-                                   : '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>');
+               : (cls === 'unknown' ? '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>'
+                                   : '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>'));
         verdictBox.innerHTML = `<div class="verdict ${cls}">
             <div class="verdict-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${iconPath}</svg></div>
             <div><div class="verdict-label">${label}</div><div class="verdict-score">风险评分: ${score} / 100</div></div>
         </div>`;
+
+        // 隔离状态（降级必须对用户可见）
+        const iso = report.isolation || (report.report && report.report.isolation) || null;
+        const isoBox = document.getElementById('isolationBox');
+        if (isoBox) {
+            if (iso) {
+                const degraded = !!iso.degraded_reason;
+                const net = iso.network_blocked === true ? '已阻断'
+                    : (iso.network_blocked === false ? '未生效' : '未执行');
+                const il = iso.integrity_level === 'low' ? '低完整性 (Low IL)'
+                    : (iso.integrity_level === 'medium' ? '中完整性（降级）'
+                       : (iso.integrity_level === 'none' ? '无（未隔离）' : '未执行'));
+                isoBox.className = 'isolation-panel' + (degraded ? ' degraded' : '');
+                isoBox.innerHTML = `<div class="iso-title">本次分析隔离状态</div>
+                    <div class="iso-grid">
+                        <span>Job Object 资源限制</span><span>${iso.job_object ? '已启用' : '未启用'}</span>
+                        <span>网络出网阻断</span><span class="${iso.network_blocked ? 'ok' : 'bad'}">${net}${iso.firewall_rule ? ' · ' + esc(iso.firewall_rule) : ''}</span>
+                        <span>文件/注册表完整性级别</span><span class="${iso.integrity_level === 'low' ? 'ok' : 'bad'}">${il}</span>
+                        <span>沙箱工作目录</span><span>${esc(iso.low_il_workdir || '—')}</span>
+                    </div>
+                    ${degraded ? `<div class="iso-degraded">隔离降级：${esc(iso.degraded_reason)}</div>` : ''}`;
+                isoBox.style.display = '';
+            } else {
+                isoBox.style.display = 'none';
+            }
+        }
 
         // 行为列表
         const behaviors = report.behaviors || [];
@@ -448,12 +490,12 @@
             bList.innerHTML = behaviors.map(b=>{
                 const lvl = (b.severity||b.level||'').toLowerCase();
                 const cls = lvl.includes('high')||lvl.includes('danger')?'danger':(lvl.includes('med')||lvl.includes('warn')?'warn':'info');
-                return `<li class="${cls}">${esc(b.description||b.message||b)}</li>`;
+                return `<li class="${cls}">${esc(b.detail||b.description||b.message||b)}</li>`;
             }).join('');
         } else { bList.innerHTML = '<li class="info">暂无行为记录</li>'; }
 
         // 风险指标
-        const indicators = report.indicators || report.iocs || [];
+        const indicators = report.risk_indicators || report.indicators || report.iocs || [];
         const iList = document.getElementById('indicatorList');
         if (indicators.length) {
             iList.innerHTML = indicators.map(ind=>{
@@ -485,8 +527,8 @@
         if (!list.length) { body.innerHTML = '<tr><td colspan="6" class="empty-row">暂无记录</td></tr>'; return; }
         body.innerHTML = list.map(h=>{
             const verdict = (h.verdict||h.classification||'clean').toLowerCase();
-            const cls = verdict.includes('mal')?'malicious':(verdict.includes('susp')?'suspicious':'clean');
-            const tag = cls==='malicious'?'<span class="action-tag block">恶意</span>':(cls==='suspicious'?'<span class="action-tag alert">可疑</span>':'<span class="action-tag allow">安全</span>');
+            const cls = verdict.includes('mal')?'malicious':(verdict.includes('susp')?'suspicious':((verdict.includes('unknown')||verdict.includes('未知'))?'unknown':'clean'));
+            const tag = cls==='malicious'?'<span class="action-tag block">恶意</span>':(cls==='suspicious'?'<span class="action-tag alert">可疑</span>':(cls==='unknown'?'<span class="action-tag">未知</span>':'<span class="action-tag allow">安全</span>'));
             return `<tr>
                 <td>${esc(h.time||h.timestamp||'—')}</td>
                 <td style="font-family:'Courier New',monospace;font-size:12px">${esc(h.filename||h.name||'—')}</td>
