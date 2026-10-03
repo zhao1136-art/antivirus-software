@@ -123,7 +123,14 @@ class YaraScanner:
         self._rules_filesize = []
         self._ac = None  # 规则变更后失效，下次扫描重建
         loaded = 0
-        for root, _, files in os.walk(directory):
+        for root, dirs, files in os.walk(directory):
+            # 跳过 _disabled / 点开头的子目录。
+            # 2026-10-03：把 LNK_Ruleset.yar 移进 _disabled/ 并提交了"停用"，
+            # 但 os.walk 会**递归进子目录**照旧加载它 —— 那条提交等于没做，
+            # 命中 88% 合法 System32 文件的 EXE_in_LNK 一直在生效。
+            # 这里显式剪枝，才是真的停用。
+            dirs[:] = [d for d in dirs
+                       if not d.startswith("_") and not d.startswith(".")]
             for fname in files:
                 if fname.endswith(".yar") or fname.endswith(".yara"):
                     path = os.path.join(root, fname)
