@@ -826,28 +826,24 @@
             { id: 'etw', name: 'ETW 事中检测', icon: 'etw',
               desc: 'Windows 事件追踪 · 实时捕获进程行为', status: 'etw', action: 'toggle' },
             { id: 'amsi', name: 'AMSI 无文件拦截', icon: 'amsi',
-              desc: 'AMSI Provider · 拦截 PowerShell 等无文件攻击', status: 'amsi', action: 'toggle' },
-            { id: 'cloud', name: '云查杀引擎 (AVIC/微步/OTX)', icon: 'cloud',
-              desc: 'AVIC 情报中心 · 微步在线 ThreatBook · AlienVault OTX 多源云查杀', status: 'cloud', action: 'verify' }
+              desc: 'AMSI Provider · 拦截 PowerShell 等无文件攻击', status: 'amsi', action: 'toggle' }
         ],
         status: {}, // id -> 各引擎原始状态
         icons: {
             ml: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>',
             vigil: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>',
             etw: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>',
-            amsi: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/><path d="M8 9l2 2-2 2M12 13h4"/></svg>',
-            cloud: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9z"/></svg>'
+            amsi: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/><path d="M8 9l2 2-2 2M12 13h4"/></svg>'
         },
 
         /** 并行拉取各引擎状态（实时数据来源 3） */
         async refresh() {
-            const [vigil, etw, amsi, cloud] = await Promise.all([
+            const [vigil, etw, amsi] = await Promise.all([
                 api.get('/api/v1/vigil/status'),
                 api.get('/api/v1/etw/status'),
-                api.get('/api/v1/amsi/status'),
-                api.get('/api/v1/cloud/engines')
+                api.get('/api/v1/amsi/status')
             ]);
-            engines.status = { vigil: vigil, etw: etw, amsi: amsi, cloud: cloud };
+            engines.status = { vigil: vigil, etw: etw, amsi: amsi };
             engines.render();
         },
 
@@ -869,16 +865,6 @@
                 case 'amsi': {
                     const d = s.amsi;
                     return d && d.registered ? { cls: 'ok', text: '已注册' } : { cls: 'bad', text: '未注册' };
-                }
-                case 'cloud': {
-                    const d = s.cloud;
-                    if (!d) return { cls: 'mute', text: '未知' };
-                    const eng = d.engines || {};
-                    const keys = Object.keys(eng);
-                    const online = keys.filter((k) => eng[k] && eng[k].available).length;
-                    if (online > 0) return { cls: 'ok', text: '已连接 ' + online + '/' + keys.length };
-                    const configured = keys.filter((k) => eng[k] && eng[k].configured).length;
-                    return { cls: 'warn', text: configured > 0 ? '未连接' : '未配置' };
                 }
                 default: return { cls: 'mute', text: '—' };
             }
@@ -958,17 +944,6 @@
                     if (d && d.success) {
                         msg = action === 'start' ? 'AMSI 无文件拦截已注册' : 'AMSI 已注销';
                     } else { msg = (d && d.error) || '操作失败'; type = 'error'; }
-                    break;
-                }
-                case 'cloud': {
-                    // 主动验证 AVIC 情报中心连通性（同步阻塞接口）
-                    const d = await api.get('/api/v1/cloud/avic/status');
-                    if (d && d.ok) {
-                        msg = '云引擎连接正常（AVIC 情报中心）';
-                    } else {
-                        msg = (d && (d.hint || d.error)) || '云引擎连接失败';
-                        type = 'error';
-                    }
                     break;
                 }
             }
