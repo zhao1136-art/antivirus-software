@@ -162,17 +162,35 @@
     ensureBox().appendChild(card.el);
   }
 
+  var pollFails = 0;
+
   function poll() {
-    if (document.hidden) return;   // 页面不可见时不打扰，也不误判超时（后端仍在计时）
-    fetch(API + '/pending').then(function (r) { return r.json(); }).then(function (d) {
-      var list = (d && d.pending) || [];
-      var alive = {};
-      list.forEach(function (it) { alive[it.id] = 1; upsert(it); });
-      // 后端已处理的（含超时自动处理）要把卡片收掉
-      Object.keys(cards).forEach(function (id) {
-        if (!alive[id] && !cards[id].done) flash(id, '已自动处理', '#8b95a3');
+    // 注意：这里**不能**因为 document.hidden 就跳过轮询。
+    // 早先加过 `if (document.hidden) return;`，结果是：标签页不在前台时
+    // 弹窗根本不出现，而 15 秒一到后端照常自动隔离 —— 用户看到的就是
+    // "没弹窗，文件却没了"。威胁处置比"别打扰"重要。
+    fetch(API + '/pending', { credentials: 'same-origin' })
+      .then(function (r) {
+        if (!r.ok) { throw new Error('HTTP ' + r.status); }
+        return r.json();
+      })
+      .then(function (d) {
+        pollFails = 0;
+        var list = (d && d.pending) || [];
+        var alive = {};
+        list.forEach(function (it) { alive[it.id] = 1; upsert(it); });
+        // 后端已处理的（含超时自动处理）要把卡片收掉
+        Object.keys(cards).forEach(function (id) {
+          if (!alive[id] && !cards[id].done) flash(id, '已自动处理', '#8b95a3');
+        });
+      })
+      .catch(function (e) {
+        // 不再静默：连续失败要在控制台留痕，否则出问题无从查起
+        pollFails++;
+        if (pollFails === 1 || pollFails % 20 === 0) {
+          try { console.warn('[威胁弹窗] 轮询失败 ' + pollFails + ' 次:', e && e.message); } catch (_) {}
+        }
       });
-    }).catch(function () { /* 后端不可达时静默，不弹错误 */ });
   }
 
   function boot() {
