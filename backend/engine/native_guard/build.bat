@@ -47,8 +47,43 @@ if errorlevel 1 (
 
 echo [DONE] %~dp0native_guard.dll
 
+REM ============================================================
+REM  self_guard.dll (process self-protection / anti-kill)
+REM
+REM  Built as a SEPARATE DLL because it is a small, standalone
+REM  capability with its own export surface (Yutian*). It must NOT
+REM  be linked into native_guard.dll: that one already defines
+REM  DllMain in native_guard_main.cpp.
+REM
+REM  Only needs advapi32 (SetSecurityInfo / AddAccessAllowedAce /
+REM  ConvertStringSidToSidW). Keep -static-libgcc -static-libstdc++
+REM  for the same reason as amsi_provider.dll: otherwise it imports
+REM  libstdc++-6.dll, which is not shipped next to it, and the DLL
+REM  then fails to load at runtime.
+REM ============================================================
+echo.
+echo [BUILD] self_guard.dll ...
+"%GXX%" -O2 -shared -o self_guard.dll self_guard.cpp ^
+    -ladvapi32 -static-libgcc -static-libstdc++
+
+if errorlevel 1 (
+    echo [FAILED] self_guard.dll compile or link error
+    exit /b 1
+)
+echo [DONE] %~dp0self_guard.dll
+
 echo.
 echo To rebuild amsi_provider.dll separately:
-echo   "%GXX%" -O2 -shared -o amsi_provider.dll amsi_provider.cpp -lole32 -loleaut32 -ladvapi32
+echo   "%GXX%" -O2 -shared -o amsi_provider.dll amsi_provider.cpp -lole32 -loleaut32 -ladvapi32 -luuid -static-libgcc -static-libstdc++
+echo.
+echo   Trap 3: -luuid is REQUIRED with newer MinGW (ucrt/16.x):
+echo     undefined reference to `IID_IUnknown' / `IID_IClassFactory'
+echo     Those GUIDs live in libuuid.a, not libole32.
+echo.
+echo   Trap 4: -static-libgcc -static-libstdc++ are REQUIRED:
+echo     without them amsi_provider.dll imports libstdc++-6.dll, which is NOT
+echo     shipped next to it -- the DLL then fails to load at runtime and takes
+echo     AMSI down with it. The existing amsi_provider.dll has NO libstdc++
+echo     dependency; verify with:  objdump -p amsi_provider.dll ^| findstr "DLL Name"
 
 endlocal

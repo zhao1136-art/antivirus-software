@@ -37,6 +37,203 @@ def _mark(step: str):
     """记录当前执行到的启动步骤，便于定位崩溃位置"""
     _log_startup(f"[STEP] {step}")
 
+
+# ══════════════════════════════════════════════════════════════════════════
+# 内置浏览器（内嵌 WebView2）启动支持
+# ══════════════════════════════════════════════════════════════════════════
+# 背景 / 根因（2026-10-04 实测确认）：
+#   pywebview 在 Windows 上唯一可用的内嵌后端（edgechromium → winforms）依赖
+#   pythonnet；pythonnet.load() 用
+#       Path(__file__).parent / "runtime" / "Python.Runtime.dll"
+#   定位托管程序集，再交给 clr_loader 的 netfx 宿主 (ClrLoader.dll) 走
+#   Assembly.LoadFrom 载入。
+#
+#   当该 DLL 的**物理路径位于工作区 H:\Caelire\ 之下**时，Assembly.LoadFrom 失败，
+#   clr_loader 抛：
+#       RuntimeError: Failed to resolve Python.Runtime.Loader.Initialize
+#   → pywebview 初始化 winforms 后端失败 → 程序回退到系统默认浏览器。
+#
+#   对照实验（同一份字节、同一解释器）：
+#       H:\Caelire\backend\libs\pythonnet\runtime   → 失败
+#       H:\clrtest_probe\pythonnet\runtime          → 成功（复制件）
+#       H:\probe3\pythonnet\runtime                 → 成功
+#       C:\...                                      → 成功
+#       %LOCALAPPDATA%\...                          → 成功
+#       （用 junction 指向 libs 保持真实路径仍在 H:\Caelire 下 → 仍然失败；
+#         同一目录改成复制 → 成功。故与内容无关，只与物理路径有关。）
+#   打包产物位于 H:\Caelire\backend\dist\ 之下，因此 exe 一启动就走回退分支。
+#
+# 修复：启动时把 <pythonnet>/runtime 复制到 %LOCALAPPDATA%\Andun\runtime\pyrt\，
+#       并把 pythonnet.__file__ 指向该副本，让 load() 从"好路径"加载。
+#       实测：只需暂存 runtime（clr_loader 的位置无关）。
+_UI_STATE = {"window": None}
+
+
+def _stage_pythonnet_runtime() -> bool:
+    """把 pythonnet 的 runtime 目录复制到工作区之外，规避 Assembly.LoadFrom 失败。
+
+    返回 True 表示已把 pythonnet.__file__ 重定向到暂存副本。
+    """
+    try:
+        import shutil
+        from pathlib import Path as _Path
+        import pythonnet as _pn
+
+        src = _Path(_pn.__file__).parent / "runtime"
+        src_dll = src / "Python.Runtime.dll"
+        if not src_dll.is_file():
+            _log_startup(f"[clr] 未找到 {src_dll}，跳过暂存")
+            return False
+
+        local = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
+        stage_root = _Path(local) / "Andun" / "runtime" / "pyrt"
+        dst = stage_root / "pythonnet" / "runtime"
+        dst_dll = dst / "Python.Runtime.dll"
+
+        need_stage = True
+        try:
+            if (dst_dll.is_file()
+                    and dst_dll.stat().st_size == src_dll.stat().st_size
+                    and dst_dll.stat().st_mtime >= src_dll.stat().st_mtime):
+                need_stage = False
+        except Exception:
+            need_stage = True
+
+        if need_stage:
+            shutil.rmtree(str(stage_root), ignore_errors=True)
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(str(src), str(dst))
+            _log_startup(f"[clr] pythonnet runtime 已暂存 -> {dst}")
+
+        _pn.__file__ = str(stage_root / "pythonnet" / "__init__.py")
+        _log_startup(f"[clr] pythonnet.__file__ 重定向 -> {_pn.__file__}")
+        return True
+    except Exception:
+        _log_startup("[clr] 暂存 pythonnet runtime 失败:\n" + traceback.format_exc())
+        return False
+
+
+def _stage_webview_package() -> str:
+    """把 pywebview 包（关键是其中的 lib/*.dll）复制到工作区之外。
+
+    webview/util.py:489 用
+        os.path.dirname(os.path.realpath(__file__)) + '/lib/' + dll_name
+    定位 Microsoft.Web.WebView2.Core.dll 等托管程序集；这些 DLL 若位于
+    H:\\Caelire\\ 之下，.NET 会抛
+        FileLoadException: ... HRESULT:0x80131515（Operation is not supported）
+    与 pythonnet 那次是同一类问题。
+
+    返回暂存后的 webview 包目录（失败返回空串）。
+    """
+    try:
+        import shutil
+        import webview as _wv_pkg
+
+        src = os.path.dirname(os.path.realpath(_wv_pkg.__file__))
+        local = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
+        stage_root = os.path.join(local, "Andun", "runtime", "pyrt")
+        dst = os.path.join(stage_root, "webview")
+
+        if os.path.isdir(src):
+            shutil.rmtree(dst, ignore_errors=True)
+            os.makedirs(stage_root, exist_ok=True)
+            shutil.copytree(src, dst)
+            _log_startup(f"[webview] 包已暂存 -> {dst}")
+
+        stage_lib = os.path.join(dst, "lib")
+        if os.path.isdir(stage_lib) and stage_lib not in sys.path:
+            sys.path.insert(0, stage_lib)
+        # 无论 Python 代码来自源码目录还是打包的 PYZ，都把 util 的 __file__
+        # 指向暂存副本，使 dll_path 解析到"好路径"的 lib/。
+        try:
+            import webview.util as _wv_util
+            _wv_util.__file__ = os.path.join(dst, "util.py")
+        except Exception:
+            pass
+        return dst
+    except Exception:
+        _log_startup("[webview] 暂存失败:\n" + traceback.format_exc())
+        return ""
+
+
+def _prepare_embedded_browser() -> bool:
+    """让内嵌浏览器可用：暂存 pythonnet runtime + webview 包，并预加载 clr。
+
+    必须在 `import webview`（以及 webview.start）之前调用，返回内嵌后端是否可用。
+    """
+    try:
+        _stage_pythonnet_runtime()
+        import clr  # noqa: F401  触发 pythonnet.load()，失败会抛异常
+        _log_startup("[clr] pythonnet/.NET 已就绪")
+
+        stage = _stage_webview_package()
+        if stage:
+            # 若 webview 已被导入（开发模式下 logo_splash 等可能提前拉过），
+            # 清掉缓存让后续 `import webview` 走暂存副本。
+            for _m in [_k for _k in list(sys.modules)
+                       if _k == "webview" or _k.startswith("webview.")]:
+                del sys.modules[_m]
+            sys.path.insert(0, os.path.dirname(stage))
+
+        _log_startup("[clr] 内置浏览器依赖已就绪")
+        return True
+    except Exception:
+        _log_startup("[clr] pythonnet/.NET 不可用:\n" + traceback.format_exc())
+        return False
+
+
+def _launch_app_window(url: str) -> bool:
+    """兜底：用 Chromium/Edge 的 --app 模式开一个无标签栏、无地址栏的独立窗口。
+
+    仍保持"应用窗口"形态（而不是在默认浏览器里开标签页）。
+    """
+    try:
+        import subprocess
+
+        cands = []
+        for env in ("ProgramFiles(x86)", "ProgramFiles", "LOCALAPPDATA"):
+            base = os.environ.get(env)
+            if not base:
+                continue
+            cands.append(os.path.join(base, "Microsoft", "Edge", "Application", "msedge.exe"))
+            cands.append(os.path.join(base, "Google", "Chrome", "Application", "chrome.exe"))
+        exe = next((c for c in cands if os.path.isfile(c)), None)
+        if not exe:
+            return False
+
+        local = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
+        profile = os.path.join(local, "Andun", "webview_profile")
+        os.makedirs(profile, exist_ok=True)
+
+        subprocess.Popen(
+            [exe, f"--app={url}", "--window-size=1100,700",
+             f"--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check"],
+            close_fds=True,
+        )
+        _log_startup(f"[ui] 已用 --app 无边框窗口承载界面: {exe}")
+        return True
+    except Exception:
+        _log_startup("[ui] --app 窗口启动异常:\n" + traceback.format_exc())
+        return False
+
+
+def _show_main_window() -> bool:
+    """把已创建的内嵌主窗口重新显示并置前；没有内嵌窗口时返回 False。"""
+    win = _UI_STATE.get("window")
+    if win is None:
+        return False
+    for fn in ("show", "restore"):
+        try:
+            getattr(win, fn)()
+        except Exception:
+            pass
+    try:
+        win.on_top = True
+        win.on_top = False
+    except Exception:
+        pass
+    return True
+
 def _startup_excepthook(tp, val, tb):
     _log_startup("=== STARTUP TRACEBACK ===" + "\n" + "".join(traceback.format_exception(tp, val, tb)))
     _log_startup("=== END TRACEBACK ===")
@@ -294,6 +491,23 @@ def _auto_import_bingduku():
 
 
 _thr.Thread(target=_auto_import_bingduku, daemon=True).start()
+
+
+# ---------- 火绒内容特征串库后台预热 ----------
+# 分片 Aho-Corasick 构建约 10 秒，放后台线程做，避免第一次扫描时阻塞。
+def _warmup_huorong_sigs():
+    try:
+        from engine.huorong_intel import get_content_sig_engine, get_huorong_stats
+        get_content_sig_engine().ensure_loaded()   # 本线程内同步构建，完成后统计才准确
+        st = get_huorong_stats()
+        print("[御天] 火绒情报库就绪: 内容特征串=%s URL黑名单=%s 检测名=%s" % (
+            st["content_sigs"].get("literals"), st["url_blocklist"].get("count"),
+            st["detection_names"].get("total")))
+    except Exception as e:
+        print("[御天] 火绒情报库预热失败:", e)
+
+
+_thr.Thread(target=_warmup_huorong_sigs, daemon=True).start()
 
 
 # 威胁情报引擎改为懒加载（见上方 _get_c2_intel / _get_threat_intel）
@@ -621,7 +835,10 @@ def _init_tray_icon():
     """初始化系统托盘"""
     try:
         def on_show():
-            """打开前端页面"""
+            """显示内置浏览器窗口（没有内嵌窗口时才退回系统浏览器）"""
+            if _show_main_window():
+                print("[御天] 已唤起内置浏览器窗口")
+                return
             import webbrowser
             webbrowser.open("http://127.0.0.1:8899")
 
@@ -3273,37 +3490,6 @@ async def integrity_check():
         return JSONResponse({"error": str(e)}, 500)
 
 
-# ---------- 实时防护 API ----------
-
-@app.get("/api/v1/realtime-guard/status")
-async def realtime_guard_status():
-    """实时防护状态"""
-    try:
-        from engine.file_guard_client import get_guard
-        g = get_guard()
-        return {"running": g.is_running}
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, 500)
-
-
-@app.post("/api/v1/realtime-guard/toggle")
-async def realtime_guard_toggle(data: dict):
-    """启停实时防护"""
-    enabled = data.get("enabled", True)
-    try:
-        from engine.file_guard_client import get_guard, scan_on_event
-        g = get_guard()
-        if enabled:
-            watch = data.get("watch_dirs", None)
-            g._callback = scan_on_event
-            g.start(watch_dirs=watch)
-        else:
-            g.stop()
-        return {"running": g.is_running}
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, 500)
-
-
 # ---------- 破军引擎 API (C++ Native Engine) ----------
 
 @app.get("/api/v1/native/version")
@@ -4693,6 +4879,15 @@ if __name__ == "__main__":
         ret = _run_watchdog_mode()
         sys.exit(ret if ret else 0)
 
+    # ⚠️ 内置浏览器准备必须放在**任何 `import webview` 之前**：
+    #    它会清掉 sys.modules 里的 webview 缓存并把暂存副本插到 sys.path 最前，
+    #    这样 splash 窗口与主窗口才会注册在同一个（暂存后的）webview 模块上。
+    #    若放在后面，_wv.create_window 用旧模块、webview.start 用新模块，
+    #    窗口会"创建了但没人认识"。
+    _mark("准备内置浏览器(pythonnet runtime + webview 包暂存)")
+    _UI_STATE["embedded_ready"] = _prepare_embedded_browser()
+    _mark(f"内置浏览器准备完成: {'OK' if _UI_STATE['embedded_ready'] else 'UNAVAILABLE'}")
+
     import atexit
     import os
     import threading
@@ -4832,6 +5027,9 @@ if __name__ == "__main__":
             min_size=(900, 600),
             resizable=True,
         )
+        # 记下句柄：托盘「显示」与退出流程都要用它（不再用默认浏览器开标签页）
+        _UI_STATE["window"] = main_window
+        _mark("主窗口已创建（内置浏览器）")
 
         # 拦截窗口关闭 → 退出流程
         def _on_closing():
@@ -4870,32 +5068,46 @@ if __name__ == "__main__":
     #    （Failed to resolve Python.Runtime.Loader.Initialize）——
     #    不被捕获就冒泡，把整个进程带走。
     #
-    #    所以这里兜一层：内嵌浏览器起不来就退回系统默认浏览器，打开同一个
-    #    127.0.0.1:8899。界面从内置变外置，但程序能用 —— 总好过用户双击图标
-    #    之后什么也看不到。
+    #    2026-10-04 补充：真正让 clr 失败的**不是** pythonnet 缺失，而是
+    #    Python.Runtime.dll 的**物理路径**落在工作区 H:\Caelire\ 之下时
+    #    Assembly.LoadFrom 会失败（对照实验见文件顶部 _stage_pythonnet_runtime
+    #    的注释）。_prepare_embedded_browser() 先把 runtime 暂存到
+    #    %LOCALAPPDATA%\Andun\runtime\pyrt\ 来修掉它，因此这里默认走**内置浏览器**；
+    #    只有它仍然失败时才退到 Chromium --app 应用窗口（无标签栏/地址栏）。
+    # ── 内置浏览器准备：必须在 webview.start 之前 ──
+    # pywebview 的 winforms/edgechromium 后端在 guilib.initialize() 里就会
+    # `import clr`，所以 pythonnet 必须在这之前就绪。
+    _mark("复用内置浏览器准备结果")
+    _embedded_ready = bool(_UI_STATE.get("embedded_ready"))
+    _mark(f"内置浏览器可用性: {'OK' if _embedded_ready else 'UNAVAILABLE'}")
+
     _mark("调用 webview.start")
     try:
+        if not _embedded_ready:
+            raise RuntimeError("pythonnet/.NET 运行时不可用，无法启动内置浏览器")
         webview.start(gui='edgechromium', func=_startup_func)
         _mark("webview.start 正常返回")
     except Exception as _wv_exc:
         _log_startup("webview.start 异常:\n" + traceback.format_exc())
-        # 兜底：内嵌浏览器（WebView2/pythonnet）不可用时改用默认浏览器。
+        # 兜底：仍然以"应用窗口"形态呈现界面 —— 用 Chromium/Edge 的 --app 模式开
+        # 一个无标签栏、无地址栏的独立窗口，而不是在默认浏览器里开标签页。
         # 此时 uvicorn 已在其它线程跑着，8899 是可用的。
         try:
-            _log_startup("内嵌浏览器不可用（%s: %s），回退到系统默认浏览器"
+            _log_startup("内置浏览器不可用（%s: %s），改用 Chromium --app 窗口"
                          % (type(_wv_exc).__name__, _wv_exc))
-            print("[御天] 内嵌浏览器不可用，已改用系统默认浏览器打开界面")
-            # ⚠️ webbrowser 在本文件只在别处的函数里 import 过，模块级没有 ——
-            #    第一次写这段兜底时忘了，结果 NameError 把兜底本身也带崩了
-            #    （实测：RuntimeError 被接住后又抛 NameError，进程照旧死）。
-            import webbrowser as _wb
-            _wb.open("http://127.0.0.1:8899")
-            # 外置浏览器模式下**主线程绝不能退出** —— uvicorn 跑在守护线程里，
+            print("[御天] 内置浏览器不可用，改用 --app 无边框窗口打开界面")
+            if not _launch_app_window("http://127.0.0.1:8899"):
+                # 最后一层：系统默认浏览器。⚠️ webbrowser 在本文件模块级没有 import，
+                # 必须在这里显式导入，否则 NameError 会把兜底本身也带崩。
+                _log_startup("--app 窗口不可用，回退到系统默认浏览器")
+                import webbrowser as _wb
+                _wb.open("http://127.0.0.1:8899")
+            # 外置窗口模式下**主线程绝不能退出** —— uvicorn 跑在守护线程里，
             # 主线程一结束整个进程就没了、服务也跟着停。所以在这里挂住。
             # 用户点托盘菜单的「退出」时，_do_exit_with_fadeout 会 os._exit(0)。
-            _mark("已回退到默认浏览器，主线程挂起等待退出")
+            _mark("已用外部应用窗口承载界面，主线程挂起等待退出")
             while True:
                 time.sleep(1)
         except Exception:
-            _log_startup("回退默认浏览器同样失败:\n" + traceback.format_exc())
+            _log_startup("兜底启动界面同样失败:\n" + traceback.format_exc())
             raise

@@ -75,12 +75,53 @@ class SelfProtect:
     # ---------------------------------------------------------------
 
     def _protect_process(self) -> dict:
-        """进程自保护：用户态 ACL 兜底。"""
-        results = {"driver": False, "acl": False}
+        """进程自保护：调用 native self_guard.dll 替换自身进程 DACL。
 
-        # 用户态兜底：为 agent 进程设置 ACL 不现实（跨会话），
-        # 这里通过 EnableDebugPrivilege 提升+标记方式记录状态
-        results["acl"] = self._enable_debug_privilege()
+        历史（2026-10-06 修正）
+        ----------------------
+        这里原本只调用 `_enable_debug_privilege()` 就返回 `acl=True`，注释还写着
+        "为 agent 进程设置 ACL 不现实…通过 EnableDebugPrivilege 提升+标记方式
+        记录状态"。而 **SeDebugPrivilege 完全不能防止进程被杀** —— 它的作用是
+        "打开别人的进程"。也就是说这一项此前是**没有防护**的。
+
+        现在改为真正的实现（engine/native_guard/self_guard.cpp）：把进程对象的
+        DACL 换成"除 SYSTEM 外不授予 PROCESS_TERMINATE"。
+
+        ⚠️ 能力边界（实测，务必如实表述）
+            SeDebugPrivilege 会**绕过**进程 DACL：
+                持有该权限 -> taskkill /F 成功
+                移除该权限 -> ACCESS_DENIED，进程存活
+            所以只挡得住**非提权**攻击者；对抗提权进程需要内核驱动
+            ObRegisterCallbacks（本项目无 WDK，未实现）。
+        """
+        results = {
+            "driver": False,
+            "acl": False,
+            "native": False,
+            "terminate_denied": False,
+            "error": "",
+            "limits": "用户态 DACL；提权进程(SeDebugPrivilege)可绕过",
+        }
+        pid = self._agent_pid or os.getpid()
+        try:
+            from engine.self_guard_bridge import is_protected, protect_process, version
+            rc = protect_process(pid, protect_from_admins=True)
+            if rc == 0:
+                results["acl"] = True
+                results["native"] = True
+                results["version"] = version()
+                # 复查：确认 PROCESS_TERMINATE 真的被收回（0 == 被拒）
+                results["terminate_denied"] = (is_protected(pid) == 0)
+            else:
+                results["error"] = f"self_guard 返回 {rc}"
+                logger.warning("进程自保护失败: rc=%s", rc)
+        except Exception as e:
+            results["error"] = f"{type(e).__name__}: {e}"
+            logger.warning("进程自保护不可用: %s", e)
+
+        # SeDebugPrivilege 仍然启用，但它服务于"打开别的进程去扫描"，
+        # **与自保护无关** —— 单独记在另一个字段，不再冒充自保护成果。
+        results["debug_privilege"] = self._enable_debug_privilege()
 
         return results
 
@@ -240,13 +281,26 @@ class SelfProtect:
     # ---------------------------------------------------------------
 
     def get_status(self) -> dict:
-        return {
+        st = {
             "configured": self._configured,
             "install_dir": self._install_dir,
             "agent_pid": self._agent_pid,
             "service_name": DEFAULT_SERVICE_NAME,
             "driver_connected": False,
         }
+        # 如实证报进程自保护状态（此前这里没有任何防护状态，只能靠猜）
+        try:
+            from engine.self_guard_bridge import status as _guard_status
+            st["process_guard"] = _guard_status(self._agent_pid or os.getpid())
+        except Exception as e:
+            st["process_guard"] = {"available": False, "error": str(e)}
+        # 服务/注册表加固的现状：**尚未真正实现**
+        #   - _harden_registry_key() 打开键后直接 return True，没改任何 ACL
+        #   - _harden_service_acl()  无条件 return True
+        # 如实标出来，避免 UI 显示"已保护"而实际没有。
+        st["registry_acl_implemented"] = False
+        st["service_acl_implemented"] = False
+        return st
 
 
 # ============================================================

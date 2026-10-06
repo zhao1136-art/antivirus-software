@@ -26,6 +26,19 @@ from collections import deque
 # 此处导入 PHISH_MARKERS / RISK_KEYWORDS 仅为保持本模块命名空间向后兼容。
 from engine.heuristic_engine import PHISH_MARKERS, RISK_KEYWORDS, get_heuristic_engine
 
+# 火绒恶意网址库（52,204 条，来自 huorong_extract/malurl.db）。
+# 仅参与 check_url 判定，**不写入 hosts** —— 5 万条 hosts 记录既无必要也会拖慢解析。
+try:
+    from engine.huorong_intel import (
+        url_blocklist_match as _hr_url_match,
+        get_url_blocklist_count as _hr_url_count,
+        lookup_url_category as _hr_url_category,
+    )
+except Exception:                      # 数据缺失时静默降级，不影响原有防护
+    _hr_url_match = None
+    _hr_url_count = None
+    _hr_url_category = None
+
 IS_WINDOWS = sys.platform == 'win32'
 
 # ── 数据目录定位（与 adblock / download_guard 保持一致）────────────
@@ -160,7 +173,7 @@ class UrlGuard:
         """
         host = self._extract_host(url_or_domain)
         default = {"url": url_or_domain, "host": host, "level": "safe",
-                   "reason": "", "families": [], "in_blocked": False}
+                   "reason": "", "families": [], "categories": [], "in_blocked": False}
         if not host:
             default["reason"] = "无法解析地址"
             return default
@@ -182,6 +195,22 @@ class UrlGuard:
             reasons.append("命中恶意域名黑名单")
         if host in BUILTIN_BLOCKED_DOMAINS or domain in BUILTIN_BLOCKED_DOMAINS:
             reasons.append("命中内置恶意域名库")
+        # 2.5) 火绒恶意网址库（5.2 万条，仅参与判定）
+        hr_hit = False
+        if _hr_url_match is not None:
+            try:
+                hr_hit = bool(_hr_url_match(host, domain))
+            except Exception:
+                hr_hit = False
+            if hr_hit:
+                reasons.append("命中火绒恶意网址库")
+        # 内容分类（火绒 urlcls.db：gamb/porn/news/shop… 仅标注，不据此判恶）
+        categories = []
+        if _hr_url_category is not None:
+            try:
+                categories = _hr_url_category(host) or []
+            except Exception:
+                categories = []
 
         # 3) 威胁情报
         families = self._threat_lookup(url_or_domain) or self._threat_lookup(host)
@@ -218,7 +247,8 @@ class UrlGuard:
         return {"url": url_or_domain, "host": host, "level": level,
                 "reason": "；".join(dict.fromkeys(reasons)),
                 "families": families,
-                "in_blocked": bool(families or any("命中" in r for r in reasons))}
+                "categories": categories,
+                "in_blocked": bool(families or hr_hit or any("命中" in r for r in reasons))}
 
     # ── 阻断名单管理 ─────────────────────────────────────────
     def block_domain(self, url_or_domain: str) -> bool:
@@ -344,6 +374,12 @@ class UrlGuard:
     def get_status(self) -> dict:
         with self._lock:
             hist = list(self._history)
+        hr_count = 0
+        if _hr_url_count is not None:
+            try:
+                hr_count = int(_hr_url_count())
+            except Exception:
+                hr_count = 0
         return {
             "enabled": self._enabled,
             "checked_count": self._checked_count,
@@ -351,9 +387,10 @@ class UrlGuard:
             "history": hist,
             "hosts_applied": self._hosts_applied,
             "whitelist_count": len(self._whitelist),
-            "blocked_domain_count": len(self._blocked) + len(BUILTIN_BLOCKED_DOMAINS),
+            "blocked_domain_count": len(self._blocked) + len(BUILTIN_BLOCKED_DOMAINS) + hr_count,
             "db_count": len(self._blocked),
             "builtin_count": len(BUILTIN_BLOCKED_DOMAINS),
+            "huorong_count": hr_count,
         }
 
 

@@ -106,7 +106,14 @@ _WTD_STATEACTION_VERIFY = 1
 _WTD_STATEACTION_CLOSE = 2
 # 只用本地缓存做吊销检查，避免联网导致卡住（隔离判定必须在几十毫秒内返回）
 _WTD_CACHE_ONLY_URL_RETRIEVAL = 0x00001000
-_WTD_SAFER_FLAG = 0x00000100
+# ⚠️ WTD_SAFER_FLAG (0x100) —— 2026-10-06 移除，**这是原实现的一个真实 bug**。
+# 实测（本机 Win10 19045，对一个确实有效的 .cat 文件做 WTD_CHOICE_FILE 校验）：
+#     CACHE_ONLY | SAFER  -> 0x800B0100 TRUST_E_NOSIGNATURE   （误报"无签名"）
+#     CACHE_ONLY          -> 0x00000000 成功
+#     0                   -> 0x00000000 成功
+# 加上这个标志会让 WinVerifyTrust **把有效签名报成无签名**，直接压制检出率。
+# 原代码同时用它做内嵌签名与目录签名校验，两边都受影响。
+_WTD_SAFER_FLAG_REMOVED_BECAUSE_BUGGY = 0x00000100
 
 
 def verify_signature(path: str, timeout_ms: int = 4000):
@@ -138,7 +145,7 @@ def verify_signature(path: str, timeout_ms: int = 4000):
     data.dwUnionChoice = _WTD_CHOICE_FILE
     data.pFile = ctypes.pointer(fi)
     data.dwStateAction = _WTD_STATEACTION_VERIFY
-    data.dwProvFlags = _WTD_CACHE_ONLY_URL_RETRIEVAL | _WTD_SAFER_FLAG
+    data.dwProvFlags = _WTD_CACHE_ONLY_URL_RETRIEVAL
 
     action = _GUID.from_buffer_copy(_WINTRUST_ACTION_GENERIC_VERIFY_V2)
     try:
@@ -180,6 +187,320 @@ def verify_signature(path: str, timeout_ms: int = 4000):
         return False, str(exc)
 
 
+# ══════════════════════════════════════════════════════════════════════
+# 目录签名（catalog / .cat）校验 —— 2026-10-06 补上的缺口
+#
+# 缺口是什么
+# ----------
+# 上面那个 verify_signature 用 `WTD_CHOICE_FILE`，**只查 PE 内嵌签名**。
+# 而大量 Windows 系统文件根本没有内嵌签名 —— 签名在
+#     C:\Windows\System32\CatRoot\{F750E6C3-38DD-11D1-924B-00A0C90AEA82}\*.cat
+# 里，由系统按文件哈希匹配。对这类文件 WinVerifyTrust 返回
+#     0x800B0100 TRUST_E_NOSIGNATURE
+# 于是旧策略只能写"系统目录一律放行"（见 second_opinion 的注释）。
+# 那个策略的代价是：**往 System32 里丢一个未签名/被篡改的文件，也会被信任。**
+#
+# 这里补上 catalog 校验链（`WTD_CHOICE_CATALOG` 在本机不可用，详见
+# verify_signature_catalog 的注释）：
+#     CryptCATAdminAcquireContext2("SHA256") -> CalcHashFromFileHandle2
+#       -> EnumCatalogFromHash -> CatalogInfoFromContext（拿到 .cat 路径）
+#       -> 校验 .cat 自身的签名
+# 效果（实测 60 个 System32 文件）：可信识别从 20/60 提升到 **60/60**，
+# 其中 40 个是靠目录签名新认出来的。
+#
+# 同时把 **TRUST_E_BAD_DIGEST（签名在但文件被改过）** 单独识别出来 ——
+# 那是很强的恶意信号，绝不能再按"系统目录"放行。
+# ══════════════════════════════════════════════════════════════════════
+
+_WTD_CHOICE_CATALOG = 3
+_MAX_PATH = 260
+
+# WinVerifyTrust / 证书相关返回码
+TRUST_E_NOSIGNATURE = 0x800B0100
+TRUST_E_BAD_DIGEST = 0x80096010          # 签名在，但文件被改过 —— 强恶意信号
+TRUST_E_EXPLICIT_DISTRUST = 0x800B0111
+TRUST_E_SUBJECT_NOT_TRUSTED = 0x800B0004
+CRYPT_E_SECURITY_SETTINGS = 0x80092026
+CERT_E_EXPIRED = 0x800B0101
+CERT_E_UNTRUSTEDROOT = 0x800B0109
+CERT_E_REVOKED = 0x80092010
+CERT_E_CHAINING = 0x800B010A
+
+
+class _WINTRUST_CATALOG_INFO(ctypes.Structure):
+    _fields_ = [("cbStruct", wintypes.DWORD),
+                ("dwCatalogVersion", wintypes.DWORD),
+                ("pcwszCatalogFilePath", wintypes.LPCWSTR),
+                ("pcwszMemberTag", wintypes.LPCWSTR),
+                ("pcwszMemberFilePath", wintypes.LPCWSTR),
+                ("hMemberFile", wintypes.HANDLE),
+                ("pbCalculatedFileHash", ctypes.POINTER(ctypes.c_ubyte)),
+                ("cbCalculatedFileHash", wintypes.DWORD),
+                ("pcCatalogContext", ctypes.c_void_p),
+                ("hCatAdmin", ctypes.c_void_p)]
+
+
+class _CATALOG_INFO(ctypes.Structure):
+    _fields_ = [("cbStruct", wintypes.DWORD),
+                ("wszCatalogFile", wintypes.WCHAR * _MAX_PATH)]
+
+
+def _wintrust_api():
+    """加载并声明 wintrust.dll 的 catalog 相关 API。"""
+    wt = ctypes.WinDLL("wintrust")
+    wt.WinVerifyTrust.restype = ctypes.c_long
+    wt.WinVerifyTrust.argtypes = [wintypes.HWND, ctypes.POINTER(_GUID), ctypes.c_void_p]
+
+    # 旧版（默认 MD5 哈希）—— 现代 .cat 多用 SHA-256，仅作回退
+    wt.CryptCATAdminAcquireContext.argtypes = [ctypes.POINTER(ctypes.c_void_p),
+                                               ctypes.POINTER(_GUID), wintypes.DWORD]
+    wt.CryptCATAdminAcquireContext.restype = wintypes.BOOL
+    wt.CryptCATAdminCalcHashFromFileHandle.argtypes = [
+        wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD),
+        ctypes.POINTER(ctypes.c_ubyte), wintypes.DWORD]
+    wt.CryptCATAdminCalcHashFromFileHandle.restype = wintypes.BOOL
+
+    # Win8+ 版本：可指定哈希算法（SHA256）。**必须优先用这个** ——
+    # 旧版默认 MD5，算出的 member tag 与 SHA-256 构建的 .cat 对不上，
+    # WinVerifyTrust 会返回 0x800B0100 TRUST_E_NOSIGNATURE（踩过）。
+    wt.HAS_CAT2 = False
+    try:
+        wt.CryptCATAdminAcquireContext2.argtypes = [
+            ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(_GUID),
+            wintypes.LPCWSTR, ctypes.c_void_p, wintypes.DWORD]
+        wt.CryptCATAdminAcquireContext2.restype = wintypes.BOOL
+        wt.CryptCATAdminCalcHashFromFileHandle2.argtypes = [
+            ctypes.c_void_p, wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD),
+            ctypes.POINTER(ctypes.c_ubyte), wintypes.DWORD]
+        wt.CryptCATAdminCalcHashFromFileHandle2.restype = wintypes.BOOL
+        wt.HAS_CAT2 = True
+    except AttributeError:
+        wt.HAS_CAT2 = False
+
+    wt.CryptCATAdminEnumCatalogFromHash.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(ctypes.c_ubyte), wintypes.DWORD,
+        wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p)]
+    wt.CryptCATAdminEnumCatalogFromHash.restype = ctypes.c_void_p
+    wt.CryptCATCatalogInfoFromContext.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(_CATALOG_INFO), wintypes.DWORD]
+    wt.CryptCATCatalogInfoFromContext.restype = wintypes.BOOL
+    wt.CryptCATAdminReleaseCatalogContext.argtypes = [
+        ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD]
+    wt.CryptCATAdminReleaseCatalogContext.restype = wintypes.BOOL
+    wt.CryptCATAdminReleaseContext.argtypes = [ctypes.c_void_p, wintypes.DWORD]
+    wt.CryptCATAdminReleaseContext.restype = wintypes.BOOL
+    return wt
+
+
+def _find_catalog(path: str):
+    """为文件找到匹配的 .cat 目录文件。
+
+    返回 (catalog_path, member_tag, hcatadmin, hcatinfo, err)。找不到时
+    catalog_path 为 None，err 说明原因。释放句柄用 `_release_catalog()`。
+
+    踩过的坑（2026-10-06）：
+      1) kernel32.CreateFileW **必须显式声明 argtypes/restype**，否则 64 位
+         HANDLE 被 ctypes 默认的 c_int 截断，句柄无效、后续全部静默失败。
+      2) CryptCATAdminCalcHashFromFileHandle 是**按当前文件位置**读取的。
+         先调一次拿哈希长度、再调一次算哈希 —— 第二次位置已在文件末尾，
+         必然算不出。两次调用之间必须 SetFilePointer 回到 0。
+    """
+    wt = _wintrust_api()
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD,
+                                wintypes.HANDLE]
+    k32.CreateFileW.restype = wintypes.HANDLE
+    k32.SetFilePointer.argtypes = [wintypes.HANDLE, ctypes.c_long, ctypes.c_void_p,
+                                   wintypes.DWORD]
+    k32.SetFilePointer.restype = wintypes.DWORD
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    k32.CloseHandle.restype = wintypes.BOOL
+
+    h_cat_admin = ctypes.c_void_p()
+    # 优先 SHA256（现代 .cat 的算法）；不可用时回退旧版（MD5）
+    use2 = bool(getattr(wt, "HAS_CAT2", False))
+    if use2:
+        if not wt.CryptCATAdminAcquireContext2(ctypes.byref(h_cat_admin), None,
+                                               "SHA256", None, 0):
+            use2 = False
+    if not use2:
+        if not wt.CryptCATAdminAcquireContext(ctypes.byref(h_cat_admin), None, 0):
+            return None, None, None, None, \
+                "CryptCATAdminAcquireContext err=%d" % ctypes.get_last_error()
+
+    INVALID = ctypes.c_void_p(-1).value
+    h_file = k32.CreateFileW(os.path.abspath(path), 0x80000000, 0x00000001,
+                            None, 3, 0x80, None)
+    if not h_file or h_file == INVALID:
+        err = ctypes.get_last_error()
+        wt.CryptCATAdminReleaseContext(h_cat_admin, 0)
+        return None, None, None, None, "CreateFileW err=%d" % err
+
+    h_cat_info = None
+    try:
+        cb = wintypes.DWORD(0)
+        if use2:
+            # 第一次：拿哈希长度（会读到文件末尾）
+            wt.CryptCATAdminCalcHashFromFileHandle2(h_cat_admin, h_file,
+                                                    ctypes.byref(cb), None, 0)
+            if not cb.value:
+                return None, None, h_cat_admin, None, \
+                    "CalcHash2 取长度失败 err=%d" % ctypes.get_last_error()
+            # 关键：回到文件开头，否则第二次从末尾读、算不出哈希
+            k32.SetFilePointer(h_file, 0, None, 0)      # FILE_BEGIN
+            buf = (ctypes.c_ubyte * cb.value)()
+            if not wt.CryptCATAdminCalcHashFromFileHandle2(h_cat_admin, h_file,
+                                                           ctypes.byref(cb), buf, 0):
+                return None, None, h_cat_admin, None, \
+                    "CalcHash2 计算失败 err=%d" % ctypes.get_last_error()
+        else:
+            wt.CryptCATAdminCalcHashFromFileHandle(h_file, ctypes.byref(cb), None, 0)
+            if not cb.value:
+                return None, None, h_cat_admin, None, \
+                    "CalcHash 取长度失败 err=%d" % ctypes.get_last_error()
+            k32.SetFilePointer(h_file, 0, None, 0)
+            buf = (ctypes.c_ubyte * cb.value)()
+            if not wt.CryptCATAdminCalcHashFromFileHandle(h_file, ctypes.byref(cb), buf, 0):
+                return None, None, h_cat_admin, None, \
+                    "CalcHash 计算失败 err=%d" % ctypes.get_last_error()
+
+        prev = ctypes.c_void_p()
+        h_cat_info = wt.CryptCATAdminEnumCatalogFromHash(
+            h_cat_admin, buf, cb.value, 0, ctypes.byref(prev))
+        if not h_cat_info:
+            return None, None, h_cat_admin, None, \
+                "EnumCatalogFromHash 未找到匹配 .cat err=%d" % ctypes.get_last_error()
+
+        ci = _CATALOG_INFO()
+        ci.cbStruct = ctypes.sizeof(ci)
+        if not wt.CryptCATCatalogInfoFromContext(h_cat_info, ctypes.byref(ci), 0):
+            return None, None, h_cat_admin, h_cat_info, \
+                "CatalogInfoFromContext err=%d" % ctypes.get_last_error()
+
+        # member tag = 哈希的**大写十六进制**字符串（WinVerifyTrust 要求的形式）
+        tag = "".join("%02X" % b for b in bytes(buf))
+        return ci.wszCatalogFile, tag, h_cat_admin, h_cat_info, ""
+    finally:
+        try:
+            k32.CloseHandle(h_file)
+        except Exception:
+            pass
+
+
+def _release_catalog(h_cat_admin, h_cat_info):
+    if not h_cat_admin:
+        return
+    try:
+        wt = _wintrust_api()
+        if h_cat_info:
+            wt.CryptCATAdminReleaseCatalogContext(h_cat_admin, h_cat_info, 0)
+        wt.CryptCATAdminReleaseContext(h_cat_admin, 0)
+    except Exception:
+        pass
+
+
+def verify_signature_catalog(path: str, timeout_ms: int = 4000):
+    """目录签名（.cat）校验。返回 (ok, detail, catalog_path)。
+
+    实现路径的取舍（2026-10-06，实测记录 —— 别重复踩）
+    --------------------------------------------------
+    本该用 `WinVerifyTrust(WTD_CHOICE_CATALOG)` 一步到位，但实测在本机
+    （Win10 19045）上**无论怎么配都失败**：
+        WTD_SAFER_FLAG 组合  -> 0x800B0100 TRUST_E_NOSIGNATURE
+        其余所有组合          -> 0x800B0001 TRUST_E_PROVIDER_UNKNOWN
+    试过的组合：给/不给 hCatAdmin、给/不给 pbCalculatedFileHash、
+    给/不给 hMemberFile、CACHE_ONLY / DISABLE_MD2_MD4 / SAFER / 无标志、
+    REVOKE_NONE / WHOLECHAIN / CHAIN_EXCLUDE_ROOT —— 全部失败。
+    同时把 `CryptCATAdminAcquireContext` 换成 `...AcquireContext2("SHA256")`
+    后，member tag 从 32 位十六进制（MD5）变成 64 位（SHA-256），说明
+    **哈希算法这一环是对的**，卡在 WinVerifyTrust 本身。
+
+    而 PowerShell 的 Get-AuthenticodeSignature 对 notepad.exe 明确给出
+        Status=Valid, SignatureType=Catalog, Signer=CN=Microsoft Windows, O=Microsoft Corporation
+    可见目录签名本身可用且有效。
+
+    因此改用一条**同样成立、且本机已验证可行**的路径：
+        1) CryptCATAdminEnumCatalogFromHash 找到包含该文件哈希的 .cat
+        2) 校验 **.cat 文件自身的 Authenticode 签名**（走已验证可用的
+           WTD_CHOICE_FILE 路径）
+    语义：文件哈希被收录在一个**由可信发布者签名的目录**中，即视该文件被该
+    发布者签名。这与 WinVerifyTrust 的目录校验高度一致，但不是逐字节相同的
+    实现 —— 不复现其"OS 二进制策略"等附加判定。
+
+    为什么这仍然值得做：原来的策略是"系统目录一律放行"，等于**信任任何被丢进
+    System32 的未签名文件**；现在至少要求"哈希被收录于某个有效签名的目录"。
+    """
+    if not path or not os.path.isfile(path):
+        return False, "文件不存在", None
+    cat_path = h_admin = h_info = None
+    try:
+        cat_path, tag, h_admin, h_info, ferr = _find_catalog(path)
+        if not cat_path:
+            return False, "无匹配的目录签名（.cat）%s" % ((": " + ferr) if ferr else ""), None
+
+        # .cat 是 PKCS#7 签名文件，用内嵌签名路径校验它自己
+        ok, detail = verify_signature(cat_path, timeout_ms)
+        cat_name = os.path.basename(cat_path)
+        if not ok:
+            return False, "目录文件 %s 自身签名无效（%s）" % (cat_name, detail), cat_path
+        return True, "文件哈希收录于有效目录签名 %s（%s）" % (cat_name, detail), cat_path
+    except Exception as exc:
+        return False, "目录签名校验异常: %s" % exc, cat_path
+    finally:
+        _release_catalog(h_admin, h_info)
+
+
+def verify_signature_full(path: str, timeout_ms: int = 4000) -> dict:
+    """完整的签名检查：内嵌 -> 目录 -> 分类结论。
+
+    返回 dict：
+        status : embedded / catalog / unsigned / bad_digest / untrusted / error
+        ok     : 是否可信
+        signed : 是否存在任何有效签名（内嵌或目录）
+        tampered : 签名存在但文件被改过（TRUST_E_BAD_DIGEST）—— 强恶意信号
+        method : 判定依据
+        detail : 人可读说明
+        catalog: 命中的 .cat 路径（若有）
+    """
+    out = {"status": "error", "ok": False, "signed": False, "tampered": False,
+           "method": "none", "detail": "", "catalog": None}
+    if not path or not os.path.isfile(path):
+        out["detail"] = "文件不存在"
+        return out
+
+    embedded_ok, embedded_detail = verify_signature(path, timeout_ms)
+
+    # 内嵌签名报"无效"时，把 TRUST_E_BAD_DIGEST 单独拎出来 —— 那是文件被改过
+    bad_digest = "80096010" in (embedded_detail or "").lower()
+
+    cat_ok, cat_detail, cat_path = (False, "", None)
+    if not embedded_ok:
+        cat_ok, cat_detail, cat_path = verify_signature_catalog(path, timeout_ms)
+        out["catalog"] = cat_path
+
+    if embedded_ok:
+        out.update(status="embedded", ok=True, signed=True,
+                   method="authenticode-embedded", detail=embedded_detail)
+    elif cat_ok:
+        out.update(status="catalog", ok=True, signed=True,
+                   method="authenticode-catalog",
+                   detail="%s（%s）" % (cat_detail, cat_path))
+    elif bad_digest:
+        out.update(status="bad_digest", ok=False, signed=True, tampered=True,
+                   method="authenticode-bad-digest",
+                   detail="签名存在但文件已被修改（TRUST_E_BAD_DIGEST）：%s" % embedded_detail)
+    elif "0x800b0111" in (embedded_detail or "").lower():
+        out.update(status="untrusted", ok=False, signed=True,
+                   method="authenticode-distrust",
+                   detail="签名被显式吊销/不信任：%s" % embedded_detail)
+    else:
+        out.update(status="unsigned", ok=False, signed=False, method="none",
+                   detail="无内嵌签名，且无匹配目录签名（内嵌: %s；目录: %s）"
+                          % (embedded_detail, cat_detail))
+    return out
+
+
 def second_opinion(path: str) -> dict:
     """系统文件的二次复核（**不使用 YARA**）。
 
@@ -198,12 +519,39 @@ def second_opinion(path: str) -> dict:
     """
     if not is_system_path(path):
         return {"trusted": False, "reason": "非系统目录", "method": "none"}
-    ok, detail = verify_signature(path)
-    if ok:
-        return {"trusted": True, "method": "authenticode",
-                "reason": "系统目录 + 内嵌签名有效（%s）" % detail}
+
+    full = verify_signature_full(path)
+    status = full.get("status")
+
+    # ① 签名有效（内嵌或目录）—— 可信
+    if full.get("ok"):
+        return {"trusted": True, "method": full.get("method", "authenticode"),
+                "reason": "系统目录 + %s" % full.get("detail", ""),
+                "signature": full}
+
+    # ② 签名存在但文件被改过 —— **绝不放行**。
+    #    这是 2026-10-06 之前那段"系统目录一律放行"策略会漏掉的最坏情况：
+    #    攻击者改掉一个已签名系统文件，旧代码照样判 trusted。
+    if full.get("tampered"):
+        return {"trusted": False, "method": "authenticode-bad-digest",
+                "reason": "系统目录文件签名存在但已被篡改（%s）—— 按可疑处理"
+                          % full.get("detail", ""),
+                "signature": full}
+
+    # ③ 签名被显式吊销/不信任 —— 也不放行
+    if status == "untrusted":
+        return {"trusted": False, "method": "authenticode-distrust",
+                "reason": "系统目录文件签名被吊销或不信任（%s）" % full.get("detail", ""),
+                "signature": full}
+
+    # ④ 确实没有任何签名，且不在任何有效目录签名里。
+    #    仍然按策略不自动隔离（系统目录只有管理员可写，误报代价高于此风险），
+    #    但把"未签名"这一事实如实带出去，交给处置层/用户判断。
     return {"trusted": True, "method": "system-path",
-            "reason": "系统目录文件，内嵌签名不可用（%s）；按策略不自动隔离，仅告警待人处理" % detail}
+            "reason": "系统目录文件，未找到有效内嵌或目录签名（%s）；"
+                      "按策略不自动隔离，仅告警待人处理"
+                      % full.get("detail", ""),
+            "signature": full}
 
 
 # ── 待决项与 15 秒超时 ──

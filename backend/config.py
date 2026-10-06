@@ -105,6 +105,17 @@ BINGDUKU_DIR = _get_bingduku_dir()
 BINGDUKU_MD5_TXT = os.path.join(BINGDUKU_DIR, "扫描-病毒特征库20260419.txt")
 BINGDUKU_DAT = os.path.join(BINGDUKU_DIR, "virus.dat")
 
+# ============ 火绒情报库集成（方案 B：内容字符串匹配，不经 YARA）============
+# 数据在 engine/huorong_data/，由 huorong_extract 从火绒 6.0.12.1 特征库逆向提取。
+# 详见 engine/huorong_intel.py 顶部说明。
+# 内容特征串引擎开关（matcher.dll 不可用时自动停用）
+HUORONG_CONTENT_SIGS_ENABLED = True
+# 内容特征串命中是否允许自动隔离：默认 False = 一律仅告警（不弹窗、不隔离），
+# 对齐项目"宁可漏报，不可滥杀"；置 True 才按字面量长度分档允许处置。
+HUORONG_CONTENT_AUTO_QUARANTINE = False
+# 火绒恶意域名黑名单是否参与网址防护
+HUORONG_URL_BLOCKLIST_ENABLED = True
+
 # 数据库目录（病毒记忆等模块使用）
 # 打包模式下 _internal/ 只读，故落到可写数据目录，避免 disk I/O error；
 # 开发模式沿用原 backend/database，保留既有数据。

@@ -33,6 +33,13 @@ FILE_ACTION_MODIFIED = 3
 FILE_ACTION_RENAMED_OLD = 4
 FILE_ACTION_RENAMED_NEW = 5
 INVALID_HANDLE_VALUE = -1
+# 64 位下 CreateFileW 失败返回 (HANDLE)-1 = 0xFFFFFFFFFFFFFFFF，与 -1 比不中。
+# ctypes 的 HANDLE(c_void_p) restype 把 NULL 转成 None、-1 转成无符号大整数，
+# 所以判定失败必须同时覆盖 None / 0 / -1 / 0xFFFF...，否则失败句柄会被当成有效句柄。
+_INVALID_HANDLE_VALUES = frozenset({
+    None, 0, -1,
+    (1 << (ctypes.sizeof(ctypes.c_void_p) * 8)) - 1,   # 0xFFFFFFFFFFFFFFFF (x64)
+})
 
 # ── 配置 ──
 MONITOR_FILTERS = (
@@ -53,11 +60,28 @@ RT_EVENT_QUEUE_MAX = 10000
 _DEBOUNCE_CACHE_MAX = 50000
 _DEBOUNCE_TTL = DEBOUNCE_MS / 1000 * 4  # 超过 4 倍防抖窗口的条目视为过期
 
+# ── 扫描优先级（游戏模式等场景由 app.py 切换）──
+# "low"    扫描线程降为 BELOW_NORMAL + 每个文件补眠，把 CPU 让给前台
+# "normal" 恢复默认
+# 注：与 scheduler.set_priority 同名同参，游戏模式会同时调用两者（app.py:866）。
+#     此前 RealtimeGuard 没有该方法，AttributeError 被 _init_game_mode 的
+#     except 静默吞掉 —— 游戏模式实际上只降了扫描调度器，没降实时防护。
+PRIORITY_LEVELS = ("low", "normal")
+PRIORITY_SLEEP_S = {"low": 0.02, "normal": 0.0}   # low: 每文件额外补眠
+PRIORITY_WIN32 = {"low": -1, "normal": 0}         # THREAD_PRIORITY_BELOW_NORMAL / NORMAL
+
+# 监控线程读取被打断后的重连退避（秒），封顶 30s
+_RECONNECT_BACKOFF_START = 1.0
+_RECONNECT_BACKOFF_MAX = 30.0
+# 唤醒阻塞中的 ReadDirectoryChangesW 用的探针文件（.tmp 已在排除表里，不会触发扫描）
+_WAKE_PROBE_NAME = ".andun_rt_wake.tmp"
+
 # 默认监控路径
 DEFAULT_WATCH_DIRS = [
     os.path.expandvars(r"%USERPROFILE%\Desktop"),
     os.path.expandvars(r"%USERPROFILE%\Downloads"),
     os.path.expandvars(r"%TEMP%"),
+    os.path.expandvars(r"%APPDATA%"),
 ]
 
 # 排除的扩展名（不扫描）
@@ -87,6 +111,10 @@ if IS_WINDOWS:
     kernel32.CloseHandle.argtypes = [wt.HANDLE]
     kernel32.CloseHandle.restype = wt.BOOL
     kernel32.GetLastError.restype = wt.DWORD
+    # 扫描线程自降优先级（游戏模式）：GetCurrentThread 返回伪句柄 -2
+    kernel32.GetCurrentThread.restype = wt.HANDLE
+    kernel32.SetThreadPriority.argtypes = [wt.HANDLE, ctypes.c_int]
+    kernel32.SetThreadPriority.restype = wt.BOOL
 
     # CreateFileW 常量
     GENERIC_READ = 0x80000000
@@ -115,6 +143,12 @@ class RealtimeGuard:
         self._running = False
         self._monitor_threads: list[threading.Thread] = []
         self._scan_threads: list[threading.Thread] = []
+        # 目录 -> 监控记录 {"stop": Event, "handle": HANDLE|None, "lock": Lock}
+        # 每个目录一条记录：stop 用于要求该目录的监控线程退出（remove/全局 stop），
+        # handle 用于在目录只读、探针写不进去时从外部关句柄取消阻塞中的读取。
+        self._monitors: dict[str, dict] = {}
+        self._monitors_lock = threading.Lock()
+        self._priority = "normal"          # 扫描优先级（游戏模式切换）
         self._event_queue: queue.Queue[dict] = queue.Queue(maxsize=RT_EVENT_QUEUE_MAX)
         self._dropped_events = 0  # 背压丢弃计数（队列满时 put_nowait 抛 Full）
         self._debounce_cache: dict[str, float] = {}  # filepath → last_event_time
@@ -154,12 +188,7 @@ class RealtimeGuard:
         for d in self._watch_dirs:
             if not os.path.isdir(d):
                 continue
-            t = threading.Thread(
-                target=self._monitor_dir_loop, args=(d,), daemon=True,
-                name=f"RTMon-{os.path.basename(d)}"
-            )
-            t.start()
-            self._monitor_threads.append(t)
+            self._spawn_monitor(d)
 
         # 启动扫描线程池
         for i in range(SCAN_THREADS):
@@ -175,8 +204,89 @@ class RealtimeGuard:
     def stop(self):
         self._running = False
         self._stop_event.set()
+        # 先给每个目录的监控记录发停止信号，再逐个唤醒阻塞中的读取，
+        # 否则线程会卡在 ReadDirectoryChangesW 里直到下一个文件变更才退出。
+        with self._monitors_lock:
+            monitors = list(self._monitors.items())
+            self._monitors.clear()
+        for directory, rec in monitors:
+            rec["stop"].set()
+            self._wake_monitor(directory, rec)
+        for _directory, rec in monitors:
+            t = rec.get("thread")
+            if t is not None:
+                t.join(timeout=2.0)
         self._monitor_threads.clear()
         self._scan_threads.clear()
+
+    # ── 监控线程生命周期 ──
+
+    def _spawn_monitor(self, directory: str):
+        """为单个目录创建监控记录并拉起线程（start 与 add_watch_dir 共用）"""
+        rec = {"stop": threading.Event(), "handle": None,
+               "lock": threading.Lock(), "thread": None}
+        with self._monitors_lock:
+            if directory in self._monitors:
+                return False        # 已有记录，不重复起线程
+            self._monitors[directory] = rec
+        t = threading.Thread(
+            target=self._monitor_dir_loop, args=(directory, rec), daemon=True,
+            name=f"RTMon-{os.path.basename(directory)}"
+        )
+        rec["thread"] = t
+        with self._lock:
+            self._monitor_threads.append(t)
+        t.start()
+        return True
+
+    def _wake_monitor(self, directory: str, rec: dict):
+        """唤醒阻塞中的 ReadDirectoryChangesW：往目录写一个探针文件（事件即返回）。
+
+        探针名 .andun_rt_wake.tmp 命中 EXCLUDE_EXTENSIONS，不会进扫描队列；
+        目录只读/已失效时写不进去，退化为从外部关句柄取消阻塞的读取。
+        """
+        woke = False
+        try:
+            probe = os.path.join(directory, _WAKE_PROBE_NAME)
+            with open(probe, "wb"):
+                pass
+            try:
+                os.remove(probe)
+            except OSError:
+                pass
+            woke = True
+        except OSError:
+            woke = False
+
+        if not woke:
+            # 兜底：关句柄取消阻塞中的读取（关掉句柄会让挂起的 ReadDirectoryChangesW 返回）。
+            # 摘句柄在锁内完成并置 None，监控线程 finally 里的 _close_monitor_handle
+            # 就会看到 None —— 两边都靠这个约定保证同一只句柄只关一次。
+            # 线程侧在 stop 置位后不会再下发新读取，因此不存在"关了还拿去用"的窗口。
+            with rec["lock"]:
+                h = rec["handle"]
+                rec["handle"] = None
+            if h:
+                try:
+                    kernel32.CloseHandle(h)
+                except Exception:
+                    pass
+
+    def _retire_monitor(self, directory: str) -> bool:
+        """停止并摘除某个目录的监控（remove_watch_dir 用）"""
+        with self._monitors_lock:
+            rec = self._monitors.pop(directory, None)
+        if rec is None:
+            return False
+        rec["stop"].set()
+        self._wake_monitor(directory, rec)
+        t = rec.get("thread")
+        if t is not None:
+            t.join(timeout=2.0)
+            with self._lock:
+                if t in self._monitor_threads:
+                    self._monitor_threads.remove(t)
+        return True
 
     @property
     def enabled(self) -> bool:
@@ -209,15 +319,13 @@ class RealtimeGuard:
         path = os.path.abspath(path)
         if not os.path.isdir(path):
             return False
-        if path in self._watch_dirs:
+        # 大小写/尾随分隔符不同的同一目录视为同一个，避免起两条监控线程
+        norm = os.path.normcase(path)
+        if any(os.path.normcase(d) == norm for d in self._watch_dirs):
             return True
         self._watch_dirs.append(path)
         if self._running:
-            t = threading.Thread(
-                target=self._monitor_dir_loop, args=(path,), daemon=True
-            )
-            t.start()
-            self._monitor_threads.append(t)
+            self._spawn_monitor(path)
         self._add_event("info", f"新增监控目录: {path}")
         return True
 
@@ -226,84 +334,164 @@ class RealtimeGuard:
         if path not in self._watch_dirs or path in DEFAULT_WATCH_DIRS:
             return False
         self._watch_dirs.remove(path)
+        # 旧实现只摘列表不停线程：监控还在跑、事件还在入队。这里真正停掉线程。
+        self._retire_monitor(path)
         self._add_event("info", f"移除监控目录: {path}")
         return True
 
     def get_watch_dirs(self) -> list[str]:
         return list(self._watch_dirs)
 
+    def set_priority(self, priority: str = "normal") -> str:
+        """设置扫描线程优先级（游戏模式调用，与 scheduler.set_priority 同参）。
+
+        "low" 扫描线程降为 BELOW_NORMAL 且每个文件补眠 20ms，把 CPU 让给前台游戏；
+        "normal" 恢复默认。非法值归一为 normal。返回生效的档位。
+        """
+        level = (priority or "").strip().lower()
+        if level not in PRIORITY_LEVELS:
+            level = "normal"
+        self._priority = level
+        self._add_event("info", f"扫描优先级切换为: {level}")
+        return level
+
     # ── 状态 ──
 
     def get_status(self) -> dict:
         with self._lock:
+            # 只数活着的线程：线程因任何原因退出后不应继续报在监控
+            alive = sum(1 for t in self._monitor_threads if t.is_alive())
             return {
                 "enabled": self._enabled,
                 "running": self._running,
-                "watching_dirs": len(self._monitor_threads),
+                "watching_dirs": alive,
                 "watch_dirs": self._watch_dirs,
+                "priority": self._priority,
                 "stats": dict(self._stats),
                 "recent_events": list(self._events),
             }
 
     # ── 目录监控线程 ──
 
-    def _monitor_dir_loop(self, directory: str):
-        """监控单个目录的变更事件"""
-        try:
-            handle = kernel32.CreateFileW(
-                directory, FILE_LIST_DIRECTORY,
-                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                None, OPEN_EXISTING,
-                FILE_FLAG_BACKUP_SEMANTICS, None
-            )
-            if handle == INVALID_HANDLE_VALUE or not handle:
-                self._add_event("error", f"无法打开目录: {directory}")
-                return
+    @staticmethod
+    def _close_monitor_handle(rec: dict):
+        """关掉记录里保存的目录句柄（幂等，锁内置 None 防双关）"""
+        with rec["lock"]:
+            handle = rec["handle"]
+            rec["handle"] = None
+        if handle:
+            try:
+                kernel32.CloseHandle(handle)
+            except Exception:
+                pass
 
+    def _monitor_dir_loop(self, directory: str, rec: dict):
+        """监控单个目录的变更事件，读取被打断时按退避自动重连。
+
+        旧实现 ReadDirectoryChangesW 返回失败或解析抛异常就 break → CloseHandle →
+        线程结束，**没有任何重连**：一次句柄错误（目录被删/拔盘/权限变化）后该目录
+        就永久失明，而 get_status() 里 watching_dirs 还在报旧数字。这里改成外层
+        重连循环：单次会话存活越久退避越短地重置，连续失败则 1s→30s 退避。
+        """
+        stop = rec["stop"]
+        backoff = _RECONNECT_BACKOFF_START
+        while not stop.is_set() and not self._stop_event.is_set():
+            try:
+                lived = self._monitor_once(directory, rec)
+            except Exception as e:
+                self._add_event("error", f"监控线程异常 [{os.path.basename(directory)}]: {e}")
+                lived = -1.0
+            # 会话因停止而结束：不再重连
+            if stop.is_set() or self._stop_event.is_set():
+                break
+            if lived >= 5.0:
+                backoff = _RECONNECT_BACKOFF_START   # 稳定跑过，重置退避
+            if lived < 0.0:
+                # 打不开目录：可能是暂时的（目录重建中/权限未就绪），退避重试
+                if stop.wait(backoff) or self._stop_event.is_set():
+                    break
+                backoff = min(backoff * 2, _RECONNECT_BACKOFF_MAX)
+                continue
+            self._add_event(
+                "error",
+                f"监控中断 [{os.path.basename(directory)}]，{backoff:.0f}s 后重连"
+            )
+            if stop.wait(backoff) or self._stop_event.is_set():
+                break
+            backoff = min(backoff * 2, _RECONNECT_BACKOFF_MAX)
+
+    def _monitor_once(self, directory: str, rec: dict) -> float:
+        """打开目录并阻塞读取一轮变更；返回本次会话存活秒数，打开失败返回 -1。
+
+        与旧版的差别：句柄存进 rec（供外部关句柄唤醒）、每次读取前清零
+        bytes_returned、退出前在锁内关句柄（与外部唤醒方互斥，不会双关）。
+        """
+        stop = rec["stop"]
+        handle = kernel32.CreateFileW(
+            directory, FILE_LIST_DIRECTORY,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            None, OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS, None
+        )
+        if handle in _INVALID_HANDLE_VALUES:
+            self._add_event("error", f"无法打开目录: {directory}")
+            return -1.0
+        with rec["lock"]:
+            if stop.is_set():
+                # 打开期间已被要求停止：直接关掉，不进入阻塞读取
+                try:
+                    kernel32.CloseHandle(handle)
+                except Exception:
+                    pass
+                return -1.0
+            rec["handle"] = handle
+
+        began = time.time()
+        try:
             buf = ctypes.create_string_buffer(BUFFER_SIZE)
             bytes_returned = wt.DWORD(0)
 
-            while not self._stop_event.is_set():
-                try:
-                    ok = kernel32.ReadDirectoryChangesW(
-                        handle, buf, BUFFER_SIZE, WATCH_SUBTREE,
-                        MONITOR_FILTERS, ctypes.byref(bytes_returned), None, None
-                    )
-                    if not ok:
-                        break
-
-                    offset = 0
-                    while offset < bytes_returned.value:
-                        fni = ctypes.cast(
-                            ctypes.addressof(buf) + offset,
-                            ctypes.POINTER(FILE_NOTIFY_INFORMATION)
-                        ).contents
-
-                        name_len = fni.FileNameLength // 2
-                        if name_len > 0 and name_len < 512:
-                            # 从原始缓冲区读取宽字符串
-                            char_arr = (ctypes.c_wchar * name_len).from_address(
-                                ctypes.addressof(buf) + offset + 12
-                            )
-                            file_name = ''.join(char_arr)
-                        else:
-                            file_name = ""
-
-                        full_path = os.path.join(directory, file_name) if file_name else ""
-
-                        if fni.Action in (FILE_ACTION_ADDED, FILE_ACTION_MODIFIED, FILE_ACTION_RENAMED_NEW):
-                            self._enqueue_file(full_path)
-
-                        if fni.NextEntryOffset == 0:
-                            break
-                        offset += fni.NextEntryOffset
-
-                except Exception:
+            while not stop.is_set() and not self._stop_event.is_set():
+                bytes_returned.value = 0
+                ok = kernel32.ReadDirectoryChangesW(
+                    handle, buf, BUFFER_SIZE, WATCH_SUBTREE,
+                    MONITOR_FILTERS, ctypes.byref(bytes_returned), None, None
+                )
+                if not ok:
+                    # 被外部关句柄唤醒（remove/stop 兜底）属正常退出；
+                    # 其余情况（缓冲区溢出、句柄失效）交给外层重连。
                     break
 
-            kernel32.CloseHandle(handle)
-        except Exception as e:
-            self._add_event("error", f"监控线程异常 [{os.path.basename(directory)}]: {e}")
+                offset = 0
+                while offset < bytes_returned.value:
+                    fni = ctypes.cast(
+                        ctypes.addressof(buf) + offset,
+                        ctypes.POINTER(FILE_NOTIFY_INFORMATION)
+                    ).contents
+
+                    name_len = fni.FileNameLength // 2
+                    if name_len > 0 and name_len < 512:
+                        # 从原始缓冲区读取宽字符串
+                        char_arr = (ctypes.c_wchar * name_len).from_address(
+                            ctypes.addressof(buf) + offset + 12
+                        )
+                        file_name = ''.join(char_arr)
+                    else:
+                        file_name = ""
+
+                    full_path = os.path.join(directory, file_name) if file_name else ""
+
+                    if fni.Action in (FILE_ACTION_ADDED, FILE_ACTION_MODIFIED, FILE_ACTION_RENAMED_NEW):
+                        self._enqueue_file(full_path)
+
+                    if fni.NextEntryOffset == 0:
+                        break
+                    offset += fni.NextEntryOffset
+
+        finally:
+            # 锁内摘句柄：外部 _wake_monitor 可能已经把它关了，这里只负责兜底
+            self._close_monitor_handle(rec)
+        return time.time() - began
 
     def _enqueue_file(self, path: str):
         """文件加入扫描队列（带防抖）"""
@@ -370,7 +558,25 @@ class RealtimeGuard:
                                             QUEUE as decision_queue,
                                             ACTION_QUARANTINE)
 
+        applied_prio = None   # 本线程当前已应用的档位（变化时才调 SetThreadPriority）
+
         while not self._stop_event.is_set():
+            # ── 应用扫描优先级（游戏模式切到 low 时降线程优先级 + 补眠让出 CPU）──
+            prio = self._priority
+            if prio != applied_prio:
+                applied_prio = prio
+                if IS_WINDOWS:
+                    try:
+                        kernel32.SetThreadPriority(
+                            kernel32.GetCurrentThread(), PRIORITY_WIN32.get(prio, 0)
+                        )
+                    except Exception:
+                        pass
+            if PRIORITY_SLEEP_S.get(prio, 0.0) > 0:
+                # 可被 stop 立即打断的睡眠（stop 后 1s 内线程退出）
+                if self._stop_event.wait(PRIORITY_SLEEP_S[prio]):
+                    break
+
             try:
                 item = self._event_queue.get(timeout=1)
             except queue.Empty:

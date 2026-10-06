@@ -96,3 +96,13 @@ backend/engine/data/logs/
 backend/engine/data/sandbox_history.json
 backend/_tmp/
 rtguard/_run.log
+
+# ===== 第三方解包 / 采集数据（不入库）=====
+huorong_extract/
+yara-daily/
+pip-unpack-*/
+backend/engine/huorong_data/
+
+# ===== 运行期日志 / 临时备份（不入库）=====
+backend/_app.log
+*.bak_*

@@ -28,6 +28,10 @@ from config import (
     IDLE_WORKERS_FOREGROUND, SCHED_LOOP_SLEEP_SEC, CLOUD_QUERY_MIN_INTERVAL,
     foreground_active,
 )
+try:
+    from config import HUORONG_CONTENT_SIGS_ENABLED
+except Exception:                      # 配置缺失时保持启用，由引擎自身兜底
+    HUORONG_CONTENT_SIGS_ENABLED = True
 from engine.signature_manager import SignatureManager
 from engine.yara_scanner import YaraScanner
 from engine.dex_parser import DexParser
@@ -60,10 +64,18 @@ class LocalScanner:
     """鉴察引擎（v2.1 P0 优化版）"""
 
     def __init__(self, signature_manager: SignatureManager, yara_scanner: YaraScanner = None,
-                 cloud_scanner=None):
+                 cloud_scanner=None, content_sig=None):
         self.sig_mgr = signature_manager
         self.yara = yara_scanner
         self.cloud = cloud_scanner          # 云查前置引擎（可选）
+        # 火绒内容特征串引擎（方案 B：不经 YARA 的字符串匹配，可选、懒加载单例）
+        self.content_sig = content_sig
+        if self.content_sig is None and HUORONG_CONTENT_SIGS_ENABLED:
+            try:
+                from engine.huorong_intel import get_content_sig_engine
+                self.content_sig = get_content_sig_engine()
+            except Exception:
+                self.content_sig = None
         self.heuristic_engine = get_heuristic_engine()  # 独立启发式引擎（逻辑已抽取）
         self._cancel_flag = threading.Event()  # 全局取消标志（兼容旧接口）
         self._active_cancel: threading.Event | None = None  # 当前活跃扫描的本地取消标志
@@ -73,6 +85,7 @@ class LocalScanner:
         self.perf_stats = {
             "hash_time": 0.0, "yara_time": 0.0, "heuristic_time": 0.0,
             "ml_time": 0.0, "archive_time": 0.0, "signature_time": 0.0,
+            "content_sig_time": 0.0,
             "cache_hits": 0, "cache_misses": 0, "total_scans": 0,
             "total_bytes_read": 0, "total_scan_time": 0.0,
             "threats_found": 0,  # 累计检出威胁数（跨任务）
@@ -506,6 +519,47 @@ class LocalScanner:
                 return threats
         else:
             self._add_perf("yara_time", time.perf_counter() - t_yara)
+
+        # 4.5 火绒内容特征串（方案 B：不经 YARA 的字符串匹配）
+        #     与 YARA 的区别：命中默认只告警（confidence=low），不短路，后续引擎照常跑；
+        #     仅当 config.HUORONG_CONTENT_AUTO_QUARANTINE=True 且字面量够长时才允许处置。
+        t_hr = time.perf_counter()
+        if self.content_sig is not None:
+            hr_hits = self.content_sig.scan_content(data)
+            self._add_perf("content_sig_time", time.perf_counter() - t_hr)
+            if hr_hits:
+                best = hr_hits[0]                       # 已按字面量长度降序
+                confidence = best.get("confidence", "low")
+                hr_level = {"high": "high", "medium": "medium"}.get(best.get("tier"), "low")
+                threats.append({
+                    "path": os.path.abspath(file_path),
+                    "md5": md5_hash,
+                    "sha256": sha256_hash,
+                    "threat_level": hr_level,
+                    "engine": "huorong_sig",
+                    "signature": "Huorong.ContentSig",
+                    "category": "content_signature",
+                    "details": {
+                        "matched_literal": best["literal"][:200],
+                        "literal_length": best["length"],
+                        "hit_count": len(hr_hits),
+                        "matched_literals": [h["literal"][:120] for h in hr_hits],
+                        "source": "huorong_extract",
+                        "file_size": size,
+                    },
+                    # 默认 low -> 处置层降级为仅告警；开启自动处置后才给真实档位
+                    "confidence": confidence,
+                    "quality_reason": "火绒内容特征串命中，字面量 %d 字节" % best["length"],
+                    "action": "quarantine",
+                })
+                # 仅高置信度才短路；默认仅告警时继续走启发式/ML，避免单条字面量一票否决
+                if confidence != "low":
+                    if depth == 0: self._cache_store(sha256_hash, threats)
+                    self._add_perf("total_scans", 1)
+                    self._add_perf("total_scan_time", time.perf_counter() - t0)
+                    return threats
+        else:
+            self._add_perf("content_sig_time", time.perf_counter() - t_hr)
 
         # 5. 通用启发式分析（使用内存缓冲）
         t_heur = time.perf_counter()

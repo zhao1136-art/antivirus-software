@@ -7,8 +7,23 @@
  * 在载荷执行前返回 AMSI_RESULT_DETECTED 实现拦截。
  *
  * 编译: g++ -O2 -shared -o amsi_provider.dll amsi_provider.cpp -lole32 -ladvapi32 -static-libgcc -static-libstdc++
- * 注册: regsvr32 /s amsi_provider.dll  （或直接写注册表）
- * 注册表: HKLM\SOFTWARE\Microsoft\AMSI\Providers\{GUID} = DLL 路径
+ * 注册: regsvr32 /s amsi_provider.dll  （或 python amsi_manager.py register）
+ *
+ * ⚠️ 注册表必须写**三处**，少一处 AMSI 就会整体失效（2026-10-04 修正）：
+ *      HKLM\SOFTWARE\Classes\CLSID\{GUID}                       = Provider 名称
+ *      HKLM\SOFTWARE\Classes\CLSID\{GUID}\InprocServer32        = DLL 全路径
+ *          + ThreadingModel = Both
+ *      HKLM\SOFTWARE\Microsoft\AMSI\Providers\{GUID}            = Provider 名称
+ *
+ *   原因：amsi.dll 是**通过 COM** 加载 Provider 的（枚举 Providers 键拿到 GUID
+ *   后调 CoCreateInstance）。只写 Providers 键、不注册 COM CLSID，会让每次
+ *   AmsiScanBuffer 都去实例化一个不存在的 COM 类 —— 结果是 AmsiInitialize
+ *   直接失败（实测 0x80070002 ERROR_FILE_NOT_FOUND），**全系统 AMSI 内容扫描
+ *   静默失效**，比不注册更糟。原实现就踩了这个坑。
+ *
+ *   另外 Providers 键里放的是 **Provider 名称**，不是 DLL 路径。
+ *   注销时只删自己那条 GUID，**绝不能删 Providers 父键**（那是所有 Provider
+ *   共享的；火绒 6.0.12.1 退出时就把整个父键删掉了，导致本机 AMSI 全废）。
  */
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -57,6 +72,10 @@ static const CLSID CLSID_AndunAmsi =
 // IAmsiProvider IID
 static const IID IID_IAmsiProvider =
     {0x9002CDB8, 0xAC2C, 0x41A4, {0x89, 0x13, 0xEA, 0x85, 0x00, 0x2F, 0xCE, 0x11}};
+
+// Provider 展示名 —— 写进 CLSID 默认值和 AMSI Providers 默认值。
+// 注意：Windows 约定这里放的是**名称**，不是 DLL 路径。
+static const wchar_t PROVIDER_NAME[] = L"YutianAmsiProvider";
 
 static long g_moduleLockCount = 0;
 static volatile LONG g_scanCount = 0;
@@ -249,6 +268,37 @@ private:
 };
 
 // ========================================================================
+// 注册表小工具（供 DllRegisterServer / DllUnregisterServer 使用）
+// ========================================================================
+static LONG SetSz(HKEY root, const wchar_t* sub, const wchar_t* name,
+                  const wchar_t* value) {
+    HKEY k = nullptr;
+    LONG st = RegCreateKeyExW(root, sub, 0, nullptr, 0, KEY_WRITE, nullptr, &k, nullptr);
+    if (st != ERROR_SUCCESS) return st;
+    st = RegSetValueExW(k, name, 0, REG_SZ, (const BYTE*)value,
+                        (DWORD)((wcslen(value) + 1) * sizeof(wchar_t)));
+    RegCloseKey(k);
+    return st;
+}
+
+// 递归删除一个键及其子键（RegDeleteKeyW 只能删空键）
+static void DelTree(HKEY root, const wchar_t* sub) {
+    HKEY k = nullptr;
+    if (RegOpenKeyExW(root, sub, 0, KEY_ALL_ACCESS, &k) == ERROR_SUCCESS) {
+        wchar_t child[256];
+        DWORD n = 256;
+        while (RegEnumKeyExW(k, 0, child, &n, nullptr, nullptr, nullptr, nullptr) == ERROR_SUCCESS) {
+            wchar_t full[1024];
+            swprintf(full, 1024, L"%s\\%s", sub, child);
+            DelTree(root, full);
+            n = 256;
+        }
+        RegCloseKey(k);
+    }
+    RegDeleteKeyW(root, sub);
+}
+
+// ========================================================================
 // DLL 导出
 // ========================================================================
 extern "C" {
@@ -272,32 +322,39 @@ STDAPI DllRegisterServer() {
     DWORD len = GetModuleFileNameW((HMODULE)&DllGetClassObject, dllPath, MAX_PATH);
     if (len == 0 || len >= MAX_PATH) return E_FAIL;
 
-    // 注册 CLSID
     wchar_t clsidKey[128];
-    StringFromGUID2(CLSID_AndunAmsi, clsidKey, 128);
-    // StringFromGUID2 返回 {GUID} 格式，注册表键需要去掉 {} 或用原始格式
-    // AMSI 使用带大括号格式：HKLM\SOFTWARE\Microsoft\AMSI\Providers\{GUID}
+    StringFromGUID2(CLSID_AndunAmsi, clsidKey, 128);   // 形如 {GUID}
 
-    wchar_t amsiKey[256];
-    swprintf(amsiKey, 256, L"SOFTWARE\\Microsoft\\AMSI\\Providers\\%s", clsidKey);
+    wchar_t sub[512];
 
-    HKEY hKey;
-    LONG status = RegCreateKeyExW(HKEY_LOCAL_MACHINE, amsiKey, 0, nullptr, 0,
-                                   KEY_WRITE, nullptr, &hKey, nullptr);
-    if (status != ERROR_SUCCESS) return HRESULT_FROM_WIN32(status);
+    // 1) COM CLSID —— 默认值 = Provider 名称
+    swprintf(sub, 512, L"SOFTWARE\\Classes\\CLSID\\%s", clsidKey);
+    if (SetSz(HKEY_LOCAL_MACHINE, sub, L"", PROVIDER_NAME) != ERROR_SUCCESS) return E_FAIL;
 
-    status = RegSetValueExW(hKey, L"", 0, REG_SZ,
-                            (BYTE*)dllPath, (DWORD)((wcslen(dllPath) + 1) * sizeof(wchar_t)));
-    RegCloseKey(hKey);
-    return status == ERROR_SUCCESS ? S_OK : HRESULT_FROM_WIN32(status);
+    // 2) COM CLSID —— InprocServer32 = DLL 全路径 + ThreadingModel
+    //    这一处缺失正是"注册后 AMSI 反而失效"的根因
+    swprintf(sub, 512, L"SOFTWARE\\Classes\\CLSID\\%s\\InprocServer32", clsidKey);
+    if (SetSz(HKEY_LOCAL_MACHINE, sub, L"", dllPath) != ERROR_SUCCESS) return E_FAIL;
+    if (SetSz(HKEY_LOCAL_MACHINE, sub, L"ThreadingModel", L"Both") != ERROR_SUCCESS) return E_FAIL;
+
+    // 3) AMSI Providers —— 值是 Provider 名称，**不是 DLL 路径**
+    swprintf(sub, 512, L"SOFTWARE\\Microsoft\\AMSI\\Providers\\%s", clsidKey);
+    if (SetSz(HKEY_LOCAL_MACHINE, sub, L"", PROVIDER_NAME) != ERROR_SUCCESS) return E_FAIL;
+
+    return S_OK;
 }
 
 STDAPI DllUnregisterServer() {
     wchar_t clsidKey[128];
     StringFromGUID2(CLSID_AndunAmsi, clsidKey, 128);
-    wchar_t amsiKey[256];
-    swprintf(amsiKey, 256, L"SOFTWARE\\Microsoft\\AMSI\\Providers\\%s", clsidKey);
-    RegDeleteKeyW(HKEY_LOCAL_MACHINE, amsiKey);
+
+    wchar_t sub[512];
+    swprintf(sub, 512, L"SOFTWARE\\Classes\\CLSID\\%s", clsidKey);
+    DelTree(HKEY_LOCAL_MACHINE, sub);
+    swprintf(sub, 512, L"SOFTWARE\\Microsoft\\AMSI\\Providers\\%s", clsidKey);
+    DelTree(HKEY_LOCAL_MACHINE, sub);
+    // ⚠️ 绝不删除 HKLM\SOFTWARE\Microsoft\AMSI\Providers 父键 —— 那是共享键，
+    //    删掉会让所有 Provider（含 Defender/第三方）一起失效。
     return S_OK;
 }
 

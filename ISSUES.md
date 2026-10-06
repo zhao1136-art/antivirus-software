@@ -100,8 +100,8 @@
 文件：`backend\config.py`（原第 244 行）
 
 ```python
-# 修复前
-AVIC_API_KEY = "AVIC-447C8973518745A51A70AE5CD933E4E8"
+# 修复前（密钥已脱敏，不再保留明文）
+AVIC_API_KEY = "AVIC-****REDACTED****"
 ```
 
 **已修复（2026-10-03）**：不再内置明文，改为

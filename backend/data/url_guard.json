@@ -8,7 +8,7 @@
   "whitelist": [
     "baidu.com"
   ],
-  "enabled": false,
+  "enabled": true,
   "checked_count": 3,
   "blocked_count": 3
 }
