@@ -106,3 +106,8 @@ backend/engine/huorong_data/
 # ===== 运行期日志 / 临时备份（不入库）=====
 backend/_app.log
 *.bak_*
+
+# ===== 已从版本库剔除（仅本地保留，不上传）=====
+御天精简版/
+其他/微信图片_*.jpg
+*.bak2
