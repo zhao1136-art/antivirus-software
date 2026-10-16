@@ -33,12 +33,34 @@ import time
 
 __all__ = ["DesktopDecisionWindow", "get_window", "show", "dismiss_all"]
 
-_BG = "#1b1b1d"
-_BG2 = "#131315"
-_FG = "#f2f3f5"
-_DIM = "#8d9199"
-_RED = "#e0483c"
-_RED_HOVER = "#ef5a4e"
+# ── 配色：与 ui_tk/andun_ui/theme.py 对齐 ──
+# 主程序界面已从 WebView2（backend/frontend/*.html）整体换成 Tkinter（ui_tk/），
+# 色板也跟着变了。这个桌面窗口原先用的是旧的火绒风（近黑 + 红），弹出来跟新界面
+# 像是两个软件，所以对齐：
+#
+#     旧（火绒风）      新（ui_tk/andun_ui/theme.py）
+#     #1b1b1d  卡片     BG_CARD        = #13131c
+#     #131315  次级     BG_SIDEBAR     = #0e0e14
+#     #f2f3f5  文字     TEXT_PRIMARY   = #f4f4f9
+#     #8d9199  次文字   TEXT_SECONDARY = #8f8fab
+#     #e0483c  强调红   DANGER         = #ff4d6d
+#     —                 BORDER         = #252536
+#     —                 BG_HOVER       = #1a1a26
+#
+# 为什么不直接 `from andun_ui import theme`：本文件在 backend/engine/ 下，而
+# ui_tk/ 在仓库根（打包后在 _MEIPASS/ui_tk）。跨目录 import 在打包场景里多一个
+# 失败点，而这里只是 7 个颜色常量 —— 复制值更稳。**改了 theme.py 记得同步这里。**
+_BG = "#13131c"          # theme.BG_CARD        卡片底
+_BG2 = "#0e0e14"         # theme.BG_SIDEBAR     行底
+_FG = "#f4f4f9"          # theme.TEXT_PRIMARY
+_DIM = "#8f8fab"         # theme.TEXT_SECONDARY
+_RED = "#ff4d6d"         # theme.DANGER         威胁标记 +「立即隔离」
+_RED_HOVER = "#ff6b85"   # 同色相提亮一档（theme 未定义 hover）
+_BORDER = "#252536"      # theme.BORDER
+_HOVER = "#1a1a26"       # theme.BG_HOVER       「忽略」按钮底
+_HOVER_HI = "#252536"    # 「忽略」悬停
+_GHOST_FG = "#f4f4f9"    # 「忽略」文字
+_ON_DANGER = "#ffffff"   # DANGER 底上的文字
 _GREY = "rgba"  # 占位，不用
 
 
@@ -148,7 +170,7 @@ class DesktopDecisionWindow:
         def _build_row(item):
             pd = item.pd
             f = tk.Frame(rows_holder, bg=_BG2, highlightthickness=1,
-                         highlightbackground="#2b2b2e")
+                         highlightbackground=_BORDER)
             f.pack(fill="x", pady=(6, 0))
 
             name = tk.Label(f, text=(pd.threat_name or "未知威胁"), bg=_BG2, fg=_FG,
@@ -184,8 +206,8 @@ class DesktopDecisionWindow:
                     pass
                 _remove(pd.id)
 
-            _mk("立即隔离", _RED, "#ffffff", _RED_HOVER, lambda: _decide("quarantine"))
-            _mk("忽略", "#2a2a2d", "#c9ccd2", "#37373b", lambda: _decide("ignore"))
+            _mk("立即隔离", _RED, _ON_DANGER, _RED_HOVER, lambda: _decide("quarantine"))
+            _mk("忽略", _HOVER, _GHOST_FG, _HOVER_HI, lambda: _decide("ignore"))
 
             state["rows"][pd.id] = {"frame": f, "left": left, "deadline": pd.deadline,
                                     "total": max(0.1, pd.deadline - pd.created_at)}
