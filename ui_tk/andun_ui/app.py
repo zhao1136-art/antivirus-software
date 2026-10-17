@@ -397,6 +397,7 @@ class App:
         from .pages.clean import CleanPage
         from .pages.engine import EnginePage
         from .pages.history import HistoryPage
+        from .pages.lists import ListsPage
         from .pages.logs import LogsPage
         from .pages.optimize import OptimizePage
         from .pages.overview import OverviewPage
@@ -412,8 +413,8 @@ class App:
         # PrivacyPage 紧跟 ToolsPage：它的开关就在工具页的「增强防护」卡片里，
         # 放一起用户在概念上不会走散。
         order = (OverviewPage, ScanPage, QuarantinePage, CleanPage, OptimizePage,
-                 ToolsPage, PrivacyPage, RecoveryPage, RulesPage, HistoryPage,
-                 EnginePage, LogsPage, SettingsPage)
+                 ToolsPage, PrivacyPage, RecoveryPage, RulesPage, ListsPage,
+                 HistoryPage, EnginePage, LogsPage, SettingsPage)
         for cls in order:
             page = cls(self.container,
                        AppContext(self.root, self.client, self.status,

@@ -107,6 +107,7 @@ def _self_test() -> int:
             from andun_ui.pages.clean import CleanPage
             from andun_ui.pages.engine import EnginePage
             from andun_ui.pages.history import HistoryPage
+            from andun_ui.pages.lists import ListsPage
             from andun_ui.pages.logs import LogsPage
             from andun_ui.pages.optimize import OptimizePage
             from andun_ui.pages.overview import OverviewPage
@@ -128,6 +129,7 @@ def _self_test() -> int:
                 PrivacyPage: "privacy",
                 RecoveryPage: "recovery",
                 RulesPage: "rules",
+                ListsPage: "lists",
                 HistoryPage: "history",
                 EnginePage: "engine",
                 LogsPage: "logs",
@@ -166,6 +168,7 @@ def _self_test() -> int:
             from andun_ui.pages.clean import CleanPage
             from andun_ui.pages.engine import EnginePage
             from andun_ui.pages.history import HistoryPage
+            from andun_ui.pages.lists import ListsPage
             from andun_ui.pages.logs import LogsPage
             from andun_ui.pages.optimize import OptimizePage
             from andun_ui.pages.overview import OverviewPage
@@ -184,12 +187,13 @@ def _self_test() -> int:
             #   只在 on_show 拉一次的：quarantine / optimize / rules / history
             order = (OverviewPage, ScanPage, QuarantinePage, CleanPage,
                      OptimizePage, ToolsPage, PrivacyPage, RecoveryPage, RulesPage,
-                     HistoryPage, EnginePage, LogsPage, SettingsPage)
+                     ListsPage, HistoryPage, EnginePage, LogsPage, SettingsPage)
             expects_timer = {
                 OverviewPage: True, ScanPage: False, QuarantinePage: False,
                 CleanPage: False, OptimizePage: False, ToolsPage: True,
                 PrivacyPage: True,
                 RecoveryPage: False, RulesPage: False, HistoryPage: False,
+                ListsPage: True,
                 EnginePage: True, LogsPage: True, SettingsPage: True,
             }
 

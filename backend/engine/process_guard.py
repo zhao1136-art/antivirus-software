@@ -97,6 +97,15 @@ class ProcessGuard:
             self._whitelist.add(name.lower())
             self._blacklist.discard(name.lower())
 
+    def remove_from_whitelist(self, name: str):
+        """从白名单移除。
+
+        补这个方法是因为原先只有 add_to_whitelist 没有对应的 remove ——
+        加进白名单之后就撤不回来了（黑名单那边 add/remove 是成对的）。
+        """
+        with self._lock:
+            self._whitelist.discard(name.lower())
+
     def get_lists(self) -> dict:
         with self._lock:
             return {

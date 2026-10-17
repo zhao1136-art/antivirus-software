@@ -856,6 +856,51 @@ class ApiClient:
     def shutdown(self) -> ApiResult:
         return self.post("/api/v1/shutdown")
 
+    # ── 白名单（文件/哈希级，policy_manager）──
+    # 结构：{paths:[{path,note,added}], hashes:[{hash,path,note,added}],
+    #        processes:[...], publishers:[...]}
+    # ⚠️ add 的 category 只认 "paths" / "hashes"（见 app.py 的 whitelist_add）——
+    #    传别的值后端会返回 {"error": ...}。
+
+    def whitelist(self) -> ApiResult:
+        return self.get("/api/v1/whitelist")
+
+    def whitelist_add(self, category: str, value: str, note: str = "") -> ApiResult:
+        """category ∈ paths(路径) / hashes(文件哈希；value 传文件路径，后端自己算 SHA256)"""
+        return self.post("/api/v1/whitelist/add",
+                         {"category": str(category), "value": str(value),
+                          "note": str(note)})
+
+    def whitelist_remove(self, category: str, value: str) -> ApiResult:
+        return self.post("/api/v1/whitelist/remove",
+                         {"category": str(category), "value": str(value)})
+
+    def whitelist_check(self, path: str = "", file_hash: str = "") -> ApiResult:
+        """→ {whitelisted: bool}"""
+        return self.post("/api/v1/whitelist/check",
+                         {"path": str(path), "hash": str(file_hash)})
+
+    # ── 进程黑白名单（process_guard）──
+    # get_lists → {blacklist:[名字...], whitelist:[名字...]}
+    # 两边互斥：加进白名单会同时从黑名单摘掉，反之亦然（见 process_guard.py）。
+    # 传的是**进程名**（如 notepad.exe），不是完整路径。
+
+    def process_lists(self) -> ApiResult:
+        return self.get("/api/v1/process-guard/lists")
+
+    def process_blacklist_add(self, name: str) -> ApiResult:
+        return self.post("/api/v1/process-guard/blacklist-add", {"name": str(name)})
+
+    def process_blacklist_remove(self, name: str) -> ApiResult:
+        return self.post("/api/v1/process-guard/blacklist-remove", {"name": str(name)})
+
+    def process_whitelist_add(self, name: str) -> ApiResult:
+        return self.post("/api/v1/process-guard/whitelist-add", {"name": str(name)})
+
+    def process_whitelist_remove(self, name: str) -> ApiResult:
+        # 这条路由是 2026-10-17 补的：原先只有 whitelist-add，加进去就撤不回来。
+        return self.post("/api/v1/process-guard/whitelist-remove", {"name": str(name)})
+
 
 
 def run_async(widget, work: Callable[[], Any],

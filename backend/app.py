@@ -39,200 +39,54 @@ def _mark(step: str):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 内置浏览器（内嵌 WebView2）启动支持
+# 界面：Tkinter（ui_tk/）—— 内嵌 WebView2 链路已移除
 # ══════════════════════════════════════════════════════════════════════════
-# 背景 / 根因（2026-10-04 实测确认）：
-#   pywebview 在 Windows 上唯一可用的内嵌后端（edgechromium → winforms）依赖
-#   pythonnet；pythonnet.load() 用
-#       Path(__file__).parent / "runtime" / "Python.Runtime.dll"
-#   定位托管程序集，再交给 clr_loader 的 netfx 宿主 (ClrLoader.dll) 走
-#   Assembly.LoadFrom 载入。
+# 历史：本程序原先用 pywebview + 内嵌 WebView2 承载 HTML 界面。那条链路要求
+#   pythonnet + WebView2 运行时，而且 Python.Runtime.dll / WebView2.Core.dll 的
+#   **物理路径**只要落在工作区 H:\Caelire\ 之下，.NET 的 Assembly.LoadFrom /
+#   FileLoadException 就会失败（对照实验见 git 历史）。当时是靠把这两个 runtime
+#   复制到 %LOCALAPPDATA%\Andun\runtime\pyrt\ 再改 __file__ 指过去绕开的。
 #
-#   当该 DLL 的**物理路径位于工作区 H:\Caelire\ 之下**时，Assembly.LoadFrom 失败，
-#   clr_loader 抛：
-#       RuntimeError: Failed to resolve Python.Runtime.Loader.Initialize
-#   → pywebview 初始化 winforms 后端失败 → 程序回退到系统默认浏览器。
-#
-#   对照实验（同一份字节、同一解释器）：
-#       H:\Caelire\backend\libs\pythonnet\runtime   → 失败
-#       H:\clrtest_probe\pythonnet\runtime          → 成功（复制件）
-#       H:\probe3\pythonnet\runtime                 → 成功
-#       C:\...                                      → 成功
-#       %LOCALAPPDATA%\...                          → 成功
-#       （用 junction 指向 libs 保持真实路径仍在 H:\Caelire 下 → 仍然失败；
-#         同一目录改成复制 → 成功。故与内容无关，只与物理路径有关。）
-#   打包产物位于 H:\Caelire\backend\dist\ 之下，因此 exe 一启动就走回退分支。
-#
-# 修复：启动时把 <pythonnet>/runtime 复制到 %LOCALAPPDATA%\Andun\runtime\pyrt\，
-#       并把 pythonnet.__file__ 指向该副本，让 load() 从"好路径"加载。
-#       实测：只需暂存 runtime（clr_loader 的位置无关）。
-_UI_STATE = {"window": None}
-
-
-def _stage_pythonnet_runtime() -> bool:
-    """把 pythonnet 的 runtime 目录复制到工作区之外，规避 Assembly.LoadFrom 失败。
-
-    返回 True 表示已把 pythonnet.__file__ 重定向到暂存副本。
-    """
-    try:
-        import shutil
-        from pathlib import Path as _Path
-        import pythonnet as _pn
-
-        src = _Path(_pn.__file__).parent / "runtime"
-        src_dll = src / "Python.Runtime.dll"
-        if not src_dll.is_file():
-            _log_startup(f"[clr] 未找到 {src_dll}，跳过暂存")
-            return False
-
-        local = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
-        stage_root = _Path(local) / "Andun" / "runtime" / "pyrt"
-        dst = stage_root / "pythonnet" / "runtime"
-        dst_dll = dst / "Python.Runtime.dll"
-
-        need_stage = True
-        try:
-            if (dst_dll.is_file()
-                    and dst_dll.stat().st_size == src_dll.stat().st_size
-                    and dst_dll.stat().st_mtime >= src_dll.stat().st_mtime):
-                need_stage = False
-        except Exception:
-            need_stage = True
-
-        if need_stage:
-            shutil.rmtree(str(stage_root), ignore_errors=True)
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(str(src), str(dst))
-            _log_startup(f"[clr] pythonnet runtime 已暂存 -> {dst}")
-
-        _pn.__file__ = str(stage_root / "pythonnet" / "__init__.py")
-        _log_startup(f"[clr] pythonnet.__file__ 重定向 -> {_pn.__file__}")
-        return True
-    except Exception:
-        _log_startup("[clr] 暂存 pythonnet runtime 失败:\n" + traceback.format_exc())
-        return False
-
-
-def _stage_webview_package() -> str:
-    """把 pywebview 包（关键是其中的 lib/*.dll）复制到工作区之外。
-
-    webview/util.py:489 用
-        os.path.dirname(os.path.realpath(__file__)) + '/lib/' + dll_name
-    定位 Microsoft.Web.WebView2.Core.dll 等托管程序集；这些 DLL 若位于
-    H:\\Caelire\\ 之下，.NET 会抛
-        FileLoadException: ... HRESULT:0x80131515（Operation is not supported）
-    与 pythonnet 那次是同一类问题。
-
-    返回暂存后的 webview 包目录（失败返回空串）。
-    """
-    try:
-        import shutil
-        import webview as _wv_pkg
-
-        src = os.path.dirname(os.path.realpath(_wv_pkg.__file__))
-        local = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
-        stage_root = os.path.join(local, "Andun", "runtime", "pyrt")
-        dst = os.path.join(stage_root, "webview")
-
-        if os.path.isdir(src):
-            shutil.rmtree(dst, ignore_errors=True)
-            os.makedirs(stage_root, exist_ok=True)
-            shutil.copytree(src, dst)
-            _log_startup(f"[webview] 包已暂存 -> {dst}")
-
-        stage_lib = os.path.join(dst, "lib")
-        if os.path.isdir(stage_lib) and stage_lib not in sys.path:
-            sys.path.insert(0, stage_lib)
-        # 无论 Python 代码来自源码目录还是打包的 PYZ，都把 util 的 __file__
-        # 指向暂存副本，使 dll_path 解析到"好路径"的 lib/。
-        try:
-            import webview.util as _wv_util
-            _wv_util.__file__ = os.path.join(dst, "util.py")
-        except Exception:
-            pass
-        return dst
-    except Exception:
-        _log_startup("[webview] 暂存失败:\n" + traceback.format_exc())
-        return ""
-
-
-def _prepare_embedded_browser() -> bool:
-    """让内嵌浏览器可用：暂存 pythonnet runtime + webview 包，并预加载 clr。
-
-    必须在 `import webview`（以及 webview.start）之前调用，返回内嵌后端是否可用。
-    """
-    try:
-        _stage_pythonnet_runtime()
-        import clr  # noqa: F401  触发 pythonnet.load()，失败会抛异常
-        _log_startup("[clr] pythonnet/.NET 已就绪")
-
-        stage = _stage_webview_package()
-        if stage:
-            # 若 webview 已被导入（开发模式下 logo_splash 等可能提前拉过），
-            # 清掉缓存让后续 `import webview` 走暂存副本。
-            for _m in [_k for _k in list(sys.modules)
-                       if _k == "webview" or _k.startswith("webview.")]:
-                del sys.modules[_m]
-            sys.path.insert(0, os.path.dirname(stage))
-
-        _log_startup("[clr] 内置浏览器依赖已就绪")
-        return True
-    except Exception:
-        _log_startup("[clr] pythonnet/.NET 不可用:\n" + traceback.format_exc())
-        return False
-
-
-def _launch_app_window(url: str) -> bool:
-    """兜底：用 Chromium/Edge 的 --app 模式开一个无标签栏、无地址栏的独立窗口。
-
-    仍保持"应用窗口"形态（而不是在默认浏览器里开标签页）。
-    """
-    try:
-        import subprocess
-
-        cands = []
-        for env in ("ProgramFiles(x86)", "ProgramFiles", "LOCALAPPDATA"):
-            base = os.environ.get(env)
-            if not base:
-                continue
-            cands.append(os.path.join(base, "Microsoft", "Edge", "Application", "msedge.exe"))
-            cands.append(os.path.join(base, "Google", "Chrome", "Application", "chrome.exe"))
-        exe = next((c for c in cands if os.path.isfile(c)), None)
-        if not exe:
-            return False
-
-        local = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
-        profile = os.path.join(local, "Andun", "webview_profile")
-        os.makedirs(profile, exist_ok=True)
-
-        subprocess.Popen(
-            [exe, f"--app={url}", "--window-size=1100,700",
-             f"--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check"],
-            close_fds=True,
-        )
-        _log_startup(f"[ui] 已用 --app 无边框窗口承载界面: {exe}")
-        return True
-    except Exception:
-        _log_startup("[ui] --app 窗口启动异常:\n" + traceback.format_exc())
-        return False
+# 现在界面改为 ui_tk/ 下的 Tkinter 实现（纯标准库，零第三方依赖），因此：
+#   · 不再需要 pythonnet / WebView2 / clr_loader
+#   · 不再需要 runtime 暂存与 sys.modules 清洗
+#   · 不再有 splash 启动画面 —— Tk 窗口自身就是启动流程
+# 上述暂存与兜底函数（_stage_pythonnet_runtime / _stage_webview_package /
+# _prepare_embedded_browser / _launch_app_window）已全部删除。
+# frontend/ 下的 HTML 版界面仍可用 frontend_launcher.py 单独打开做对照。
+_UI_STATE = {"window": None, "app": None}
 
 
 def _show_main_window() -> bool:
-    """把已创建的内嵌主窗口重新显示并置前；没有内嵌窗口时返回 False。"""
-    win = _UI_STATE.get("window")
-    if win is None:
+    """把 Tk 主窗口重新显示并置前（托盘菜单「显示」用）。
+
+    Tk 不是线程安全的：托盘回调跑在自己的线程里，所以**不能直接**操作
+    widget，必须用 ``root.after(0, ...)`` 把动作派发回 Tk 的主线程执行。
+    """
+    app = _UI_STATE.get("app")
+    root = getattr(app, "root", None) if app is not None else None
+    if root is None:
         return False
-    for fn in ("show", "restore"):
+
+    def _raise():
         try:
-            getattr(win, fn)()
+            root.deiconify()
         except Exception:
             pass
+        try:
+            root.lift()
+        except Exception:
+            pass
+        try:
+            root.focus_force()
+        except Exception:
+            pass
+
     try:
-        win.on_top = True
-        win.on_top = False
+        root.after(0, _raise)
+        return True
     except Exception:
-        pass
-    return True
+        return False
 
 def _startup_excepthook(tp, val, tb):
     _log_startup("=== STARTUP TRACEBACK ===" + "\n" + "".join(traceback.format_exception(tp, val, tb)))
@@ -835,12 +689,15 @@ def _init_tray_icon():
     """初始化系统托盘"""
     try:
         def on_show():
-            """显示内置浏览器窗口（没有内嵌窗口时才退回系统浏览器）"""
+            """唤起 Tk 主窗口。
+
+            不再兜底去开系统浏览器 —— 界面就在本进程内，开浏览器只会多出一个
+            重复的 HTML 页面，反而不清楚哪个在生效。
+            """
             if _show_main_window():
-                print("[御天] 已唤起内置浏览器窗口")
-                return
-            import webbrowser
-            webbrowser.open("http://127.0.0.1:8899")
+                print("[御天] 已唤起 Tk 界面")
+            else:
+                print("[御天] Tk 界面未就绪，无法唤起")
 
         def on_exit():
             """退出程序（Logo 淡出 + 资源释放 + 进程退出）"""
@@ -1270,9 +1127,15 @@ async def scan_perf_stats():
             "generic_rules": len(scheduler.yara._rules_generic) if scheduler.yara else 0,
         }
         stats["yara"] = yara_info
+        # ⚠️ 这里原来直接写裸名 MAX_WORKERS / MAX_FILE_SIZE —— 但那两个名字定义在
+        #    config.py（第 175 / 184 行），app.py 只有选择性导入（from config import
+        #    QUARANTINE_DIR 之类）、**没有 star import**，所以它们是未定义名：
+        #    抛 NameError → 被本函数的 except 吞掉 → 整个接口恒定返回 500。
+        #    表现为 /api/v1/scan/perf-stats 的 yara / realtime_queue / config 全部拿不到。
+        import config as _cfg
         stats["config"] = {
-            "max_workers": MAX_WORKERS,
-            "max_file_size_mb": MAX_FILE_SIZE // (1024 * 1024),
+            "max_workers": _cfg.MAX_WORKERS,
+            "max_file_size_mb": _cfg.MAX_FILE_SIZE // (1024 * 1024),
             "buffer_limit_mb": 32,
             "cache_size": 512,
             "cache_ttl_seconds": 300,
@@ -4017,6 +3880,16 @@ async def process_guard_whitelist_add(data: dict):
     process_guard_tool.add_to_whitelist(name)
     return {"success": True}
 
+
+# 原先只有 whitelist-add 没有 remove —— 加进白名单就撤不回来（黑名单那边
+# 一直是有 add/remove 一对的）。补上，否则"名单管理"里白名单每项都会是个死条目。
+@app.post("/api/v1/process-guard/whitelist-remove")
+async def process_guard_whitelist_remove(data: dict):
+    """移除进程白名单"""
+    name = data.get("name", "")
+    process_guard_tool.remove_from_whitelist(name)
+    return {"success": True}
+
 # ── 注册表监控 ──
 
 @app.get("/api/v1/registry-guard/status")
@@ -4175,13 +4048,59 @@ def _start_self_protection():
 #  Logo 退出流程（淡出动画 + 资源释放 + 进程退出）
 # ══════════════════════════════════════════════════════════════
 
+def _shutdown_and_exit(code: int = 0):
+    """统一的收尾流程：保存状态 → 释放引擎资源 → 写正常退出标记 → 退出进程。"""
+    # 1. 保存配置
+    try:
+        save_config_save({
+            "protection": _protection_modules,
+            "features": _feature_toggles,
+        })
+    except Exception:
+        pass
+
+    # 2. 保存守护天数
+    #    原写法是：
+    #        save_guard_days(load_guard_days() if 'load_guard_days' in dir() else _guard_data)
+    #    ⚠️ 更正（先前我判断错了）：`_guard_data` 在模块层**是存在的**
+    #    （第 115 行 `_guard_data = update_guard_days()`），所以这句不会抛异常、
+    #    守护天数**确实保存了**。真正的问题是这个三元表达式**永远走 else 分支**：
+    #    `dir()` 在函数内返回的是**局部**名字，而 `load_guard_days` 不在这个函数的
+    #    局部里，条件恒为假 → 存的始终是模块级启动快照 `_guard_data`，
+    #    左边那个 `load_guard_days()` 是死代码。
+    #    影响很有限（该值本就只在启动时更新一次），但语义与代码意图不符。
+    #    这里显式导入，改成退出时重新读取。
+    try:
+        from persistence import load_guard_days
+        save_guard_days(load_guard_days())
+    except Exception:
+        pass
+    print("[御天] 状态已保存")
+
+    # 3. 释放引擎资源
+    try:
+        from engine_loader import release_engine_resources
+        release_engine_resources()
+    except Exception:
+        pass
+
+    # 4. 正常退出标记 + 退出进程
+    print("[御天] 再见")
+    try:
+        import tempfile
+        clean_exit = os.path.join(tempfile.gettempdir(), ".andun_clean_exit")
+        with open(clean_exit, 'w') as f:
+            f.write('1')
+    except Exception:
+        pass
+    os._exit(code)
+
+
 def _do_exit_with_fadeout():
-    """
-    关闭程序时统一退出流程：
-    1. 保存所有状态（配置、守护天数）
-    2. 显示 Logo 淡出动画
-    3. 动画期间释放引擎资源
-    4. 动画结束后彻底退出进程
+    """统一的退出入口（托盘菜单 on_exit 与 POST /api/v1/shutdown 都在调它）。
+
+    函数名里的 "fadeout" 已经名不副实 —— Logo 淡出是 webview 时代的产物，
+    随 webview 链路一起删掉了。保留旧名字只是为了不改两个调用点。
     """
     # 诊断：后端一整天在"自己消失"，日志里只有 [御天] 再见、没有任何 HTTP
     # 请求痕迹，说明是进程内部某处调了这里。把调用栈打出来，一次就能点名。
@@ -4192,41 +4111,7 @@ def _do_exit_with_fadeout():
         print("[御天][诊断] 调用栈结束")
     except Exception:
         pass
-    # 1. 保存状态
-    print("[御天] 正在保存状态...")
-    try:
-        save_config_save({
-            "protection": _protection_modules,
-            "features": _feature_toggles,
-        })
-    except Exception:
-        pass
-    try:
-        save_guard_days(load_guard_days() if 'load_guard_days' in dir() else _guard_data)
-    except Exception:
-        pass
-    print("[御天] 状态已保存")
-
-    # 2. 显示 Logo 淡出动画 & 释放资源
-    from logo_splash import show_exit_fadeout
-    from engine_loader import release_engine_resources
-
-    def _on_fadeout_done():
-        """淡出动画完成后彻底退出"""
-        print("[御天] 再见")
-        # 写入正常退出标记，防止守护进程误判为崩溃而重启
-        import tempfile
-        clean_exit = os.path.join(tempfile.gettempdir(), ".andun_clean_exit")
-        try:
-            with open(clean_exit, 'w') as f:
-                f.write('1')
-        except Exception:
-            pass
-        os._exit(0)
-
-    # 启动淡出动画（独立线程），同时释放资源
-    show_exit_fadeout(on_complete=_on_fadeout_done)
-    release_engine_resources()
+    _shutdown_and_exit(0)
 
 
 # ==================== 健康检查与监控 ====================
@@ -4863,6 +4748,128 @@ async def sandbox_stats():
         return {'enabled': False, 'analysis_count': 0, 'recent_reports': []}
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# 启动辅助：界面定位 / 后台服务 / 就绪等待 / 退出保存
+# ══════════════════════════════════════════════════════════════════════════
+
+UI_BASE_URL = "http://127.0.0.1:8899"
+BACKEND_PORT = 8899
+
+
+def _find_ui_tk_dir() -> str:
+    """定位 ``ui_tk`` 目录（需含 run_ui.py）。
+
+    开发模式在仓库根；打包模式在 ``sys._MEIPASS`` 下 —— 前提是 spec 把 ui_tk
+    作为 datas 收进去了，否则打包版会报找不到界面目录并退出。
+    """
+    base = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(os.path.dirname(base), "ui_tk"),   # 仓库根/ui_tk
+        os.path.join(base, "ui_tk"),                    # backend/ui_tk
+    ]
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", "") or ""
+        if meipass:
+            candidates.insert(0, os.path.join(meipass, "ui_tk"))
+    for cand in candidates:
+        if os.path.isfile(os.path.join(cand, "run_ui.py")):
+            return os.path.normpath(cand)
+    return ""
+
+
+def _start_uvicorn_thread(port: int = BACKEND_PORT):
+    """在守护线程里跑 uvicorn（Tk 界面通过 HTTP 访问它）。"""
+    import threading as _th
+
+    import uvicorn
+
+    def _run_server():
+        uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+
+    thread = _th.Thread(target=_run_server, daemon=True, name="uvicorn-server")
+    thread.start()
+    return thread
+
+
+def _start_aux_services():
+    """网络监控 / 实时文件守护 / 破军引擎状态。"""
+    try:
+        from engine.network_monitor import get_network_monitor
+        nm = get_network_monitor()
+        nm.start_monitor(interval=10)
+    except Exception:
+        pass
+
+    try:
+        from engine.file_guard_client import get_guard
+        guard = get_guard()
+        guard.start()
+    except Exception:
+        pass
+
+    try:
+        from engine.native_bridge import get_native_engine
+        native_eng = get_native_engine()
+        if native_eng.available():
+            ver = native_eng.version()
+            print(f"[破军引擎] 破军引擎已加载: {ver.get('version', 'unknown')}")
+        else:
+            print("[破军引擎] 破军引擎DLL未找到，使用Python回退方案")
+    except Exception as e:
+        print(f"[破军引擎] 初始化失败: {e}")
+
+
+def _wait_http_ready(url: str = UI_BASE_URL, timeout: float = 40.0) -> bool:
+    """等 FastAPI 真正开始监听。等不到返回 False（不抛）。"""
+    import urllib.error
+    import urllib.request
+
+    deadline = time.time() + max(1.0, float(timeout))
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(url + "/api/health", timeout=1.0) as resp:
+                if 200 <= getattr(resp, "status", 200) < 500:
+                    return True
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError, TimeoutError):
+            time.sleep(0.3)
+    return False
+
+
+def _register_exit_save_hook():
+    """atexit：保存配置 / 守护天数 / 清理缓存。
+
+    与 ``_shutdown_and_exit`` 里同样的更正：原写法
+        save_guard_days(load_guard_days() if 'load_guard_days' in dir() else _guard_data)
+    不会抛异常（``_guard_data`` 是模块级变量，确实存在），守护天数也确实保存了；
+    但三元条件在函数内恒为假，`load_guard_days()` 那句是死代码，实际存的是启动快照。
+    这里改为退出时重新读取。
+    """
+    import atexit
+
+    @atexit.register
+    def _on_exit_save_all():
+        try:
+            save_config_save({
+                "protection": _protection_modules,
+                "features": _feature_toggles,
+            })
+        except Exception:
+            pass
+        try:
+            from persistence import load_guard_days
+            save_guard_days(load_guard_days())
+        except Exception:
+            pass
+        try:
+            cache_cleanup()
+        except Exception:
+            pass
+        try:
+            print("[御天] 状态已保存")
+        except Exception:
+            pass
+
+
 if __name__ == "__main__":
     import sys
     # 冻结窗口程序下 stdout/stderr 为 None, uvicorn 日志访问 .isatty() 会崩溃
@@ -4879,79 +4886,8 @@ if __name__ == "__main__":
         ret = _run_watchdog_mode()
         sys.exit(ret if ret else 0)
 
-    # ⚠️ 内置浏览器准备必须放在**任何 `import webview` 之前**：
-    #    它会清掉 sys.modules 里的 webview 缓存并把暂存副本插到 sys.path 最前，
-    #    这样 splash 窗口与主窗口才会注册在同一个（暂存后的）webview 模块上。
-    #    若放在后面，_wv.create_window 用旧模块、webview.start 用新模块，
-    #    窗口会"创建了但没人认识"。
-    _mark("准备内置浏览器(pythonnet runtime + webview 包暂存)")
-    _UI_STATE["embedded_ready"] = _prepare_embedded_browser()
-    _mark(f"内置浏览器准备完成: {'OK' if _UI_STATE['embedded_ready'] else 'UNAVAILABLE'}")
-
-    import atexit
     import os
     import threading
-    import time
-
-    # ── Logo 启动画面 + 引擎后台并行加载 ──
-    _mark("导入 logo_splash / engine_loader / webview")
-    from logo_splash import LogoSplash, get_splash_html, FADE_OUT_MS
-    from engine_loader import load_engine_resources
-    import webview as _wv
-
-    splash = LogoSplash()
-
-    # 后台线程加载引擎资源（与 Logo 动画并行）
-    _engine_thread = threading.Thread(
-        target=load_engine_resources,
-        args=(splash.set_status, splash.mark_engine_loaded),
-        daemon=True
-    )
-    _engine_thread.start()
-
-    # 创建 splash 窗口（在 webview.start 前创建，start 后自动显示）
-    splash_window = _wv.create_window(
-        title="御天",
-        html=get_splash_html(),
-        width=340,
-        height=380,
-        resizable=False,
-        frameless=True,
-        easy_drag=False,
-        on_top=True,
-    )
-
-    def _on_splash_loaded():
-        """splash 页面加载完成后标记淡入完成"""
-        threading.Timer(0.6, splash._fade_in_done.set).start()
-    splash_window.events.loaded += _on_splash_loaded
-
-    # 让 splash 对象引用窗口（用于 set_status 更新状态文字）
-    splash.set_window(splash_window)
-
-    # ── 注册退出钩子：程序退出时保存所有状态 ──
-    @atexit.register
-    def _on_exit_save_all():
-        """程序退出时自动保存配置、守护天数、清理缓存"""
-        try:
-            # 保存防护模块状态
-            save_config_save({
-                "protection": _protection_modules,
-                "features": _feature_toggles,
-            })
-        except Exception:
-            pass
-        try:
-            # 保存当前守护天数
-            save_guard_days(load_guard_days() if 'load_guard_days' in dir() else _guard_data)
-        except Exception:
-            pass
-        try:
-            # 清理过期缓存
-            cache_cleanup()
-        except Exception:
-            pass
-        print("[御天] 状态已保存")
 
     # 开发模式：添加 libs 目录到搜索路径
     if not getattr(sys, 'frozen', False):
@@ -4959,155 +4895,62 @@ if __name__ == "__main__":
         if os.path.isdir(libs_dir):
             sys.path.insert(0, libs_dir)
 
-    import uvicorn
-    import webview
+    # ── 界面：Tk（ui_tk/）。内嵌 WebView2 链路已移除，见文件顶部说明 ──
+    _mark("定位 ui_tk 界面目录")
+    _UI_TK_DIR = _find_ui_tk_dir()
+    if not _UI_TK_DIR:
+        _log_startup("找不到 ui_tk 目录（需含 run_ui.py），无法启动界面")
+        print("[御天] 严重错误：找不到 ui_tk 界面目录（需含 run_ui.py）")
+        sys.exit(2)
+    _mark(f"ui_tk = {_UI_TK_DIR}")
+    if _UI_TK_DIR not in sys.path:
+        sys.path.insert(0, _UI_TK_DIR)
 
-    # 后台启动 FastAPI
-    def run_server():
-        uvicorn.run(app, host="127.0.0.1", port=8899, log_level="warning")
+    _mark("导入 ui_tk 界面")
+    from andun_ui.app import App as TkApp
+    from engine_loader import load_engine_resources
 
-    server_thread = threading.Thread(target=run_server, daemon=True)
-    server_thread.start()
+    # 引擎资源在后台线程预加载，与界面创建并行
+    # （原先它与 splash 动画并行；splash 随 webview 一起删了，改为与 Tk 界面创建并行）
+    threading.Thread(
+        target=load_engine_resources,
+        kwargs={"status_callback": None, "done_callback": None},
+        daemon=True,
+        name="engine-loader",
+    ).start()
 
-    # 后台启动网络监控
-    try:
-        from engine.network_monitor import get_network_monitor
-        nm = get_network_monitor()
-        nm.start_monitor(interval=10)
-    except Exception:
-        pass
+    # 注册退出钩子：程序退出时保存配置 / 守护天数 / 清理缓存
+    _register_exit_save_hook()
 
-    # 后台启动实时文件守护进程
-    try:
-        from engine.file_guard_client import get_guard
-        guard = get_guard()
-        guard.start()
-    except Exception:
-        pass
-
-    # 初始化破军引擎状态
-    try:
-        from engine.native_bridge import get_native_engine
-        native_eng = get_native_engine()
-        if native_eng.available():
-            ver = native_eng.version()
-            print(f"[破军引擎] 破军引擎已加载: {ver.get('version', 'unknown')}")
-        else:
-            print("[破军引擎] 破军引擎DLL未找到，使用Python回退方案")
-    except Exception as e:
-        print(f"[破军引擎] 初始化失败: {e}")
+    # ── 后台服务：uvicorn（同进程）+ 网络监控 / 文件守护 / 破军引擎 ──
+    _mark("启动 uvicorn（同进程内）")
+    _start_uvicorn_thread(8899)
+    _start_aux_services()
 
     # 启动双进程互保（自保护）
     _mark("启动自保护 watchdog")
     _start_self_protection()
     _mark("自保护已启动")
 
-    # ── 启动流程：webview.start 后在 func 线程中完成 splash → 主窗口切换 ──
+    _mark("等待 uvicorn 就绪")
+    if not _wait_http_ready(UI_BASE_URL, timeout=40.0):
+        _log_startup("等待 uvicorn 就绪超时；界面会显示「后端未连接」")
+        print("[御天] 警告：等待后端就绪超时，界面可能显示未连接")
 
-    def _startup_func():
-        """webview.start 后在后台线程执行：等引擎加载 → 创建主窗口 → 淡出 splash"""
-        # 等待引擎加载完成
-        splash.wait_until_ready()
+    # ── 主线程：Tk 消息循环（Tk 要求必须在主线程）──
+    _mark("创建 Tk 界面")
+    _ui = TkApp(base_url=UI_BASE_URL, initial_page="overview")
+    # 后端就在本进程里跑着，所以：
+    #   · auto_start_backend=False —— 否则健康检查一旦抢在 uvicorn 监听之前完成，
+    #     Tk 侧会再拉起一个 uvicorn 抢同一个端口，必然绑定失败
+    #   · stop_on_exit=False —— 后端就是这个进程本身，不存在"停止后端"
+    _ui.backend.prefs["auto_start_backend"] = False
+    _ui.backend.prefs["stop_on_exit"] = False
+    _UI_STATE["app"] = _ui
 
-        # 等待 FastAPI 服务器就绪
-        import urllib.request
-        for _ in range(30):
-            try:
-                urllib.request.urlopen("http://127.0.0.1:8899", timeout=1)
-                break
-            except Exception:
-                time.sleep(0.3)
+    _mark("进入 Tk mainloop")
+    _ui.run()
+    _mark("Tk mainloop 已退出（窗口已关闭）")
 
-        # 先创建主窗口（确保 splash 销毁时仍有窗口存在，防止 webview 退出）
-        main_window = _wv.create_window(
-            title="御天 安全中心",
-            url="http://127.0.0.1:8899",
-            width=1100,
-            height=700,
-            min_size=(900, 600),
-            resizable=True,
-        )
-        # 记下句柄：托盘「显示」与退出流程都要用它（不再用默认浏览器开标签页）
-        _UI_STATE["window"] = main_window
-        _mark("主窗口已创建（内置浏览器）")
-
-        # 拦截窗口关闭 → 退出流程
-        def _on_closing():
-            threading.Thread(target=_do_exit_with_fadeout, daemon=True).start()
-            return False
-        main_window.events.closing += _on_closing
-
-        # 等主窗口加载完成后再淡出并销毁 splash
-        time.sleep(1.0)
-        try:
-            splash_window.evaluate_js('fadeOut()')
-        except Exception:
-            pass
-        time.sleep(FADE_OUT_MS / 1000.0 + 0.2)
-
-        # 销毁 splash 窗口（此时主窗口已存在，不会触发退出）
-        try:
-            splash_window.destroy()
-        except Exception:
-            pass
-
-    # 主线程：webview 消息循环（pywebview 要求必须在主线程）
-    #
-    # ⚠️ 这里原来写的是「强制使用 EdgeChromium 后端, 跳过 WinForms/pythonnet/.NET
-    #    依赖」—— **那句话是错的**，而且正是打包后的 exe 一起就崩的原因。
-    #
-    #    pywebview 在 Windows 上只有一条路：
-    #        guilib.initialize() -> guis = [import_winforms]
-    #        -> import webview.platforms.winforms -> import clr
-    #    而 platforms/edgechromium.py 自己第 10 行就 `import clr`。
-    #    所以 edgechromium 后端**本身就依赖 pythonnet**，跳不掉。
-    #
-    #    更糟的是 pywebview 的 import_winforms() **只捕获 ImportError**：
-    #        except ImportError:  return False
-    #    冻结环境里 clr 抛的却是 RuntimeError
-    #    （Failed to resolve Python.Runtime.Loader.Initialize）——
-    #    不被捕获就冒泡，把整个进程带走。
-    #
-    #    2026-10-04 补充：真正让 clr 失败的**不是** pythonnet 缺失，而是
-    #    Python.Runtime.dll 的**物理路径**落在工作区 H:\Caelire\ 之下时
-    #    Assembly.LoadFrom 会失败（对照实验见文件顶部 _stage_pythonnet_runtime
-    #    的注释）。_prepare_embedded_browser() 先把 runtime 暂存到
-    #    %LOCALAPPDATA%\Andun\runtime\pyrt\ 来修掉它，因此这里默认走**内置浏览器**；
-    #    只有它仍然失败时才退到 Chromium --app 应用窗口（无标签栏/地址栏）。
-    # ── 内置浏览器准备：必须在 webview.start 之前 ──
-    # pywebview 的 winforms/edgechromium 后端在 guilib.initialize() 里就会
-    # `import clr`，所以 pythonnet 必须在这之前就绪。
-    _mark("复用内置浏览器准备结果")
-    _embedded_ready = bool(_UI_STATE.get("embedded_ready"))
-    _mark(f"内置浏览器可用性: {'OK' if _embedded_ready else 'UNAVAILABLE'}")
-
-    _mark("调用 webview.start")
-    try:
-        if not _embedded_ready:
-            raise RuntimeError("pythonnet/.NET 运行时不可用，无法启动内置浏览器")
-        webview.start(gui='edgechromium', func=_startup_func)
-        _mark("webview.start 正常返回")
-    except Exception as _wv_exc:
-        _log_startup("webview.start 异常:\n" + traceback.format_exc())
-        # 兜底：仍然以"应用窗口"形态呈现界面 —— 用 Chromium/Edge 的 --app 模式开
-        # 一个无标签栏、无地址栏的独立窗口，而不是在默认浏览器里开标签页。
-        # 此时 uvicorn 已在其它线程跑着，8899 是可用的。
-        try:
-            _log_startup("内置浏览器不可用（%s: %s），改用 Chromium --app 窗口"
-                         % (type(_wv_exc).__name__, _wv_exc))
-            print("[御天] 内置浏览器不可用，改用 --app 无边框窗口打开界面")
-            if not _launch_app_window("http://127.0.0.1:8899"):
-                # 最后一层：系统默认浏览器。⚠️ webbrowser 在本文件模块级没有 import，
-                # 必须在这里显式导入，否则 NameError 会把兜底本身也带崩。
-                _log_startup("--app 窗口不可用，回退到系统默认浏览器")
-                import webbrowser as _wb
-                _wb.open("http://127.0.0.1:8899")
-            # 外置窗口模式下**主线程绝不能退出** —— uvicorn 跑在守护线程里，
-            # 主线程一结束整个进程就没了、服务也跟着停。所以在这里挂住。
-            # 用户点托盘菜单的「退出」时，_do_exit_with_fadeout 会 os._exit(0)。
-            _mark("已用外部应用窗口承载界面，主线程挂起等待退出")
-            while True:
-                time.sleep(1)
-        except Exception:
-            _log_startup("兜底启动界面同样失败:\n" + traceback.format_exc())
-            raise
+    # ── 正常退出：保存状态 + 释放引擎资源 + 干净退出 ──
+    _shutdown_and_exit(0)
