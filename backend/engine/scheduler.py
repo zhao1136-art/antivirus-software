@@ -13,6 +13,8 @@ from datetime import datetime
 from engine.local_scanner import LocalScanner
 from engine.cloud_scanner import CloudScanner
 from engine.quarantine import QuarantineManager
+# 跨引擎确认：YARA 之外还得有引擎同意才允许隔离（见 cross_check 模块文档）
+from engine.cross_check import cross_check
 from engine.threat_decision import (
     is_system_path, second_opinion, QUEUE as decision_queue,
     ACTION_QUARANTINE, DECISION_TIMEOUT,
@@ -258,6 +260,25 @@ class Scheduler:
                                 threat["suppressed"] = op["reason"]
                                 decision_queue.note_suppressed()
                                 continue
+                        # 闸门二：跨引擎确认 —— YARA 之外至少一个引擎也命中。
+                        #   闸门零管的是"这条规则本身弱"（有效鉴别力 <8 字节）
+                        #   闸门一管的是"这是可信的系统文件"
+                        #   这一道管的是"**YARA 一家说了算**"——2026-10-03 正是
+                        #   一家误判搬走了 42 个系统文件。
+                        # 未确认 → 仅告警，且**不进用户决定流程** ——
+                        # 这样即便用户没看弹窗、超时自动处理，也不可能被隔离。
+                        cc = cross_check(tpath,
+                                         md5=threat.get("md5", "") or "",
+                                         sha1=threat.get("sha1", "") or "",
+                                         sha256=threat.get("sha256", "") or "",
+                                         size=threat.get("file_size") or 0)
+                        threat["cross_check"] = cc
+                        if not cc["confirmed"]:
+                            threat["action"] = "alert"
+                            threat["suppressed"] = cc["note"]
+                            decision_queue.note_suppressed()
+                            continue
+
                         pd = decision_queue.ask(tpath, threat)
                         threat["pending_decision"] = pd.id
                         threat["decision_timeout"] = DECISION_TIMEOUT

@@ -615,8 +615,31 @@ class RealtimeGuard:
                     self._add_event("info", "已放行（系统文件二次复核）: " + os.path.basename(path))
                     continue
 
-                # 闸门二：用户决定，DECISION_TIMEOUT 秒内无决定则自动处理
+                # 闸门二：跨引擎确认 —— YARA 之外至少一个引擎也命中。
+                # 与扫描路径同一套判据（闸门零=规则弱、闸门一=可信系统文件、
+                # 本道=YARA 一家说了算）。未确认就**不进用户决定流程**，
+                # 这样即便用户没看弹窗、超时自动处理，也不会被隔离。
                 first = threats[0] if threats and isinstance(threats[0], dict) else {}
+                try:
+                    from engine.cross_check import cross_check
+                    cc = cross_check(path,
+                                     md5=first.get("md5", "") or "",
+                                     sha1=first.get("sha1", "") or "",
+                                     sha256=first.get("sha256", "") or "",
+                                     size=first.get("file_size") or 0)
+                except Exception as exc:
+                    cc = {"confirmed": False,
+                          "note": "跨引擎确认不可用（%s），按未确认处理" % exc}
+                first["cross_check"] = cc
+                if not cc.get("confirmed"):
+                    with self._lock:
+                        self._stats["suppressed"] = self._stats.get("suppressed", 0) + 1
+                    self._add_event("info",
+                                    "跨引擎未确认，仅告警: %s（%s）"
+                                    % (os.path.basename(path), cc.get("note", "")))
+                    continue
+
+                # 闸门三：用户决定，DECISION_TIMEOUT 秒内无决定则自动处理
                 pd = decision_queue.ask(path, first)
                 decision_queue.wait_all([pd])
                 if decision_queue.finalize(pd) != ACTION_QUARANTINE:
