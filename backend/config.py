@@ -153,27 +153,11 @@ SYSTEM_GUARD_LOG_FILE = os.path.join(LOGS_DIR, "system_guard.log")
 FILE_GUARD_LOG_FILE = os.path.join(LOGS_DIR, "file_guard.log")
 
 # 扫描配置
-#
-# ⚠️ 这里和 engine/realtime_guard.py 里的 SCAN_EXTENSIONS 是**两份独立的定义**
-#    （那份是平铺 set，这份按类别分组）。2026-10-17 对比发现两边不一致：
-#      实时防护有 .jar/.apk/.dex/.hta/.wsf/.wsc/.ppt/.pptx，全盘扫描一份都没有
-#    → 手动扫描扫不到 JAR/APK，只有实时防护能（而实时防护只在"文件被打开"时触发，
-#      钓鱼下载下来的 JAR 只要不双击就没人管）。本次已对齐，以后改一份记得改另一份。
 SCAN_EXTENSIONS = {
     "executables": {".exe", ".dll", ".sys", ".com", ".scr", ".pif", ".ocx", ".bin", ".drv"},
-    # 注意 .lnk **不在**这里，这是有意的：整套 LNK_Ruleset.yar 已移到 _disabled/
-    # （EXE_in_LNK 在 514/585 个合法 System32 文件上命中 88%），当前没有任何
-    # 活跃规则检测 .lnk 文件 —— 开了扫描也没有规则能命中，只是白扫。
-    # 以后若要重新启用部分 LNK 规则（例如只保留"LNK 内嵌 powershell -enc"这类
-    # 有真鉴别力的），再把 .lnk 加回本集合。
-    "scripts": {".ps1", ".bat", ".cmd", ".vbs", ".js", ".vba", ".py", ".sh",
-                ".hta", ".wsf", ".wsc"},
-    "documents": {".doc", ".docx", ".xls", ".xlsx", ".pdf", ".rtf",
-                  ".ppt", ".pptx"},
-    # .jar/.apk/.dex 走解包（local_scanner._ARCHIVE_EXTS 早就支持 .jar 递归 4 层），
-    # 但文件本身得先进得来 —— 之前 config 这份没有，等于解包能力用不上。
-    "archives": {".zip", ".rar", ".7z", ".tar", ".gz", ".bz2",
-                 ".jar", ".apk", ".dex"},
+    "scripts": {".ps1", ".bat", ".cmd", ".vbs", ".js", ".vba", ".py", ".sh"},
+    "documents": {".doc", ".docx", ".xls", ".xlsx", ".pdf", ".rtf"},
+    "archives": {".zip", ".rar", ".7z", ".tar", ".gz", ".bz2"},
     "all_scan": set()  # empty means all extensions in quick/full scan
 }
 

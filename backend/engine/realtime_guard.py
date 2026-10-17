@@ -85,8 +85,6 @@ DEFAULT_WATCH_DIRS = [
 ]
 
 # 排除的扩展名（不扫描）
-# .lnk 保持排除：整套 LNK_Ruleset.yar 已在 _disabled/（88% 误报），当前没有活跃
-# 规则检测 .lnk，扫了也没有规则能命中。与 config.SCAN_EXTENSIONS 保持一致。
 EXCLUDE_EXTENSIONS = {'.tmp', '.log', '.lnk', '.ini', '.db', '.dmp', '.lock'}
 
 # 感兴趣的扩展名（仅扫描这些）

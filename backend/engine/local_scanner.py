@@ -44,9 +44,6 @@ _MAX_ENTRY_SIZE = 50 * 1024 * 1024  # 单条目解压后上限 50MB
 _BUFFER_LIMIT = 32 * 1024 * 1024  # 单次读取缓冲上限 32MB（覆盖绝大多数文件）
 _ARCHIVE_EXTS = {".zip", ".apk", ".jar", ".rar"}
 _ARCHIVE_MAGIC = {b"PK\x03\x04": "zip", b"PK\x05\x06": "zip", b"Rar!\x1a\x07": "rar"}
-#: SFX（自解压）的归档头藏在 PE stub 之后，最多往后找这么远。
-#: doc-kafan.exe 的 'Rar!' 在 491 KB 处；8 MB 足以覆盖常见 SFX stub（含 .NET 单文件）。
-_SFX_SCAN_BYTES = 8 * 1024 * 1024
 
 # 扫描结果缓存（SHA256 → 结果，LRU + TTL，上限取自 config）
 _SCAN_CACHE_MAX = SCAN_CACHE_MAX
@@ -708,37 +705,15 @@ class LocalScanner:
         return threats
 
     def _detect_archive(self, file_path: str, size: int) -> str | None:
-        """按文件头 magic / 扩展名判断归档类型；返回 'zip'/'rar'/None。
-
-        除了看**文件开头**，还会在 PE stub 之后搜索归档魔数 —— 因为"自解压 (SFX)"
-        这类投递形态开头永远是 ``MZ``，真正的归档头在后面：
-
-            2026-10-17 的 doc-kafan.exe：MZ 开头，'Rar!' 在偏移 491,324
-            → 旧实现按 8 字节 magic 判成 PE，内层 10 个载荷永远不会被解包
-
-        ZIP 系 SFX 的标准库就能处理（``zipfile`` 自己扫 EOCD，不要求归档在文件头，
-        已实测：MZ stub + zip 能正常列出条目）。RAR 需要外部解压器，见
-        ``_unpack_and_scan``。
-        """
+        """按文件头 magic / 扩展名判断归档类型；返回 'zip'/'rar'/None"""
         try:
             with open(file_path, "rb") as f:
-                head = f.read(8)
-                if not head.startswith(b"MZ"):
-                    for sig, t in _ARCHIVE_MAGIC.items():
-                        if head.startswith(sig):
-                            return t
-                else:
-                    # SFX / 嵌套：在 PE 之后搜归档魔数。取**更靠前**的那个。
-                    f.seek(0)
-                    buf = f.read(_SFX_SCAN_BYTES)
-                    zi = buf.find(b"PK\x03\x04", 2)
-                    ri = buf.find(b"Rar!\x1a\x07", 2)
-                    if zi >= 0 or ri >= 0:
-                        if ri < 0 or (zi >= 0 and zi < ri):
-                            return "zip"
-                        return "rar"
+                magic = f.read(8)
         except (OSError, PermissionError):
             return None
+        for sig, t in _ARCHIVE_MAGIC.items():
+            if magic.startswith(sig):
+                return t
         ext = os.path.splitext(file_path)[1].lower()
         if ext in _ARCHIVE_EXTS:
             return "zip" if ext != ".rar" else "rar"
