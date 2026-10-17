@@ -1979,6 +1979,120 @@ async def quarantine_list():
     return {"total": len(items), "items": items}
 
 
+@app.post("/api/v1/quarantine/report-false-positive")
+async def quarantine_report_false_positive(data: dict):
+    """用户上报「这是误报」。
+
+    为什么要在服务端补上下文，而不是只收一句"我这是误报"：
+    判断一条命中到底是真误报还是用户不懂，靠的是**命中时的一切旁证** ——
+    文件在不在系统目录、是不是 Program Files、什么扩展名、多大、
+    哪个威胁名/规则、什么等级。这些只有隔离那一刻才知道，事后问用户是问不出来的。
+
+    报告落到 data/false_positive_reports/，由 tools/collect_fp.py 汇总，
+    用于给 YARA 规则做「有效鉴别力」复核（哪些规则专挑系统文件下手）。
+    """
+    import json as _json
+    import platform as _platform
+
+    qid = str(data.get("id") or "")
+    note = str(data.get("note") or "")[:2000]
+    if not qid:
+        return JSONResponse({"error": "缺少隔离ID"}, 400)
+
+    # 从隔离列表里找到这条记录（QuarantineManager 没有单条 get）。
+    # 注意两个 id 不是一回事：
+    #   list_quarantined() 的 "id" = 数据库数字行号
+    #   quarantine_file()  的 "id" = quarantine_name（文件名）
+    # 界面传的是前者，直接调 manager 拿到的是后者 —— 两种都认，否则会 404。
+    try:
+        record = next((it for it in quarantine.list_quarantined()
+                       if qid in (str(it.get("id") or ""),
+                                  str(it.get("quarantine_name") or ""))), None)
+    except Exception as exc:
+        return JSONResponse({"error": f"读取隔离记录失败: {exc}"}, 500)
+    if record is None:
+        return JSONResponse({"error": "找不到该隔离记录（可能已被还原或删除）"}, 404)
+
+    original_path = str(record.get("original_path") or "")
+    lower = original_path.lower().replace("/", "\\")
+
+    # 目录归类 —— 这几个是误报分诊最有效的信号
+    if "\\windows\\system32" in lower:
+        dir_cat = "Windows\\System32"
+    elif "\\windows\\syswow64" in lower:
+        dir_cat = "Windows\\SysWOW64"
+    elif "\\program files" in lower:
+        dir_cat = "Program Files"
+    elif "\\windows\\" in lower:
+        dir_cat = "Windows (其它)"
+    elif "\\appdata\\" in lower or "\\users\\" in lower:
+        dir_cat = "用户目录"
+    elif lower.startswith("\\\\"):
+        dir_cat = "网络路径"
+    else:
+        dir_cat = "其它"
+
+    is_sys = False
+    try:
+        from engine.threat_decision import is_system_path
+        is_sys = bool(is_system_path(original_path)) if original_path else False
+    except Exception:
+        pass
+
+    base = os.path.basename(original_path) if original_path else ""
+    report = {
+        "schema": 1,
+        "report_id": f"{int(time.time())}_{qid[:24]}",
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "quarantine": {
+            "id": qid,
+            "threat_name": record.get("threat_name"),
+            "threat_level": record.get("threat_level"),
+            "file_hash": record.get("file_hash"),
+            "hash_type": record.get("file_hash_type") or "sha256",
+            "file_size": record.get("file_size"),
+            "original_path": original_path,
+            "quarantined_at": record.get("quarantined_at"),
+        },
+        "path_context": {
+            "dir_category": dir_cat,
+            "is_system_path": is_sys,
+            "filename": base,
+            "extension": os.path.splitext(base)[1].lower() if base else "",
+            "in_user_profile": ("\\users\\" in lower or "\\appdata\\" in lower),
+        },
+        "user_note": note,
+        "environment": {
+            "os": _platform.platform(),
+            "python": _platform.python_version(),
+            "app_version": APP_VERSION if "APP_VERSION" in globals() else "",
+        },
+    }
+
+    # 落盘（与隔离区同级的 data 目录下）
+    try:
+        from config import QUARANTINE_DIR as _QDIR
+        out_dir = os.path.join(os.path.dirname(_QDIR), "false_positive_reports")
+    except Exception:
+        out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "engine", "data", "false_positive_reports")
+    try:
+        os.makedirs(out_dir, exist_ok=True)
+        fpath = os.path.join(out_dir, f"{report['report_id']}.json")
+        tmp = fpath + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            _json.dump(report, fh, ensure_ascii=False, indent=2)
+        os.replace(tmp, fpath)
+    except OSError as exc:
+        return JSONResponse({"error": f"写入误报记录失败: {exc}"}, 500)
+
+    print(f"[御天][误报] 收到上报 {qid[:16]} ｜ {record.get('threat_name')} "
+          f"｜ {dir_cat} ｜ {base}")
+    return {"ok": True, "report_id": report["report_id"],
+            "report_path": fpath, "dir_category": dir_cat,
+            "is_system_path": is_sys}
+
+
 @app.post("/api/v1/quarantine/restore")
 async def quarantine_restore(data: dict):
     """还原隔离文件"""

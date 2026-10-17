@@ -130,6 +130,9 @@ class QuarantinePage(Page):
         actions.pack(side="right")
         W.button(actions, "还原", lambda q=qid: self._restore(q), "ghost").pack(
             side="left")
+        W.button(actions, "这是误报",
+                 lambda q=qid, it=item: self._report_fp(q, it),
+                 "ghost").pack(side="left", padx=(6, 0))
         W.button(actions, "删除", lambda q=qid: self._delete(q), "danger").pack(
             side="left", padx=(6, 0))
 
@@ -145,6 +148,40 @@ class QuarantinePage(Page):
                           mono=True, fg=T.TEXT_MUTED).pack(fill="x")
 
     # ── 动作 ──
+
+    def _report_fp(self, qid: str, item: dict):
+        """上报「这是误报」。
+
+        这不是给用户的安慰按钮 —— 上报的记录会带上隔离当时的完整上下文
+        （目录类别、是否系统路径、扩展名、哪个威胁名/等级），
+        汇总后用来复核 YARA 规则的「有效鉴别力」：哪些规则专挑系统文件下手。
+        """
+        if not qid:
+            return
+        name = str(item.get("threat_name") or "未知威胁")
+        path = str(item.get("original_path") or "（原始路径未知）")
+        if not messagebox.askyesno(
+                "上报误报",
+                "确认把这条判定上报为误报吗？\n\n"
+                f"威胁名：{name}\n"
+                f"文件：{path}\n\n"
+                "上报内容：隔离记录 + 文件所在目录类别 + 扩展名 + 大小。\n"
+                "**不会上传文件内容。**\n\n"
+                "上报后建议再点「还原」把文件取回来。",
+                parent=self):
+            return
+
+        def done(res):
+            if res is None or not res.ok:
+                self.ctx.say(
+                    f"误报上报失败：{res.error if res else '无响应'}", "error")
+                return
+            d = res.data if isinstance(res.data, dict) else {}
+            cat = d.get("dir_category") or "?"
+            sysflag = "系统目录" if d.get("is_system_path") else cat
+            self.ctx.say(f"已上报误报（{sysflag}）—— 用于改进规则鉴别力", "ok")
+
+        run_async(self, lambda: self.client.quarantine_report_fp(qid), done)
 
     def _restore(self, qid: str):
         if not qid:

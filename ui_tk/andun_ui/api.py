@@ -215,6 +215,16 @@ class ApiClient:
     def quarantine_delete_all(self) -> ApiResult:
         return self.delete("/api/v1/quarantine")
 
+    def quarantine_report_fp(self, qid: str, note: str = "") -> ApiResult:
+        """上报「这是用户认为的误报」。
+
+        后端会自己补判定上下文 —— 目录类别、是否系统路径、扩展名、大小、
+        原始威胁名/等级。这些**只有隔离那一刻才知道**，事后问用户是问不出来的。
+        只传 id 和可选备注，不传文件内容。
+        """
+        return self.post("/api/v1/quarantine/report-false-positive",
+                         {"id": qid, "note": note})
+
     def threats_pending(self) -> ApiResult:
         """→ ``{"pending": [...], "timeout": 15.0, "stats": {...}}``"""
         return self.get("/api/v1/threats/pending")
