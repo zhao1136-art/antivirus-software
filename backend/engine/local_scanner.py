@@ -835,7 +835,17 @@ class LocalScanner:
                         "pe_info": result.get("features", {}).get("pe_info", {}),
                         "file_size": size
                     },
-                    "action": "quarantine"
+                    # ⚠️ 2026-10-17 由 "quarantine" 改为 "alert"。
+                    # 实测（936 个合法系统文件：System32 636 + SysWOW64 300）：
+                    #     SUSPICIOUS 52.5% + MALICIOUS 5.8% = **误报 48%**，
+                    # 两个独立语料一致。这 5.8% 的 MALICIOUS 原先直接拿到
+                    # action="quarantine" 进闸门链。
+                    # 病根在特征而非阈值：理由里 "PE 文件无导入表或使用动态 API
+                    # 解析" 一条就命中 452/936（LoadLibrary+GetProcAddress 是极常见
+                    # 的正常用法），另有 "缺少数字签名" 这类本不该进 ML 的特征。
+                    # 在特征重校准之前，这个引擎不该有搬走用户文件的能力。
+                    # 现在闸门二也已经拦住它，这里改成 alert 是把意图写明确。
+                    "action": "alert"
                 }
             elif verdict == "SUSPICIOUS":
                 return {

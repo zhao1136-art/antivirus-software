@@ -267,11 +267,18 @@ class Scheduler:
                         #   一家误判搬走了 42 个系统文件。
                         # 未确认 → 仅告警，且**不进用户决定流程** ——
                         # 这样即便用户没看弹窗、超时自动处理，也不可能被隔离。
+                        # 提出威胁的引擎必须排除在确认集合外，否则会"自己确认自己"
+                        # （启发式自己也会产出 action=quarantine 的威胁）。
+                        _eng = str(threat.get("engine") or "").lower()
+                        _excl = (("heuristic",) if _eng == "heuristic"
+                                 else ("hash",) if _eng in ("signature", "hash")
+                                 else ())
                         cc = cross_check(tpath,
                                          md5=threat.get("md5", "") or "",
                                          sha1=threat.get("sha1", "") or "",
                                          sha256=threat.get("sha256", "") or "",
-                                         size=threat.get("file_size") or 0)
+                                         size=threat.get("file_size") or 0,
+                                         exclude=_excl)
                         threat["cross_check"] = cc
                         if not cc["confirmed"]:
                             threat["action"] = "alert"

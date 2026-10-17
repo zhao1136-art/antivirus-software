@@ -121,13 +121,17 @@ def _advice_ml(data: bytes, sha256: str) -> dict:
 def cross_check(path: str, *, data: bytes | None = None,
                 md5: str = "", sha1: str = "", sha256: str = "", size: int = 0,
                 timeout: float = DEFAULT_TIMEOUT,
-                with_ml: bool = True) -> dict:
+                with_ml: bool = True,
+                exclude: tuple = ()) -> dict:
     """YARA 之外找至少一个引擎也命中。
+
+    ``exclude``：**提出该威胁的引擎**，必须排除在确认集合外，
+    否则会出现"自己确认自己"—— 比如启发式产出的威胁被启发式自己确认。
 
     返回::
 
         {"confirmed": bool,           # True 才允许继续走隔离流程
-         "agreeing": ["heuristic"],   # 同意的**确认引擎**
+         "agreeing": ["heuristic"],   # 同意的**确认引擎**（已排除 exclude）
          "engines": {"hash": {...}, "heuristic": {...}, "ml": {...,"advisory":True}},
          "note": str,
          "timed_out": bool}
@@ -137,6 +141,7 @@ def cross_check(path: str, *, data: bytes | None = None,
     if not path:
         out["note"] = "无路径，跳过跨引擎确认"
         return out
+    excluded = {str(x).strip().lower() for x in (exclude or ()) if x}
 
     payload: dict = {}
     done = threading.Event()
@@ -174,17 +179,21 @@ def cross_check(path: str, *, data: bytes | None = None,
     for name in CONFIRMING_ENGINES + ADVISORY_ENGINES:
         engines.setdefault(name, {"hit": False, "detail": "未执行"})
     out["engines"] = engines
-    # 只有确认引擎算数；advisory 的 hit 不参与
+    # 只有确认引擎算数；advisory 的 hit 不参与。
+    # 并且**排除提出该威胁的那个引擎** —— 否则是自己确认自己。
     out["agreeing"] = sorted(k for k in CONFIRMING_ENGINES
-                             if engines.get(k, {}).get("hit"))
+                             if k not in excluded and engines.get(k, {}).get("hit"))
     out["confirmed"] = bool(out["agreeing"])
+    out["excluded"] = sorted(excluded)
 
     if out["confirmed"]:
         out["note"] = ("跨引擎确认通过：%s 与 YARA 同时命中"
                        % "、".join(out["agreeing"]))
     else:
         detail = "；".join("%s %s" % (k, engines.get(k, {}).get("detail", ""))
-                           for k in CONFIRMING_ENGINES)
+                           for k in CONFIRMING_ENGINES if k not in excluded)
+        if excluded:
+            detail = "（已排除提出威胁的引擎 %s）%s" % ("、".join(sorted(excluded)), detail)
         out["note"] = "**YARA 之外没有其他引擎命中** —— 降级为仅告警（%s）" % detail
     if payload.get("_error"):
         out["note"] += "｜内部错误: %s" % payload["_error"]

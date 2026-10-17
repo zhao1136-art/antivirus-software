@@ -622,11 +622,17 @@ class RealtimeGuard:
                 first = threats[0] if threats and isinstance(threats[0], dict) else {}
                 try:
                     from engine.cross_check import cross_check
+                    # 提出威胁的引擎排除在确认集合外（防"自己确认自己"）
+                    _eng = str(first.get("engine") or "").lower()
+                    _excl = (("heuristic",) if _eng == "heuristic"
+                             else ("hash",) if _eng in ("signature", "hash")
+                             else ())
                     cc = cross_check(path,
                                      md5=first.get("md5", "") or "",
                                      sha1=first.get("sha1", "") or "",
                                      sha256=first.get("sha256", "") or "",
-                                     size=first.get("file_size") or 0)
+                                     size=first.get("file_size") or 0,
+                                     exclude=_excl)
                 except Exception as exc:
                     cc = {"confirmed": False,
                           "note": "跨引擎确认不可用（%s），按未确认处理" % exc}
