@@ -157,6 +157,9 @@ class RealtimeGuard:
             "files_scanned": 0,
             "threats_found": 0,
             "files_blocked": 0,
+            # 扫描异常计数：过去这个值不存在，因为异常被 `except: continue` 吞了，
+            # 于是"实时防护 0 检测"在界面上和"没有威胁"完全无法区分。
+            "scan_errors": 0,
         }
         self._events: deque[dict] = deque(maxlen=200)
         self._lock = threading.Lock()
@@ -588,7 +591,20 @@ class RealtimeGuard:
 
             try:
                 threats = scanner.scan_single(path)
-            except Exception:
+            except Exception as exc:
+                # ⚠️ 这里原来是 `except Exception: continue` —— 静默丢弃。
+                # 正是它掩盖了"realtime_guard 调用的 scan_single 根本不存在"这个
+                # 致命缺陷，让实时文件防护长期 0 检测而界面只显示"没发现威胁"。
+                # 现在：计数 + 留痕 + 继续（不因单个文件拖垮整个监控）。
+                with self._lock:
+                    self._stats["scan_errors"] = self._stats.get("scan_errors", 0) + 1
+                    _n_err = self._stats["scan_errors"]
+                # 只在前几次和每 100 次留痕，避免一个持续失败的文件把事件表刷爆
+                if _n_err <= 5 or _n_err % 100 == 0:
+                    self._add_event(
+                        "error",
+                        f"实时扫描失败(累计{_n_err}) {os.path.basename(path)}: {exc}",
+                    )
                 continue
 
             with self._lock:

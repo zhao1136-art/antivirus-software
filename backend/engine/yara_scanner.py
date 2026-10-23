@@ -35,6 +35,7 @@
 import os
 import re
 import sys
+import time
 import ctypes
 from ctypes import (POINTER, byref, cast, c_char_p, c_int, c_size_t, c_uint8,
                     c_void_p)
@@ -139,6 +140,19 @@ YR_RULE_IDENTIFIER_OFFSET = 16
 _MAX_MATCHES = 512
 # scan_file 跳过的大小区间（与旧实现一致）
 _MAX_FILE_SIZE = 200 * 1024 * 1024
+
+# ── _report_patterns（命中归因）的预算 ────────────────────────────────
+# 归因只用于填充界面的"命中模式"字段，**不参与任何判定**（判定在 libyara
+# 那一步已定，见 _report_patterns 的 docstring）。
+# 实测（2026-10-11，libyara.dll 4.5.5，133 条规则）：
+#   · libyara 真正扫一个 20.8MB 的 PE                    = 0.26s
+#   · _report_patterns 对全部 133 条规则跑同一份内容     = 28.43s（真扫描的 109 倍）
+#   · scan.log 里单文件 yara_time 实测到过 141.8s
+# 成本来自 1866 条字符串 × 整份内容做子串查找，加 39 条规则走纯 Python
+# 逐字节 hex 扫描。等于把用户的扫描时间花在填一个 UI 字段上。
+# 所以这里给两道闸门：只在前 N MB 内找，且单条规则有时间预算。
+_REPORT_MAX_BYTES = 4 * 1024 * 1024      # 归因只在内容前 4MB 内查找
+_REPORT_BUDGET_S = 0.05                  # 单条规则的归因时间预算（秒）
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -725,38 +739,60 @@ class YaraScanner:
         return out
 
     def _report_patterns(self, rule: YaraRule, content: bytes) -> list:
-        """**报告用**：列出该规则里哪些模式能在内容中找到。
+        """**报告用**：列出该规则里哪些模式能在内容中找到（**有界**）。
 
         判定已由 libyara 完成，这里只是给日志/UI 一个尽力而为的归因。
         支持 ascii / wide / nocase / fullword / 半字节通配；xor、base64、
         [n-m] 跳转等无法在纯 Python 侧精确复现的，按近似处理。
+
+        ⚠️ 本函数**不影响检出**，但曾经吃掉几乎所有扫描时间：
+        20.8MB 文件上 133 条规则跑一遍要 28.4s，而 libyara 真扫描只要 0.26s。
+        所以有两道闸门（见 _REPORT_MAX_BYTES / _REPORT_BUDGET_S）：
+        只在前 4MB 内查找，且单条规则超预算即停。
+        代价是大文件上的"命中模式"列表可能不全 —— 那只是给界面看的展示信息。
         """
         found = []
         flags_map = rule.flags_map or {}
 
+        # 闸门一：只取前 N MB（bytes 切片是 memcpy，一次几毫秒）
+        window = (content if len(content) <= _REPORT_MAX_BYTES
+                  else content[:_REPORT_MAX_BYTES])
+
+        # 闸门二：单条规则的时间预算
+        deadline = time.perf_counter() + _REPORT_BUDGET_S
+        lowered = None      # nocase 只降一次，而不是每条字符串都 lower 整份内容
+
         for name, value, typ in rule.strings:
+            if time.perf_counter() > deadline:
+                break
             fl = flags_map.get(name, "")
             hit = False
             if typ == "wide":
-                hit = value in content
+                hit = value in window
             elif "nocase" in fl:
-                hit = value.lower() in content.lower()
+                if lowered is None:
+                    lowered = window.lower()
+                hit = value.lower() in lowered
             else:
-                hit = value in content
+                hit = value in window
             if hit:
                 if "fullword" in fl:
-                    hit = self._fullword_ok(content, value, "nocase" in fl)
+                    hit = self._fullword_ok(window, value, "nocase" in fl)
             if hit:
                 found.append(name)
 
         for name, mask, pattern in rule.hex_patterns:
-            if self._search_with_mask(content, mask, pattern):
+            if time.perf_counter() > deadline:
+                break
+            if self._search_with_mask(window, mask, pattern):
                 found.append(name)
 
         for name, _p, _f in rule.regexes:
+            if time.perf_counter() > deadline:
+                break
             # 正则不做复现（libyara 已判定命中）；仅在其字面量可见时报告
             try:
-                if _p.encode("utf-8", "ignore") in content:
+                if _p.encode("utf-8", "ignore") in window:
                     found.append(name)
             except Exception:
                 pass
@@ -785,16 +821,21 @@ class YaraScanner:
     @staticmethod
     def _search_with_mask(data: bytes, mask: bytes, pattern: bytes) -> bool:
         n = len(pattern)
-        if n == 0 or len(data) < n:
+        data_len = len(data)
+        if n == 0 or data_len < n:
             return False
         first_fixed = next((i for i in range(n) if mask[i] == 0xFF), 0)
+        # 预先构造锚点 bytes：原先写在循环里，每次迭代都新建一个 bytes 对象。
+        # 锚点字节在 PE 里常常是 0x00 这种遍地都是的值，循环次数可达数百万次，
+        # 于是这个分配本身就变成可观开销。
+        anchor = pattern[first_fixed:first_fixed + 1]
         start = 0
         while True:
-            i = data.find(bytes([pattern[first_fixed]]), start)
+            i = data.find(anchor, start)
             if i < 0:
                 return False
             base = i - first_fixed
-            if base >= 0 and base + n <= len(data):
+            if base >= 0 and base + n <= data_len:
                 ok = True
                 for k in range(n):
                     if mask[k] and (data[base + k] & mask[k]) != (pattern[k] & mask[k]):

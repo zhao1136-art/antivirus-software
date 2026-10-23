@@ -1813,37 +1813,57 @@ def scan_pe(data: bytes, sha256: str = "") -> dict:
     result["features"]["suspicious_count"] = len(suspicious_found)
     result["features"]["pe_info"] = pe_info
 
-    # ---- 提取 EMBER 特征向量（可选，用于外部 ML 模型）----
+    # ---- EMBER 特征向量提取（**仅在真有模型要推理时才做**）----
+    # ⚠️ 这里原来是**无条件**提取 2381 维特征向量的。问题在于：
+    #    · 本仓库**没有 EMBER 模型文件**（find_ember_model() 返回 None），
+    #      _get_ember_predictor() 因而也是 None，推理那一支根本不执行；
+    #    · 这份向量只有两个消费者：feature_vector_summary（纯展示）与
+    #      pred.predict_proba()（没有模型时不跑）。
+    #    · 而 feature_vector_summary / ml_ember 这两个键，
+    #      **在整个后端与全部前端文件里没有任何地方读取**（已 grep 确认）。
+    #    实测代价：20.8MB 的 PE 单文件 13~17s，几乎全部来自这里
+    #      （_add_window 6.2s + _calc_entropy 3.2s + 正则 1.6s …）。
+    #    即：没有模型时，这十几秒算出来的东西**没有任何消费者**。
+    #    所以改成"有模型才提取"——与 yara_scanner._report_patterns 那次
+    #    是同一类修正：热路径上不做无人使用的重活。
+    #    将来放入 EMBER 模型后，pred 不为 None，特征提取会照常进行。
     ml_status = "no_model"
     ml_prob = None
     try:
-        fv = extractor.feature_vector(data)
-        # 特征向量摘要（首尾各 5 维）
-        result["features"]["feature_vector_summary"] = {
-            "dim": len(fv),
-            "head": fv[:5],
-            "tail": fv[-5:],
-            "non_zero_count": sum(1 for v in fv if v != 0.0),
-        }
-
-        # 真实 LightGBM/EMBER 推理（模型缺失时安全跳过）
-        try:
-            import numpy as _np  # noqa: F401  # 仅 numpy，打包安全
-            pred = _get_ember_predictor()
-            if pred is not None and fv:
-                ml_prob = float(pred.predict_proba(list(fv)))
-                ml_status = "ok"
-            else:
-                ml_status = "no_model"
-        except Exception:
-            ml_status = "error"
-        result["features"]["ml_ember"] = {
-            "status": ml_status,
-            "probability": round(ml_prob, 4) if ml_prob is not None else None,
-        }
+        pred = _get_ember_predictor()
     except Exception:
-        result["features"]["feature_vector_summary"] = {"error": "特征提取失败"}
-        result["features"]["ml_ember"] = {"status": "error", "probability": None}
+        pred = None
+
+    if pred is None:
+        # 保留键（写明已跳过），保证返回结构与之前完全一致 ——
+        # 虽然已确认无人读取这两个键，但不动响应形状更稳妥。
+        result["features"]["feature_vector_summary"] = {"skipped": "no_model"}
+        result["features"]["ml_ember"] = {"status": "no_model", "probability": None}
+    else:
+        try:
+            fv = extractor.feature_vector(data)
+            # 特征向量摘要（首尾各 5 维）
+            result["features"]["feature_vector_summary"] = {
+                "dim": len(fv),
+                "head": fv[:5],
+                "tail": fv[-5:],
+                "non_zero_count": sum(1 for v in fv if v != 0.0),
+            }
+            # 真实 LightGBM/EMBER 推理（模型缺失时安全跳过）
+            try:
+                import numpy as _np  # noqa: F401  # 仅 numpy，打包安全
+                if fv:
+                    ml_prob = float(pred.predict_proba(list(fv)))
+                    ml_status = "ok"
+            except Exception:
+                ml_status = "error"
+            result["features"]["ml_ember"] = {
+                "status": ml_status,
+                "probability": round(ml_prob, 4) if ml_prob is not None else None,
+            }
+        except Exception:
+            result["features"]["feature_vector_summary"] = {"error": "特征提取失败"}
+            result["features"]["ml_ember"] = {"status": "error", "probability": None}
 
     # ---- 综合判定 ----
     # 将原始评分归一化到 0.0-1.0 置信度

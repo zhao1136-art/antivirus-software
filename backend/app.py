@@ -634,6 +634,15 @@ def _start_guards():
         # 启动 F12 紧急处置
         emergency_kill.start()
         # 启动实时文件监控
+        # ⚠️ 必须先注入共享 scanner：否则 realtime_guard 会自建一份
+        #    LocalScanner + YaraScanner（重复编译 133 条规则、重复打开特征库），
+        #    而且它调用的 scan_single 曾经根本不存在（见 local_scanner 里新增的
+        #    公开别名）—— 那让实时防护 0 检测且静默。
+        try:
+            realtime_guard.set_scanner(scheduler.scanner)
+            realtime_guard.set_quarantine(quarantine)
+        except Exception:
+            _log_startup("实时防护注入 scanner 失败:\n" + traceback.format_exc())
         realtime_guard.start()
 
         # 启动系统托盘

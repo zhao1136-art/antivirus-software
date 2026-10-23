@@ -12,13 +12,19 @@ from typing import List, Optional
 
 
 class EMBERPredictor:
-    """解析并求值 EMBER 的 LightGBM 二分类模型（classifier.txt）。
+    """解析并求值 EMBER 的 LightGBM 二分类模型。
 
-    概率 = sigmoid( sum_over_trees( leaf_value ))。
+    概率 = sigmoid( sigmoid_param * sum_over_trees( leaf_value ) )。
+    ``sigmoid_param`` 取自模型头的 ``objective=binary sigmoid:X``（缺省 1.0），
+    与 LightGBM 的 ConvertOutput 保持一致。
     """
 
-    def __init__(self, trees):
+    def __init__(self, trees, sigmoid: float = 1.0):
         self.trees = trees
+        try:
+            self.sigmoid = float(sigmoid)
+        except (TypeError, ValueError):
+            self.sigmoid = 1.0
 
     def predict_proba(self, features) -> float:
         """输入为 2381 维 EMBER v2 特征向量，返回恶意概率 0.0~1.0。"""
@@ -26,7 +32,7 @@ class EMBERPredictor:
         for tree in self.trees:
             raw += tree.eval(features)
         try:
-            return 1.0 / (1.0 + math.exp(-raw))
+            return 1.0 / (1.0 + math.exp(-self.sigmoid * raw))
         except (OverflowError, ValueError):
             return 1.0 if raw > 0 else 0.0
 
@@ -63,8 +69,61 @@ class _Tree:
 # ---------------------------------------------------------------------------
 # 模型文本解析
 # ---------------------------------------------------------------------------
-_BLOCK_RE = re.compile(r"^\s*\[Tree:\s*(\d+)\]\s*$", re.MULTILINE)
+#
+# ⚠️ 兼容性修正（2026-10-24）
+# 原实现只按 `[Tree: N]` 切块，而 LightGBM 的 save_model()/model_to_string()
+# 产出的是**标准格式** `Tree=0` / `Tree=1` ……（没有方括号和冒号）。
+# 后果很危险：把官方 ember_model_2018.txt 放进来时，正则一处都匹配不到，
+# 整份文本被当成**一个块**，重复出现的 split_feature / threshold / leaf_value
+# 被后出现的覆盖 —— 于是"加载成功"但实际只剩**最后一棵树**，
+# ml_status 还会显示 "ok"，而喂给判定的是垃圾概率。
+# 现在两种头都支持，并且做三项校验：块数=树数、num_class 必须为 1、解析失败即拒绝。
+_LGB_TREE_HEADER = re.compile(r"^\s*Tree=(\d+)\s*$", re.MULTILINE)
+_LEGACY_TREE_HEADER = re.compile(r"^\s*\[Tree:\s*(\d+)\]\s*$", re.MULTILINE)
 _INT_LIST = re.compile(r"^\s*([A-Za-z_]+)=(.*)$", re.MULTILINE)
+
+
+def _split_tree_blocks(text: str) -> list:
+    """按 `Tree=N`（标准）或 `[Tree: N]`（旧式）切出每棵树的正文。"""
+    matches = list(_LGB_TREE_HEADER.finditer(text))
+    if not matches:
+        matches = list(_LEGACY_TREE_HEADER.finditer(text))
+    if not matches:
+        return []
+    blocks = []
+    for i, m in enumerate(matches):
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        seg = text[start:end]
+        # 最后一棵树后面跟着 "end of trees" / parameters / feature_importances，
+        # 必须截掉，否则那些段里的同名键会污染解析。
+        cut = seg.find("end of trees")
+        if cut >= 0:
+            seg = seg[:cut]
+        blocks.append(seg)
+    return blocks
+
+
+def _parse_header_meta(text: str) -> dict:
+    """从模型头读取 num_class 与 sigmoid 参数。"""
+    meta = {"num_class": 1, "sigmoid": 1.0, "objective": ""}
+    m = re.search(r"^num_class=(\d+)", text, re.MULTILINE)
+    if m:
+        try:
+            meta["num_class"] = int(m.group(1))
+        except ValueError:
+            pass
+    m = re.search(r"^objective=(.+)$", text, re.MULTILINE)
+    if m:
+        obj = m.group(1).strip()
+        meta["objective"] = obj
+        sm = re.search(r"sigmoid:([0-9.eE+-]+)", obj)
+        if sm:
+            try:
+                meta["sigmoid"] = float(sm.group(1))
+            except ValueError:
+                pass
+    return meta
 
 
 def _parse_tree_block(block: str) -> Optional[_Tree]:
@@ -107,22 +166,36 @@ def _parse_tree_block(block: str) -> Optional[_Tree]:
 
 
 def load_ember_model(path: str) -> Optional[EMBERPredictor]:
-    """从 classifier.txt 加载模型；失败返回 None。"""
+    """从 LightGBM 模型文本加载；失败或校验不过返回 None。
+
+    支持两种树头：标准 `Tree=N` 与旧式 `[Tree: N]`。
+    多分类模型（num_class>1）一律拒绝 —— 本预测器只实现二分类，
+    宁可"不加载"也不能给出错误的概率。
+    """
     try:
         with open(path, "r", encoding="utf-8", errors="ignore") as f:
             text = f.read()
-        # 按 “[Tree: N]” 头切开，取每棵树的完整正文
-        parts = re.split(r"(?m)^\s*\[Tree:\s*\d+\]\s*$", text)
-        trees = []
-        for seg in parts:
-            seg = seg.strip()
-            if "num_leaves" in seg:
-                t = _parse_tree_block(seg)
-                if t is not None:
-                    trees.append(t)
-        if not trees:
+
+        meta = _parse_header_meta(text)
+        if meta["num_class"] > 1:
             return None
-        return EMBERPredictor(trees)
+
+        blocks = _split_tree_blocks(text)
+        if not blocks:
+            return None
+
+        trees = []
+        for seg in blocks:
+            t = _parse_tree_block(seg)
+            if t is not None:
+                trees.append(t)
+
+        # 关键校验：每个树块都必须解析成功。少一棵就说明格式没吃透，
+        # 此时返回半成品模型只会产出垃圾概率，不如直接拒绝。
+        if not trees or len(trees) != len(blocks):
+            return None
+
+        return EMBERPredictor(trees, sigmoid=meta["sigmoid"])
     except Exception:
         return None
 

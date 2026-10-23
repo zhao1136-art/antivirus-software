@@ -294,6 +294,19 @@ class LocalScanner:
         # 全盘/自定义扫描：所有文件
         return True
 
+    def scan_single(self, file_path: str, hash_store: dict | None = None) -> list:
+        """扫描单个文件的**公开入口**（实时防护等外部调用方用这个）。
+
+        为什么必须存在：``engine/realtime_guard.py`` 的扫描线程一直在调
+        ``scanner.scan_single(path)``，但本类此前只有私有的
+        ``_scan_single_file`` / ``_scan_single_file_impl``。于是**每个实时事件**
+        都抛 AttributeError，又被 ``except Exception: continue`` 吞掉 ——
+        实时文件防护的检测率实际为 0，界面上却只显示"没发现威胁"。
+        补上这个别名把契约坐实；返回值与 ``_scan_single_file`` 一致：
+        始终是 list[dict]，可能包含归档解压出的多个内部威胁。
+        """
+        return self._scan_single_file(file_path, hash_store=hash_store)
+
     def _scan_single_file(self, file_path: str, hash_store: dict | None = None) -> list:
         """扫描单个文件，返回威胁列表（含递归解压命中）。
 

@@ -2,14 +2,16 @@
 御天 前端单独启动器（诊断/隔离验证用）
 
 故意不加载任何后端（FastAPI/引擎/自保护/watchdog），
-只做：把 frontend 目录用一个轻量静态 HTTP 服务托管 + 用 pywebview 弹出窗口加载。
+只做：把 frontend 目录用一个轻量静态 HTTP 服务托管 + 用系统默认浏览器打开。
 
-用途：单独验证“前端页面 + webview 窗口”能否正常显示，
-把前端渲染问题与应用主进程启动崩溃问题隔离开。
+用途：单独验证 frontend/ 下的 HTML 版界面能否正常渲染，
+把前端渲染问题与应用主进程启动问题隔离开。
+
+注意：主程序界面已改为 ui_tk/ 下的 Tkinter 实现，webview 链路已整体移除，
+      因此本工具也不再使用 pywebview，改为浏览器打开（零第三方依赖）。
 
 用法（开发模式）:
-    python frontend_launcher.py                # 弹出桌面窗口加载前端
-    python frontend_launcher.py --browser      # 改用默认浏览器打开前端
+    python frontend_launcher.py                # 起静态服务并打开默认浏览器
 """
 import os
 import sys
@@ -49,34 +51,15 @@ def main():
     print("[前端启动器] 前端已就绪:", url)
     print("[前端启动器] 提示: 本页面不连后端，个别数据无法加载是正常现象，用于验证界面能否显示。")
 
-    if "--browser" in sys.argv:
-        import webbrowser
-        webbrowser.open(url)
-        try:
-            while True:
-                threading.Event().wait(60)
-        except KeyboardInterrupt:
-            pass
-        return
-
-    # 默认：pywebview 桌面窗口
-    import webview
-    w = webview.create_window(
-        "御天 安全中心（前端预览）",
-        url,
-        width=1100,
-        height=700,
-        min_size=(900, 600),
-        resizable=True,
-    )
-    # frozen 模式下 win32 后端可能无法弹窗，这里显式捕获异常避免静默退出
+    # 用系统默认浏览器打开（原先默认开 pywebview 桌面窗口）
+    import webbrowser
+    webbrowser.open(url)
+    print("[前端启动器] 已用系统默认浏览器打开。Ctrl+C 退出（会一并停掉静态服务）。")
     try:
-        webview.start()
-    except Exception as e:
-        import traceback
-        print("[前端启动器] webview 无法启动:")
-        traceback.print_exc()
-        print("[前端启动器] 可改用 --browser 参数在默认浏览器中打开验证前端。")
+        while True:
+            threading.Event().wait(60)
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":

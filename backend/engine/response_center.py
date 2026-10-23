@@ -133,7 +133,18 @@ class ResponseCenter:
         return result
 
     def quarantine_file(self, file_path: str, source: str = "manual") -> dict:
-        """隔离文件。"""
+        """隔离文件。
+
+        ⚠️ 这里原先调的是 ``_quarantine_file_usermode``：直接
+        ``shutil.move`` 到 ``<隔离区>/<原文件名>.andunq`` ——
+        不加密、不写隔离库、没有清单，而且 **Windows 上同名会覆盖**前一个
+        隔离文件。结果有三：样本以明文留在磁盘、隔离区页面看不到、无法还原，
+        以及同名二次隔离造成数据丢失。
+
+        现在统一走 ``QuarantineManager.quarantine_file()``，与扫描路径是同一
+        套隔离实现：唯一文件名 ``{毫秒}_{哈希}_{随机}.qfile`` + XOR 混淆 +
+        SQLite 记录 + 支持 ``restore_file()`` 还原。
+        """
         result = {
             "action": ACTION_QUARANTINE_FILE,
             "file": file_path,
@@ -142,8 +153,23 @@ class ResponseCenter:
             "ts": datetime.now().isoformat(),
         }
 
-        # 用户态隔离文件（移动 + 隐藏标记）
-        ok = self._quarantine_file_usermode(file_path)
+        try:
+            from engine.quarantine import QuarantineManager
+
+            qres = QuarantineManager().quarantine_file(
+                file_path,
+                threat_name=f"手动隔离（{source}）",
+                threat_level="medium",
+            )
+            ok = bool(qres.get("success"))
+            result["quarantine"] = qres
+            if ok:
+                # QuarantineManager 的返回里主键叫 "id"（= 隔离区文件名），
+                # 也是 restore_file()/delete_quarantined() 要的参数。
+                result["quarantine_id"] = qres.get("id")
+        except Exception as exc:
+            ok = False
+            result["error"] = f"{type(exc).__name__}: {exc}"
 
         result["status"] = STATUS_EXECUTED if ok else STATUS_FAILED
         if not ok:
@@ -310,21 +336,9 @@ class ResponseCenter:
         except Exception:
             return False
 
-    @staticmethod
-    def _quarantine_file_usermode(file_path: str) -> bool:
-        """用户态隔离文件（移动 + 隐藏标记）。"""
-        try:
-            import shutil
-            if not file_path or not os.path.isfile(file_path):
-                return False
-            quar_dir = os.path.join(_data_dir(), "Quarantine")
-            os.makedirs(quar_dir, exist_ok=True)
-            name = os.path.basename(file_path)
-            dst = os.path.join(quar_dir, f"{name}.andunq")
-            shutil.move(file_path, dst)
-            return True
-        except Exception:
-            return False
+    # 注：原先这里有一个 `_quarantine_file_usermode` 静态方法，直接
+    # shutil.move 到 `<原文件名>.andunq`。它不加密、不写隔离库、同名覆盖、
+    # 不可还原，已删除 —— 隔离一律走 QuarantineManager.quarantine_file()。
 
     @staticmethod
     def _block_rule_usermode(rule: dict) -> bool:
