@@ -196,6 +196,13 @@ class App:
         tk.Label(foot, text=self.client.base.replace("http://", ""),
                  bg=T.BG_SIDEBAR, fg=T.TEXT_MUTED, font=T.mono(8),
                  anchor="w").pack(fill="x", pady=(2, 0))
+        # 版本号：不硬编码在界面里，而是从 /api/v1/health 的 engine_version 取，
+        # 这样发版只需改 backend 一处，Tk 界面自动跟随，不会出现"界面写 1.0.1、
+        # 后端已是 1.1.0"的漂移。
+        self._version_label = tk.Label(foot, text="", bg=T.BG_SIDEBAR,
+                                       fg=T.TEXT_MUTED, font=T.mono(8),
+                                       anchor="w")
+        self._version_label.pack(fill="x", pady=(1, 0))
 
         # 启停按钮：文字随状态在"启动后端 / 停止后端"之间切换
         self._backend_btn = tk.Button(
@@ -276,12 +283,30 @@ class App:
         定时器链，导致刷新频率翻倍。
         """
         def done(result):
-            self._set_backend_state(bool(getattr(result, "ok", False)))
+            data = getattr(result, "data", None)
+            ver = ""
+            name = ""
+            if isinstance(data, dict):
+                ver = str(data.get("engine_version") or "")
+                name = str(data.get("engine_version_name") or "")
+            self._set_backend_state(bool(getattr(result, "ok", False)),
+                                    version=ver, version_name=name)
 
         run_async(self.root, self.client.health, done,
                   lambda _exc: self._set_backend_state(False))
 
-    def _set_backend_state(self, ok: bool):
+    def _set_backend_state(self, ok: bool, version: str = "",
+                           version_name: str = ""):
+        # 版本号先更新：即便连接状态没变，也可能刚拿到版本（首次轮询时状态已为 True）
+        try:
+            if version:
+                text = f"v{version}"
+                if version_name:
+                    text += f" · {version_name}"
+                self._version_label.configure(text=text)
+        except tk.TclError:
+            pass
+
         if ok == self._backend_ok:
             return
         self._backend_ok = ok

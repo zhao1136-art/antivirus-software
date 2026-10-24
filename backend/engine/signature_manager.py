@@ -14,6 +14,13 @@ import time
 import threading
 from config import SIGNATURES_DB
 
+# 病毒库（特征库）版本号 —— 与软件版本（app.ENGINE_VERSION）相互独立。
+# 格式沿用厂商惯例的 大版本.年.月.日，例如 1.26.10.24 = 1 代库 / 2026-10-24。
+SIGNATURE_LIB_VERSION = "1.26.10.24"
+
+# 旧库里的版本占位值：从未真正版本化过时写的就是它，启动时会被升到当前库版本。
+_LEGACY_VERSION_PLACEHOLDER = "1.0.0"
+
 # 内建哈希种子：重建容器后依然生效（不依赖运行时插入）
 # 来源：theZoo 样本库已知恶意样本哈希
 SEED_SIGNATURES = [
@@ -133,8 +140,18 @@ class SignatureManager:
             """)
             self._conn.execute("""
                 INSERT OR IGNORE INTO signature_meta (key, value)
-                VALUES ('version', '1.0.0'), ('updated_at', ?)
-            """, (str(time.time()),))
+                VALUES ('version', ?), ('updated_at', ?)
+            """, (SIGNATURE_LIB_VERSION, str(time.time())))
+            # 一次性迁移：历史库里 version 还停留在占位值（从未真正版本化）时
+            # 升到当前库版本。若将来签名更新流程写入了更新的版本号，这里不会覆盖。
+            try:
+                self._conn.execute(
+                    "UPDATE signature_meta SET value=? "
+                    "WHERE key='version' AND value=?",
+                    (SIGNATURE_LIB_VERSION, _LEGACY_VERSION_PLACEHOLDER),
+                )
+            except Exception:
+                pass
             # 播种内建哈希特征（幂等，重建容器不丢）
             for s in SEED_SIGNATURES:
                 self._conn.execute(
@@ -282,10 +299,11 @@ class SignatureManager:
                 return {
                     "total_signatures": total,
                     "by_level": by_level,
-                    "version": version[0] if version else "1.0.0"
+                    "version": version[0] if version else SIGNATURE_LIB_VERSION
                 }
             except Exception:
-                return {"total_signatures": 0, "by_level": {}, "version": "1.0.0"}
+                return {"total_signatures": 0, "by_level": {},
+                        "version": SIGNATURE_LIB_VERSION}
 
     def export_signatures(self, hash_type: str = "all") -> list[dict]:
         """导出特征列表"""

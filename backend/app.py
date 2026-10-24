@@ -175,8 +175,8 @@ from engine.mail_guard import get_mail_guard
 
 # ---------- 全局实例 ----------
 # 引擎版本号（更新时同步修改此处）
-ENGINE_VERSION = "1.0.1"
-ENGINE_VERSION_NAME = "引擎单次I/O优化版"
+ENGINE_VERSION = "1.1.0"
+ENGINE_VERSION_NAME = "实时防护修复版"
 app = FastAPI(title="御天 Engine API", version=ENGINE_VERSION,
               docs_url=None, redoc_url=None)  # 生产环境关闭 Swagger
 # 串行初始化：先建立共享特征库连接（含内存索引），再启动调度器，避免启动并发冲突 / 重复 SigMgr
@@ -3155,7 +3155,7 @@ async def get_version():
         return {
             "version": ENGINE_VERSION,
             "name": ENGINE_VERSION_NAME,
-            "api": "1.0.1",
+            "api": ENGINE_VERSION,
             "engine": {
                 "total_scans": perf.get("total_scans", 0),
                 "cache_hits": perf.get("cache_hits", 0),
@@ -3173,7 +3173,7 @@ async def get_version():
         return {
             "version": ENGINE_VERSION,
             "name": ENGINE_VERSION_NAME,
-            "api": "1.0.1",
+            "api": ENGINE_VERSION,
         }
 
 

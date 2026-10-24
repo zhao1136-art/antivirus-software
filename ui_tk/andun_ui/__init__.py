@@ -1,8 +1,9 @@
 """御天 Tkinter 桌面界面。
 
-独立运行，不依赖、也不修改主程序任何文件。
-入口见 ``ui_tk/run_ui.py``。
+主程序的正式界面，由 ``backend/app.py`` 在主线程启动；也可用
+``ui_tk/run_ui.py`` 单独运行（此时界面自己拉起后端进程）。
 """
 
-__version__ = "0.1.0"
+# 与主程序版本保持一致（backend/app.py 的 ENGINE_VERSION）
+__version__ = "1.1.0"
 __all__ = ["__version__"]

@@ -12,7 +12,7 @@ import ctypes
 import winreg
 
 APP_NAME = "御天"
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.1.0"
 APP_PUBLISHER = "御天安全"
 APP_DISPLAY_NAME = f"{APP_NAME} {APP_VERSION}"
 INSTALL_DIR = os.path.join(os.environ.get("ProgramFiles", "C:\\Program Files"), APP_NAME)

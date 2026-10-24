@@ -236,7 +236,7 @@ class SettingsPage(Page):
         card.pack(fill="x", pady=(0, 14))
         W.section_title(card.inner, "引擎信息", T.BG_CARD).pack(anchor="w",
                                                             pady=(0, 10))
-        self.kv_engine_version = W.KeyValueRow(card.inner, "引擎版本")
+        self.kv_engine_version = W.KeyValueRow(card.inner, "软件版本")
         self.kv_engine_name = W.KeyValueRow(card.inner, "版本名称")
         self.kv_api = W.KeyValueRow(card.inner, "API 版本")
         self.kv_scans = W.KeyValueRow(card.inner, "累计扫描次数")
@@ -255,7 +255,7 @@ class SettingsPage(Page):
         W.section_title(card.inner, "特征库", T.BG_CARD).pack(anchor="w",
                                                           pady=(0, 10))
         self.kv_sig_total = W.KeyValueRow(card.inner, "特征条目")
-        self.kv_sig_version = W.KeyValueRow(card.inner, "库版本")
+        self.kv_sig_version = W.KeyValueRow(card.inner, "病毒库版本")
         self.kv_sig_levels = W.KeyValueRow(card.inner, "按等级分布")
         for row in (self.kv_sig_total, self.kv_sig_version, self.kv_sig_levels):
             row.pack(fill="x", pady=3)
