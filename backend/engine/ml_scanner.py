@@ -1864,12 +1864,31 @@ _EMBER_PREDICTOR_LOADED = False
 
 
 def _get_ember_predictor():
-    """惰性加载 EMBER 模型；缺失或无模型文件返回 None（安全跳过）。"""
-    from engine.ember_model import find_ember_model, load_ember_model
+    """惰性加载 PE 机器学习模型；都没有时返回 None（安全跳过）。
+
+    加载优先级：
+      ① ONNX（engine/models/*.onnx + features.json 契约）—— 原生内核推理，
+         实测 0.046ms/次，且加载时校验"契约维数 == 模型输入维数"。
+      ② LightGBM 文本模型（engine/ember_model.py 的纯 Python 评估器）——
+         没有 onnxruntime 时的退路。
+    """
     global _EMBER_PREDICTOR_CACHE, _EMBER_PREDICTOR_LOADED
     if _EMBER_PREDICTOR_LOADED:
         return _EMBER_PREDICTOR_CACHE
     _EMBER_PREDICTOR_LOADED = True
+
+    # ① ONNX 优先
+    try:
+        from engine.ember_onnx import load_onnx_model
+        pred = load_onnx_model()
+        if pred is not None:
+            _EMBER_PREDICTOR_CACHE = pred
+            return pred
+    except Exception:
+        pass
+
+    # ② 退回 LightGBM 文本模型
+    from engine.ember_model import find_ember_model, load_ember_model
     path = find_ember_model()
     _EMBER_PREDICTOR_CACHE = load_ember_model(path) if path else None
     return _EMBER_PREDICTOR_CACHE
