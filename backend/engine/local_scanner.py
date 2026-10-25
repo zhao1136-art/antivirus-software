@@ -836,6 +836,11 @@ class LocalScanner:
                     "path": os.path.abspath(file_path),
                     "md5": md5,
                     "sha256": sha256,
+                    # ⚠️ verdict 必须带上：调用方（第 7 步）用
+                    # `ml_result.get("verdict") in ("MALICIOUS","SUSPICIOUS")`
+                    # 判断是否采纳。此前这里没有该键 → get() 恒为 None →
+                    # **每一次 ML 检出都被静默丢弃**（而 ml_time 照常消耗）。
+                    "verdict": verdict,
                     "threat_level": threat_level,
                     "engine": "ml",
                     "signature": f"ML.{verdict}",
@@ -865,6 +870,7 @@ class LocalScanner:
                     "path": os.path.abspath(file_path),
                     "md5": md5,
                     "sha256": sha256,
+                    "verdict": verdict,      # 同上：调用方靠这个键决定是否采纳
                     "threat_level": "medium",
                     "engine": "ml",
                     "signature": f"ML.{verdict}",
