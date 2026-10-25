@@ -31,9 +31,15 @@ import zlib
 __all__ = ["match_domain", "match_ip", "get_ioc_stats", "reload"]
 
 IOC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "ioc")
-DOMAIN_FILE = os.path.join(IOC_DIR, "url_extra.u64")
-IP_FILE = os.path.join(IOC_DIR, "ip_extra.u64")
+# 每类可以有多个索引文件（来源分开存，便于各自更新与溯源）：
+#   url_extra.u64 —— maltrail 静态库（MIT）
+#   url_feed.u64  —— 动态拉取的 URL/域名情报（当前为 abuse.ch，CC0）
+#   ip_extra.u64  —— maltrail 静态库（MIT）
+#   c2_ip.u64     —— 动态拉取的 C2 IP（当前为 abuse.ch Feodo，CC0）
+DOMAIN_FILES = ["url_extra.u64", "url_feed.u64"]
+IP_FILES = ["ip_extra.u64", "c2_ip.u64"]
 META_FILE = os.path.join(IOC_DIR, "url_extra_meta.json")
+FEEDS_META_FILE = os.path.join(IOC_DIR, "feeds_meta.json")
 
 _lock = threading.Lock()
 _state: dict | None = None
@@ -74,18 +80,31 @@ def _ensure_loaded() -> dict:
                 meta = json.load(f)
         except (OSError, ValueError):
             meta = {}
+        feeds = {}
+        try:
+            with open(FEEDS_META_FILE, "r", encoding="utf-8") as f:
+                feeds = json.load(f)
+        except (OSError, ValueError):
+            feeds = {}
         _state = {
-            "domains": _load_u64(DOMAIN_FILE),
-            "ips": _load_u64(IP_FILE),
+            # 每类保留一个数组列表：命中判定时逐个二分，等价于并集
+            "domains": [a for a in (_load_u64(os.path.join(IOC_DIR, n))
+                                    for n in DOMAIN_FILES) if a],
+            "ips": [a for a in (_load_u64(os.path.join(IOC_DIR, n))
+                                for n in IP_FILES) if a],
             "meta": meta,
+            "feeds": feeds,
         }
     return _state
 
 
-def _contains(arr: array.array, h: int) -> bool:
-    """在有序数组中二分查找哈希。"""
-    i = bisect.bisect_left(arr, h)
-    return i < len(arr) and arr[i] == h
+def _contains_any(arrays: list, h: int) -> bool:
+    """在多个有序数组中查找哈希（并集语义）。"""
+    for arr in arrays:
+        i = bisect.bisect_left(arr, h)
+        if i < len(arr) and arr[i] == h:
+            return True
+    return False
 
 
 def match_domain(host: str) -> bool:
@@ -97,8 +116,8 @@ def match_domain(host: str) -> bool:
     if not host:
         return False
     st = _ensure_loaded()
-    arr = st["domains"]
-    if not arr:
+    arrs = st["domains"]
+    if not arrs:
         return False
     h = host.strip().strip(".").lower()
     if not h:
@@ -108,7 +127,7 @@ def match_domain(host: str) -> bool:
     start = 0 if len(labels) >= 2 else len(labels)
     for i in range(start, len(labels) - 1):
         cand = ".".join(labels[i:])
-        if _contains(arr, h64(cand)):
+        if _contains_any(arrs, h64(cand)):
             return True
     return False
 
@@ -118,23 +137,28 @@ def match_ip(ip: str) -> bool:
     if not ip:
         return False
     st = _ensure_loaded()
-    arr = st["ips"]
-    if not arr:
+    arrs = st["ips"]
+    if not arrs:
         return False
-    return _contains(arr, h64(ip.strip().lower()))
+    return _contains_any(arrs, h64(ip.strip().lower()))
 
 
 def get_ioc_stats() -> dict:
     """索引统计（供界面/接口展示）。"""
     st = _ensure_loaded()
     meta = st["meta"] or {}
+    feeds = st["feeds"] or {}
+    n_dom = sum(len(a) for a in st["domains"])
+    n_ip = sum(len(a) for a in st["ips"])
     return {
-        "domains": len(st["domains"]),
-        "ips": len(st["ips"]),
+        "domains": n_dom,
+        "ips": n_ip,
         "source": meta.get("source", "maltrail"),
         "license": meta.get("license", "MIT"),
         "built_at": meta.get("built_at", ""),
-        "memory_mb": round((len(st["domains"]) + len(st["ips"])) * 8 / 1048576, 1),
+        "memory_mb": round((n_dom + n_ip) * 8 / 1048576, 2),
+        "feed_sources": [s.get("source") for s in (feeds.get("sources") or [])],
+        "feed_built_at": feeds.get("built_at", ""),
     }
 
 

@@ -1,0 +1,19 @@
+{
+  "built_at": "2026-10-25T12:33:01",
+  "sources": [
+    {
+      "source": "feodo",
+      "license": "CC0",
+      "url": "https://feodotracker.abuse.ch/downloads/ipblocklist.csv",
+      "ips": 5,
+      "hosts": 0
+    }
+  ],
+  "ip_count": 5,
+  "host_count": 0,
+  "hash": "crc32(b) | crc32(b, 0x9E3779B9) << 32",
+  "files": {
+    "ips": "c2_ip.u64",
+    "hosts": "url_feed.u64"
+  }
+}
