@@ -1,5 +1,15 @@
 """
 报告与日志模块
+
+⚠️ 日志写入**绝不能抛异常**。
+2026-10-25 实测事故：打包版点"快速扫描"直接返回
+`{"error":"internal_error","type":"PermissionError"}`，扫描根本没开始 ——
+根因是 `open(SCAN_LOG_FILE, "a")` 撞上瞬时共享冲突（当时火绒 HipsDaemon
+正在扫这个日志文件），而这里没有任何异常保护，异常一路冒到 FastAPI
+变成 500，整个扫描任务就此失败。
+
+日志是**旁路功能**：写不进去顶多丢一条记录，绝不该让核心业务失败。
+所以这里改成"有限重试 + 最终静默放弃"。
 """
 import os
 import time
@@ -7,12 +17,36 @@ import json
 from datetime import datetime
 from config import LOGS_DIR, SCAN_LOG_FILE, THREAT_LOG_FILE
 
+# 写日志失败时的重试次数与间隔（共享冲突通常是毫秒级瞬时的）
+_LOG_RETRIES = 3
+_LOG_RETRY_SLEEP = 0.05
+
+
+def _append_line(path: str, line: str) -> bool:
+    """向日志文件追加一行；失败重试，最终失败返回 False（**不抛异常**）。
+
+    只捕获 OSError/PermissionError 一类 IO 问题；其他异常（如 json 序列化
+    错误）也应被隔离，因为日志不能影响主流程。
+    """
+    for attempt in range(_LOG_RETRIES):
+        try:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(line)
+            return True
+        except OSError:
+            if attempt + 1 < _LOG_RETRIES:
+                time.sleep(_LOG_RETRY_SLEEP)
+    return False
+
 
 class ReportLogger:
     """扫描日志与威胁报告"""
 
     def __init__(self):
-        os.makedirs(LOGS_DIR, exist_ok=True)
+        try:
+            os.makedirs(LOGS_DIR, exist_ok=True)
+        except OSError:
+            pass
 
     def log_scan_start(self, task_id: str, scan_type: str):
         self._write_scan_log({
@@ -77,18 +111,28 @@ class ReportLogger:
 
     def clear_logs(self):
         for f in [SCAN_LOG_FILE, THREAT_LOG_FILE]:
-            if os.path.isfile(f):
-                open(f, "w").close()
+            try:
+                if os.path.isfile(f):
+                    open(f, "w").close()
+            except OSError:
+                # 清日志失败同样不该影响调用方
+                pass
 
     # ---------- 内部方法 ----------
 
     def _write_scan_log(self, entry: dict):
-        with open(SCAN_LOG_FILE, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        try:
+            line = json.dumps(entry, ensure_ascii=False) + "\n"
+        except (TypeError, ValueError):
+            return
+        _append_line(SCAN_LOG_FILE, line)
 
     def _write_threat_log(self, entry: dict):
-        with open(THREAT_LOG_FILE, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        try:
+            line = json.dumps(entry, ensure_ascii=False) + "\n"
+        except (TypeError, ValueError):
+            return
+        _append_line(THREAT_LOG_FILE, line)
 
     def _read_log(self, path: str, limit: int) -> list[dict]:
         if not os.path.isfile(path):
