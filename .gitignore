@@ -30,6 +30,8 @@ TestTP.etl
 clamav-1.5.3.win.x64/
 clamav-1.5.3.win.arm64/
 clamav-main/
+# C2IntelFeeds 数据：CC BY-NC-SA 4.0（NonCommercial + ShareAlike）
+# 仅可本地研调使用，**不得随产品发布**。解压体积约 224MB。
 C2IntelFeeds-master/
 capa-master/
 ember-master/

@@ -1,0 +1,14 @@
+{
+  "built_at": "2026-10-25T12:20:52",
+  "source": "maltrail (https://github.com/stamparm/maltrail)",
+  "license": "MIT",
+  "attribution": "Copyright (c) 2014-2026 Maltrail developers",
+  "domain_count": 1061714,
+  "ip_count": 22747,
+  "skipped_wildcards": 5,
+  "hash": "crc32(b) | crc32(b, 0x9E3779B9)<<32",
+  "files": {
+    "domains": "url_extra.u64",
+    "ips": "ip_extra.u64"
+  }
+}

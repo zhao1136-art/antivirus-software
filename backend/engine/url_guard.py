@@ -39,6 +39,13 @@ except Exception:                      # 数据缺失时静默降级，不影响
     _hr_url_count = None
     _hr_url_category = None
 
+# 第三方 IOC 索引（maltrail，MIT 许可）：106 万恶意域名 + 2.3 万恶意 IP。
+# 紧凑 uint64 二分索引（8.1MB），语义与火绒黑名单一致（裸域名匹配子域）。
+try:
+    from engine.ioc_index import match_domain as _ioc_match_domain
+except Exception:                      # 索引缺失时静默降级
+    _ioc_match_domain = None
+
 IS_WINDOWS = sys.platform == 'win32'
 
 # ── 数据目录定位（与 adblock / download_guard 保持一致）────────────
@@ -204,6 +211,14 @@ class UrlGuard:
                 hr_hit = False
             if hr_hit:
                 reasons.append("命中火绒恶意网址库")
+        # 2.6) 第三方恶意域名情报（maltrail 静态 IOC：malware + malicious 两类，
+        #      刻意排除其 static/suspicious 档，避免把"可疑"当"恶意"去拦）
+        if _ioc_match_domain is not None:
+            try:
+                if _ioc_match_domain(host):
+                    reasons.append("命中第三方恶意域名情报（maltrail）")
+            except Exception:
+                pass
         # 内容分类（火绒 urlcls.db：gamb/porn/news/shop… 仅标注，不据此判恶）
         categories = []
         if _hr_url_category is not None:
