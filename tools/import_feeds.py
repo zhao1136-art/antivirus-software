@@ -46,7 +46,15 @@ SOURCES = {
                 "CC0", True, "url"),
     "threatfox": ("https://threatfox-api.abuse.ch/api/v1/",
                   "CC0", True, "threatfox"),
+    # IPsum：stamparm（maltrail 作者）聚合 30+ 公开黑名单，每行 "IP\t<出现在几个名单里>"。
+    # 许可是 **The Unlicense（公有领域）**，可商用、可再分发，无需注册。
+    # 这是 abuse.ch 在 IP 侧最合适的替代：可自行按置信分数过滤。
+    "ipsum": ("https://raw.githubusercontent.com/stamparm/ipsum/master/ipsum.txt",
+              "Unlicense (public domain)", False, "ipsum"),
 }
+
+# IPsum 的最低置信分数：README 建议"出现在 ≥3 个名单里"才用于自动封禁
+IPSUM_MIN_SCORE = 3
 
 # 明确禁止导入的源（许可不允许商用/再分发）
 DENY_LICENSES = ("CC BY-NC", "NonCommercial", "BY-NC-SA", "proprietary")
@@ -126,8 +134,31 @@ def collect_threatfox(raw: bytes) -> tuple[set[str], set[str]]:
     return ips, hosts
 
 
+def collect_ipsum(raw: bytes, min_score: int = IPSUM_MIN_SCORE) -> tuple[set[str], set[str]]:
+    """IPsum：每行 "IP<TAB>分数"（分数 = 出现在多少个公开黑名单里）。
+
+    只收分数 >= min_score 的条目 —— 单名单命中的 IP 误报率明显更高，
+    用来做本机阻断不合适。
+    """
+    ips: set[str] = set()
+    for line in raw.decode("utf-8", "ignore").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if not parts or not IP_RE.match(parts[0]):
+            continue
+        try:
+            score = int(parts[1]) if len(parts) > 1 else 0
+        except ValueError:
+            score = 0
+        if score >= min_score:
+            ips.add(parts[0])
+    return ips, set()
+
+
 COLLECTORS = {"feodo": collect_feodo, "urlhaus": collect_urlhaus,
-              "threatfox": collect_threatfox}
+              "threatfox": collect_threatfox, "ipsum": collect_ipsum}
 
 
 def write_index(path: str, values: set[str]):
@@ -144,6 +175,8 @@ def main() -> int:
     ap.add_argument("--out", default=IOC_DIR)
     ap.add_argument("--merge", action="store_true",
                     help="把 IP 结果并入 c2_ip.u64（默认覆盖）")
+    ap.add_argument("--ipsum-min-score", type=int, default=IPSUM_MIN_SCORE,
+                    help=f"IPsum 最低置信分数（默认 {IPSUM_MIN_SCORE}）")
     args = ap.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
@@ -178,6 +211,9 @@ def main() -> int:
             print(f"!! {src} 下载失败: {type(exc).__name__}: {exc}")
             continue
         ips, hosts = COLLECTORS[src](raw)
+        if src == "ipsum":
+            # 重新按 CLI 指定的阈值解析（COLLECTORS 里的默认值只是兜底）
+            ips, hosts = collect_ipsum(raw, args.ipsum_min_score)
         print(f"   {src:<10} {len(raw)/1024:>8.1f} KB   IP {len(ips):>6}  "
               f"域名 {len(hosts):>6}   许可 {lic}")
         all_ips |= ips
