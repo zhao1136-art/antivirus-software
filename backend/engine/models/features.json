@@ -4778,18 +4778,18 @@
     "datadirectories_28",
     "datadirectories_29"
   ],
-  "trained_at": "2026-10-25T11:49:35",
+  "trained_at": "2026-10-25T12:07:01",
   "train": {
-    "n": 3746,
-    "malware": 1418
+    "n": 3914,
+    "malware": 1696
   },
   "holdout": {
-    "n": 836,
-    "malware": 164,
-    "auc": 0.9993739111498258,
-    "recall": 0.9634146341463414,
-    "precision": 0.9875,
-    "fpr": 0.002976190476190476
+    "n": 996,
+    "malware": 214,
+    "auc": 0.9996952458350264,
+    "recall": 0.985981308411215,
+    "precision": 0.9952830188679245,
+    "fpr": 0.0012787723785166241
   },
   "params": {
     "objective": "binary",

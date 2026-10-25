@@ -52,6 +52,26 @@ DEFAULT_WORKDIR = r"G:\andun_train_work"
 
 OUT_DIR = r"H:\Caelire\backend\engine\models"
 
+# 收集良性时**必须排除**的路径。
+# 最要紧的是训练自己的解压缓存：G:\andun_train_work\malware 里全是解压出来的
+# 恶意样本，而 collect_benign 会扫 G:\ 整盘 —— 不排除就会把恶意样本当良性
+# 喂进训练集（实测曾混入 294/3000 ≈ 9.8%，是典型的标签污染，会让评估结果
+# 和最终模型都不可信）。
+EXCLUDE_PREFIXES = [
+    os.path.normcase(DEFAULT_WORKDIR),
+    os.path.normcase(os.path.join(BACKEND, "dist")),
+    os.path.normcase(os.path.join(BACKEND, "build")),
+]
+
+
+def _excluded(path: str) -> bool:
+    """路径是否落在必须排除的前缀下。"""
+    p = os.path.normcase(os.path.abspath(path))
+    for x in EXCLUDE_PREFIXES:
+        if p == x or p.startswith(x + os.sep):
+            return True
+    return False
+
 
 # ── 工具 ──────────────────────────────────────────────────────────
 def sha256_file(path: str, limit: int = 64 * 1024 * 1024) -> str:
@@ -79,6 +99,13 @@ def collect_benign(limit: int, seed: int = 42) -> list[tuple[str, str]]:
         base_depth = root.rstrip("\\").count(os.sep)
         max_depth = 6 if tag == "gdrive" else 12
         for dp, dns, fns in os.walk(root):
+            if _excluded(dp):
+                dns[:] = []
+                continue
+            # 剪枝：不下探排除目录与 __pycache__
+            dns[:] = [d for d in dns
+                      if d != "__pycache__"
+                      and not _excluded(os.path.join(dp, d))]
             if dp.count(os.sep) - base_depth > max_depth:
                 dns[:] = []
                 continue
