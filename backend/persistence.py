@@ -6,6 +6,7 @@
 import os
 import sys
 import json
+import copy
 import time
 import sqlite3
 import threading
@@ -91,29 +92,58 @@ DEFAULT_CONFIG_SAVE = {
 }
 
 
+def _atomic_write_json(path: str, data) -> bool:
+    """原子写 JSON：先写同目录临时文件，fsync 后 os.replace 覆盖。
+
+    为什么必须这样：原先直接 open(path, "w") 后 dump —— 进程在写一半时被杀
+    （任务管理器结束、断电、或本项目的自保护 watchdog 重启）会留下**截断的
+    JSON**，下次启动 json.load 抛 JSONDecodeError，于是所有用户设置被静默
+    重置成默认值。os.replace 在同一卷上是原子的，读到的要么是旧文件要么是
+    新文件，不会读到半截。
+    """
+    tmp = path + ".tmp"
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass          # 某些文件系统不支持 fsync，忽略即可
+        os.replace(tmp, path)
+        return True
+    except OSError:
+        try:
+            if os.path.isfile(tmp):
+                os.unlink(tmp)
+        except OSError:
+            pass
+        return False
+
+
 def load_config_save() -> dict:
     """加载用户自定义配置，缺失字段用默认值补全"""
+    # ⚠️ 必须 deepcopy：DEFAULT_CONFIG_SAVE 是多层嵌套 dict，`dict()` 只做浅拷贝，
+    # 调用方一旦修改 merged["scan"][...] 就会**污染模块级默认值**，
+    # 后续所有"取默认值"的地方拿到的都是被改过的数据。
     if not os.path.isfile(CONFIG_SAVE_PATH):
-        return dict(DEFAULT_CONFIG_SAVE)
+        return copy.deepcopy(DEFAULT_CONFIG_SAVE)
     try:
         with open(CONFIG_SAVE_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
         # 递归合并默认值，确保新版本新增字段不会丢失
-        merged = dict(DEFAULT_CONFIG_SAVE)
+        merged = copy.deepcopy(DEFAULT_CONFIG_SAVE)
         _deep_merge(merged, data)
         return merged
     except (json.JSONDecodeError, OSError):
-        return dict(DEFAULT_CONFIG_SAVE)
+        return copy.deepcopy(DEFAULT_CONFIG_SAVE)
 
 
 def save_config_save(config: dict):
-    """保存用户自定义配置到磁盘"""
+    """保存用户自定义配置到磁盘（原子写）"""
     with _lock:
-        try:
-            with open(CONFIG_SAVE_PATH, "w", encoding="utf-8") as f:
-                json.dump(config, f, ensure_ascii=False, indent=2)
-        except OSError:
-            pass
+        _atomic_write_json(CONFIG_SAVE_PATH, config)
 
 
 def _deep_merge(base: dict, override: dict):
@@ -151,13 +181,9 @@ def load_guard_days() -> dict:
 
 
 def save_guard_days(guard_data: dict):
-    """保存守护天数记录到磁盘"""
+    """保存守护天数记录到磁盘（原子写，理由同 save_config_save）"""
     with _lock:
-        try:
-            with open(GUARD_DAYS_PATH, "w", encoding="utf-8") as f:
-                json.dump(guard_data, f, ensure_ascii=False, indent=2)
-        except OSError:
-            pass
+        _atomic_write_json(GUARD_DAYS_PATH, guard_data)
 
 
 def update_guard_days() -> dict:

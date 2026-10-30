@@ -386,17 +386,56 @@ app.add_middleware(
 # ── 本地控制面鉴权（安全产品自身安全加固） ──
 # 修复：后端 API 此前无任何鉴权 + CORS 全放行，用户在浏览器里打开任意恶意网页，
 # 其 JS 即可跨源调用 /api/v1/shutdown、/api/v1/response/kill-process、隔离文件等
-# 破坏性接口（无法读响应，但副作用照常执行）。现通过“HttpOnly + SameSite=Strict
-# 令牌 Cookie”对 /api/* 做鉴权：
-#   - 页面访问（同源）时下发令牌 Cookie，浏览器自动携带，正常功能不受影响；
-#   - HttpOnly 使恶意 JS 无法读取令牌；SameSite=Strict 使跨站请求不携带 Cookie，
-#     配合收紧后的 CORS，恶意页面既写不成也读不到；
-#   - 静态资源、健康检查、WebSocket 进度推送免鉴权。
+# 破坏性接口（无法读响应，但副作用照常执行）。现通过本地令牌对 /api/* 做鉴权。
+#
+# 令牌下发方式（2026-10-30 加固）
+# --------------------------------
+# 原先的做法是：**任何非 /api 页面请求**都会 `Set-Cookie: yt_token=...`。
+# 问题在于本机任意进程都能 `GET /` 拿到这个 Cookie，再带着它调用任何
+# /api/*（含 shutdown / kill-process / 隔离文件）—— 等于鉴权对本地进程无效。
+# 现在改为：令牌只写入**当前用户私有目录**下的令牌文件
+#     %LOCALAPPDATA%\Andun\data\.token   （开发模式：<repo>/data/.token）
+# 只有同一用户下的进程才读得到（该目录 ACL 继承用户配置，其他用户无权访问）。
+# 客户端通过 `x-yutian-token` 请求头（或 ?token= 查询参数，供浏览器前端使用）
+# 携带令牌；**不再通过 Cookie 下发**。
 from starlette.middleware.base import BaseHTTPMiddleware
 import secrets as _secrets
 
-_LOCAL_TOKEN_COOKIE = "yt_token"
+_LOCAL_TOKEN_COOKIE = "yt_token"          # 仅为兼容旧客户端保留读取
 _LOCAL_TOKEN = _secrets.token_urlsafe(32)
+# 令牌文件落在与持久化配置同一个数据目录（打包态 = %LOCALAPPDATA%\Andun\data，
+# 开发态 = <repo>/data），两者口径必须一致，否则客户端会读不到。
+try:
+    from persistence import DATA_DIR
+except Exception:                              # 理论上不会发生：上方已导入 persistence
+    DATA_DIR = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+_LOCAL_TOKEN_FILE = os.path.join(DATA_DIR, ".token")
+
+
+def _write_local_token_file() -> str:
+    """把本次启动的令牌写到用户私有目录，供同用户下的客户端读取。
+
+    返回写入路径（失败返回 ""）。文件权限：尽力 os.chmod 0600；
+    Windows 上该目录本身已按用户隔离，chmod 主要影响 POSIX 语义。
+    """
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp = _LOCAL_TOKEN_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(_LOCAL_TOKEN)
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
+        os.replace(tmp, _LOCAL_TOKEN_FILE)
+        return _LOCAL_TOKEN_FILE
+    except Exception:
+        return ""
+
+
+_LOCAL_TOKEN_PATH = _write_local_token_file()
+
 
 class _LocalAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
@@ -404,26 +443,18 @@ class _LocalAuthMiddleware(BaseHTTPMiddleware):
         # 免鉴权：静态资源 / 健康检查 / WebSocket 进度推送
         if path.startswith("/static/") or path == "/api/health" or path.startswith("/ws/"):
             return await call_next(request)
-        # API 接口：校验本地令牌（Cookie / Header / query 三选一）
+        # API 接口：校验本地令牌（Header / query / 旧 Cookie 三选一）
         if path.startswith("/api/"):
             token = (
-                request.cookies.get(_LOCAL_TOKEN_COOKIE)
-                or request.headers.get("x-yutian-token")
+                request.headers.get("x-yutian-token")
                 or request.query_params.get("token")
+                or request.cookies.get(_LOCAL_TOKEN_COOKIE)
             )
             if not token or token != _LOCAL_TOKEN:
                 return JSONResponse({"error": "未授权访问：缺少或错误的本地令牌"}, status_code=401)
             return await call_next(request)
-        # 页面访问：下发（或续期）令牌 Cookie
-        response = await call_next(request)
-        try:
-            response.set_cookie(
-                key=_LOCAL_TOKEN_COOKIE, value=_LOCAL_TOKEN,
-                httponly=True, samesite="strict", path="/", max_age=7 * 24 * 3600,
-            )
-        except Exception:
-            pass
-        return response
+        # 页面访问：**不再下发令牌 Cookie**（见上方说明）。
+        return await call_next(request)
 
 app.add_middleware(_LocalAuthMiddleware)
 
@@ -4190,16 +4221,32 @@ def _start_self_protection():
 #  Logo 退出流程（淡出动画 + 资源释放 + 进程退出）
 # ══════════════════════════════════════════════════════════════
 
-def _shutdown_and_exit(code: int = 0):
-    """统一的收尾流程：保存状态 → 释放引擎资源 → 写正常退出标记 → 退出进程。"""
-    # 1. 保存配置
+def _save_runtime_config_sections():
+    """把运行期的 protection / features 两段**合并**写入 config_save.json。
+
+    ⚠️ 必须"读-合并-写"。原实现是两处直接调用
+        save_config_save({"protection": _protection_modules,
+                          "features": _feature_toggles})
+    即传入一个**只含这两段的新 dict**，落盘后 config_save.json 里的
+    scan / cloud / network / policy 段全部消失 —— 表现为"在设置页改了扫描或
+    云查配置，退出程序再进来又变回默认值"，且每次都静默发生、无任何日志。
+    另：这两处（_shutdown_and_exit 与 atexit 钩子）会先后各写一遍，
+    后写的那次在旧实现里会再次覆盖前者，这里统一走合并逻辑。
+    """
     try:
-        save_config_save({
-            "protection": _protection_modules,
-            "features": _feature_toggles,
-        })
+        from persistence import load_config_save, save_config_save
+        cfg = load_config_save()
+        cfg["protection"] = _protection_modules
+        cfg["features"] = _feature_toggles
+        save_config_save(cfg)
     except Exception:
         pass
+
+
+def _shutdown_and_exit(code: int = 0):
+    """统一的收尾流程：保存状态 → 释放引擎资源 → 写正常退出标记 → 退出进程。"""
+    # 1. 保存配置（读-合并-写，见 _save_runtime_config_sections 的说明）
+    _save_runtime_config_sections()
 
     # 2. 保存守护天数
     #    原写法是：
@@ -4389,6 +4436,10 @@ async def self_protect_status():
 @app.post('/api/v1/self-protect/configure')
 async def self_protect_configure(data: dict = Body(...)):
     sp = self_protect._get_real()
+    # ⚠️ **不再接受请求体里的 install_dir**：该值此前直接用于
+    # icacls /inheritance:r，一个本机请求就能对任意目录（含整盘）破坏 ACL。
+    # 现在固定用服务自身解析出的安装目录；请求里带的 install_dir 若与实际
+    # 安装目录不同，会被 SelfProtect 拒绝（结果里 install_dir_rejected=True）。
     result = sp.configure(
         install_dir=data.get("install_dir", ""),
         agent_pid=data.get("agent_pid", 0),
@@ -4992,13 +5043,8 @@ def _register_exit_save_hook():
 
     @atexit.register
     def _on_exit_save_all():
-        try:
-            save_config_save({
-                "protection": _protection_modules,
-                "features": _feature_toggles,
-            })
-        except Exception:
-            pass
+        # 与 _shutdown_and_exit 一样走"读-合并-写"，否则会把 scan/cloud 等段抹掉
+        _save_runtime_config_sections()
         try:
             from persistence import load_guard_days
             save_guard_days(load_guard_days())

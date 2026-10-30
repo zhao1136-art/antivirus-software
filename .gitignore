@@ -113,6 +113,13 @@ backend/engine/huorong_data/
 backend/_app.log
 *.bak_*
 
+# ===== 本地鉴权令牌（密钥，绝不能入库）=====
+# 后端每次启动随机生成并写入用户私有目录，客户端从这里读取
+# （见 backend/app.py 的 _write_local_token_file / ui_tk/andun_ui/api.py）
+data/.token
+data/.token.tmp
+.token
+
 # ===== 已从版本库剔除（仅本地保留，不上传）=====
 御天精简版/
 其他/微信图片_*.jpg

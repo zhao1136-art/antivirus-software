@@ -53,19 +53,12 @@ try:
     _persistent_config = load_config_save()
     _scan_cfg = _persistent_config.get("scan", {})
 
-    # 扫描配置覆盖
-    if _scan_cfg.get("max_workers", 0) > 0:
-        MAX_WORKERS = _scan_cfg["max_workers"]
-    if _scan_cfg.get("single_file_timeout", 0) > 0:
-        SINGLE_FILE_TIMEOUT = _scan_cfg["single_file_timeout"]
-    if _scan_cfg.get("max_file_size_mb", 0) > 0:
-        MAX_FILE_SIZE = _scan_cfg["max_file_size_mb"] * 1024 * 1024
-    if _scan_cfg.get("ml_pe_max_read_mb", 0) > 0:
-        ML_PE_MAX_READ = _scan_cfg["ml_pe_max_read_mb"] * 1024 * 1024
-    if _scan_cfg.get("yara_enabled", True) is False:
-        YARA_ENABLED = False
-    if _scan_cfg.get("cloud_enabled", True) is False:
-        CLOUD_ENABLED = False
+    # ⚠️ 这里**不能**直接给 MAX_WORKERS / SINGLE_FILE_TIMEOUT / MAX_FILE_SIZE /
+    #    ML_PE_MAX_READ / CLOUD_ENABLED 赋值：它们的默认值都在本文件**下方**
+    #    （约 L181/L190/L230/L233/L253）才定义，在这里赋值会被下面的默认值
+    #    覆盖回去 —— 表现就是"设置页改了扫描配置，重启后不生效"，且无任何报错。
+    #    先留存原始配置，待所有默认值定义完再统一应用（见文件末尾同段注释）。
+    _PERSISTED_SCAN_CFG = dict(_scan_cfg)
 
     # 网络监控配置覆盖
     _net_cfg = _persistent_config.get("network", {})
@@ -291,3 +284,29 @@ FILE_GUARD_INTERVAL = 10
 FILE_GUARD_MAX_FILES = 500
 # 是否监控受保护目录中的新文件
 FILE_GUARD_DETECT_NEW_FILES = True
+
+# ══════════════════════════════════════════════════════════════
+# 持久化扫描配置的应用（**必须在上面所有默认值定义之后**）
+#
+# 与前面 cloud 段（AVIC_API_KEY / CLOUD_ENGINE_ORDER）同一个原因：
+# 这些常量在文件下方才有默认值，任何在文件上方做的赋值都会被默认值冲掉。
+# 原先 scan 段就是踩了这个坑 —— 设置页里的
+# 最大线程数 / 单文件超时 / 最大文件大小 / ML 读取上限 / 云查开关
+# 全部**从未生效**过。
+# ══════════════════════════════════════════════════════════════
+try:
+    _psc = globals().get("_PERSISTED_SCAN_CFG") or {}
+    if _psc.get("max_workers", 0) > 0:
+        MAX_WORKERS = int(_psc["max_workers"])
+    if _psc.get("single_file_timeout", 0) > 0:
+        SINGLE_FILE_TIMEOUT = int(_psc["single_file_timeout"])
+    if _psc.get("max_file_size_mb", 0) > 0:
+        MAX_FILE_SIZE = int(_psc["max_file_size_mb"]) * 1024 * 1024
+    if _psc.get("ml_pe_max_read_mb", 0) > 0:
+        ML_PE_MAX_READ = int(_psc["ml_pe_max_read_mb"]) * 1024 * 1024
+    if _psc.get("yara_enabled", True) is False:
+        YARA_ENABLED = False
+    if _psc.get("cloud_enabled", True) is False:
+        CLOUD_ENABLED = False
+except Exception:
+    pass

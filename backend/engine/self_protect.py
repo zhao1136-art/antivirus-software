@@ -14,6 +14,8 @@ import ctypes
 import ctypes.wintypes as wt
 import logging
 import os
+import subprocess
+import sys
 import threading
 from typing import Optional
 
@@ -51,17 +53,23 @@ class SelfProtect:
     def configure(self, install_dir: str, agent_pid: int = 0) -> dict:
         """配置自保护并执行用户态加固。
 
-        :param install_dir: 安装目录
+        :param install_dir: 安装目录。**只接受自身安装目录**（见
+            _resolve_install_dir）；传入任何其它路径都会被忽略并记录原因 ——
+            该参数可经 HTTP 请求体传进来，若照单全收，一个本机请求就能让
+            icacls 对整个磁盘做 /inheritance:r（实测过这种后果）。
         :param agent_pid: agent 进程 PID（0 则自动探测当前进程）
         """
         with self._lock:
-            self._install_dir = install_dir
+            safe_dir = self._resolve_install_dir(install_dir)
+            self._install_dir = safe_dir
             if agent_pid:
                 self._agent_pid = agent_pid
             else:
                 self._agent_pid = os.getpid()
 
             results = {
+                "install_dir": safe_dir,
+                "install_dir_rejected": bool(install_dir) and not safe_dir,
                 "process": self._protect_process(),
                 "file": self._protect_file(),
                 "registry": self._protect_registry(),
@@ -69,6 +77,32 @@ class SelfProtect:
             }
             self._configured = True
             return results
+
+    @staticmethod
+    def _resolve_install_dir(requested: str = "") -> str:
+        """解析并**校验**安装目录：只允许自身 exe 所在目录。
+
+        · 冻结态：sys.executable 的目录（安装目录）
+        · 源码态：仓库根（backend 的上级）
+        请求传入的路径只有在与上述目录**相等**时才采用；否则返回 "" （不做加固）。
+        返回 "" 时 _harden_directory_acl 会直接跳过，不会执行任何 icacls。
+        """
+        try:
+            if getattr(sys, "frozen", False):
+                actual = os.path.dirname(os.path.abspath(sys.executable))
+            else:
+                actual = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            actual_n = os.path.normcase(os.path.normpath(actual))
+            if not requested:
+                return actual
+            req_n = os.path.normcase(os.path.normpath(os.path.abspath(requested)))
+            if req_n == actual_n:
+                return actual
+            logger.warning("拒绝加固非安装目录: %r（实际安装目录 %r）", requested, actual)
+            return ""
+        except Exception as exc:
+            logger.debug("安装目录解析失败: %s", exc)
+            return ""
 
     # ---------------------------------------------------------------
     # 进程自保护
@@ -220,17 +254,39 @@ class SelfProtect:
 
     @staticmethod
     def _harden_directory_acl(install_dir: str) -> bool:
-        """加固目录 ACL：移除 Users 组的写权限。
+        """加固安装目录 ACL：让普通用户不能再写入，但保留读取/执行权限。
 
-        使用 icacls 命令实现（简单可靠），失败不抛出。
+        两道安全措施（原先都没有）：
+        1. **只允许自身安装目录**：install_dir 为空或不是自身安装目录时直接返回
+           False，不执行任何 icacls。原先路径可由 HTTP 请求体指定，
+           传入 C:\\ 就会对整盘 /inheritance:r，属于可被本机任意进程触发的破坏。
+        2. **subprocess 参数列表而非 os.system 字符串拼接**：避免路径里的引号/
+           特殊字符改变命令语义。
+        另外给 Users 组保留 RX 而不是完全剔除 —— 原命令只授 SYSTEM/Administrators，
+        如果程序装在用户可写目录（非 Program Files），会把用户锁在自己目录外面。
         """
         try:
             if not install_dir or not os.path.isdir(install_dir):
                 return False
-            # 移除 Users 组的继承+写权限（保留 SYSTEM/Administrators）
-            cmd = f'icacls "{install_dir}" /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F"'
-            ret = os.system(cmd)
-            return ret == 0
+            actual = SelfProtect._resolve_install_dir(install_dir)
+            if not actual:
+                logger.warning("跳过 ACL 加固：不是自身安装目录 %r", install_dir)
+                return False
+            cmd = [
+                "icacls", actual,
+                "/inheritance:r",
+                "/grant:r", "SYSTEM:(OI)(CI)F",
+                "/grant:r", "Administrators:(OI)(CI)F",
+                "/grant:r", "Users:(OI)(CI)RX",
+            ]
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            r = subprocess.run(cmd, capture_output=True, text=True,
+                               timeout=30, creationflags=flags)
+            if r.returncode != 0:
+                logger.debug("目录 ACL 加固失败: %s %s",
+                             r.returncode, (r.stderr or "")[:200])
+                return False
+            return True
         except Exception as e:
             logger.debug("目录 ACL 加固失败: %s", e)
             return False

@@ -1,4 +1,4 @@
-"""后端 HTTP 客户端与异步桥 —— 只用标准库。
+﻿"""后端 HTTP 客户端与异步桥 —— 只用标准库。
 
 后端契约来源：``backend/app.py``（uvicorn 监听 ``127.0.0.1:8899``）。
 本模块涉及的接口字段都按 app.py 里的真实返回结构写，不猜测。
@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import http.cookiejar
 import json
+import os
 import threading
+import time
 import urllib.error
 import urllib.request
 from typing import Any, Callable, NamedTuple
@@ -48,63 +50,87 @@ class ApiResult(NamedTuple):
 
 
 class ApiClient:
-    """极简 HTTP 客户端。线程安全（CookieJar 内部有锁，令牌预取另有自己的锁）。
+    """极简 HTTP 客户端。线程安全（令牌读取另有自己的锁）。
 
     本地令牌鉴权（重要）
     -------------------
     ``backend/app.py`` 用 ``_LocalAuthMiddleware`` 保护所有 ``/api/*``：
     令牌是**每次后端启动时随机生成**的（``_LOCAL_TOKEN = secrets.token_urlsafe(32)``），
-    只通过"访问非 API 页面"时下发的 ``Set-Cookie: yt_token=...`` 交给客户端；
-    ``/api/*`` 必须带上它（Cookie / ``x-yutian-token`` / ``?token=`` 三选一），
-    否则一律 401「未授权访问：缺少或错误的本地令牌」。
+    并写入**当前用户私有目录**下的令牌文件：
+        %LOCALAPPDATA%\\Andun\\data\\.token     （开发模式：<repo>/data/.token）
+    客户端读出它，用 ``x-yutian-token`` 请求头携带；``/api/*`` 缺令牌一律 401。
 
-    所以裸 ``urllib`` 客户端**必须先 GET 一次 ``/`` 拿到 Cookie**，否则除了
-    ``/api/health``（免鉴权）之外每个接口都是 401。HTML 前端天然带 Cookie，
-    这也是当初"页面能用、Tk 界面全红"的原因。
+    为什么不再用 Cookie
+    -------------------
+    旧机制是"任何非 /api 页面都会 Set-Cookie: yt_token=..."，于是**本机任意进程
+    只要 GET / 就能拿到令牌**，再调用 shutdown / kill-process / 隔离文件 ——
+    鉴权等于只对浏览器跨站生效、对本地进程完全无效。
+    改成文件下发后，读得到令牌的前提是"你是同一用户"（该目录 ACL 按用户隔离）。
     """
+
+    TOKEN_FILE_NAME = ".token"
 
     def __init__(self, base: str = DEFAULT_BASE, timeout: float = DEFAULT_TIMEOUT):
         self.base = base.rstrip("/")
         self.timeout = timeout
         self._token_lock = threading.Lock()
+        self._token: str | None = None
+        self._token_base: str | None = None
         self._jar = http.cookiejar.CookieJar()
         self._opener = urllib.request.build_opener(
             urllib.request.HTTPCookieProcessor(self._jar))
-        self._primed_base: str | None = None
 
     # ── 内部 ──
 
-    def _prime_token(self, force: bool = False) -> None:
-        """访问一次 ``/``，让后端把 ``yt_token`` Cookie 下发到 jar 里。
+    @staticmethod
+    def _token_file_candidates() -> list[str]:
+        """令牌文件可能的路径：打包态在 LOCALAPPDATA，开发态在仓库 data/。"""
+        cands = []
+        lad = os.environ.get("LOCALAPPDATA")
+        if lad:
+            cands.append(os.path.join(lad, "Andun", "data", ".token"))
+        # 开发态：<repo>/data/.token（本文件在 <repo>/ui_tk/andun_ui/api.py）
+        here = os.path.dirname(os.path.abspath(__file__))
+        repo = os.path.dirname(os.path.dirname(here))
+        cands.append(os.path.join(repo, "data", ".token"))
+        return cands
 
-        ``/`` 即使是 404 也会带 Set-Cookie（中间件对非 API 路径无条件下发），
-        所以这里不看状态码，只求把 Cookie 收进 jar。后端没在跑时静默返回，
-        由后续请求去报"无法连接"。
+    def _load_token(self, force: bool = False) -> str | None:
+        """从令牌文件读取本次后端的令牌。
+
+        后端刚启动时文件可能还没写出来 → 短暂重试几次；仍读不到就返回 None，
+        由请求本身去报 401（而不是在这里抛异常，调用方还要处理）。
         """
         with self._token_lock:
-            if not force and self._primed_base == self.base:
-                return
-            try:
-                req = urllib.request.Request(self.base + "/", method="GET")
-                with self._opener.open(req, timeout=self.timeout) as resp:
-                    resp.read(1)
-            except urllib.error.HTTPError:
-                pass          # 404/其他状态码同样会下发 Cookie
-            except Exception:
-                return        # 后端不可用：不在这里报错
-            self._primed_base = self.base
+            if not force and self._token_base == self.base and self._token:
+                return self._token
+            for _attempt in range(6):
+                for path in self._token_file_candidates():
+                    try:
+                        with open(path, "r", encoding="utf-8") as f:
+                            tok = f.read().strip()
+                        if tok:
+                            self._token = tok
+                            self._token_base = self.base
+                            return tok
+                    except OSError:
+                        continue
+                time.sleep(0.15)
+            return None
 
     def _send(self, req: urllib.request.Request, timeout: float):
-        """走带 Cookie 的 opener，而不是裸 urlopen。"""
+        """走带 Cookie 的 opener（部分接口仍可能用 Cookie 传递其他状态）。"""
         return self._opener.open(req, timeout=timeout)
 
     def _request(self, method: str, path: str, payload: dict | None = None,
                  _retry: bool = True, timeout: float | None = None) -> ApiResult:
-        self._prime_token()
+        token = self._load_token()
         effective_timeout = self.timeout if timeout is None else float(timeout)
         url = self.base + path
         body = None
         headers = {"Accept": "application/json"}
+        if token:
+            headers["x-yutian-token"] = token
 
         if payload is not None:
             try:
@@ -122,7 +148,7 @@ class ApiClient:
             # 401 常见于"后端重启过"——令牌换新了，重新取一次 Cookie 再试一遍。
             # 只重试一次，避免和持续 401 死循环。
             if exc.code == 401 and _retry:
-                self._prime_token(force=True)
+                self._load_token(force=True)
                 return self._request(method, path, payload, _retry=False,
                                      timeout=timeout)
             # 4xx/5xx 也算"后端在跑"，把服务端的 error 字段透出来给用户看
@@ -446,7 +472,7 @@ class ApiClient:
         import os
         import uuid
 
-        self._prime_token()
+        self._load_token()
 
         try:
             with open(file_path, "rb") as fh:
@@ -1008,3 +1034,4 @@ def fmt_basename(value: Any, keep: int = 48) -> str:
         return "--"
     name = value.replace("\\", "/").rsplit("/", 1)[-1] or value
     return name if len(name) <= keep else name[:keep - 1] + "…"
+

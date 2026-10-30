@@ -125,22 +125,35 @@ class LocalScanner:
         total_bytes = 0
         discovered = 0
         scanned_files = []  # 仅保留最近 _MAX_RETAINED_PATHS 个（供上层聚合）
+        # ── 扫描失败/跳过的如实记账（见 B5：扫描失败不能算 clean）──
+        scan_errors = 0
+        error_samples: list[dict] = []
+        walk_stats: dict = {"skipped": 0}
 
         futures: dict = {}  # future -> file_path（有界窗口）
         window = SCAN_STREAM_WINDOW * max(1, MAX_WORKERS // 2)
-        gen = self._iter_files(paths, scan_type, progress_callback)
+        gen = self._iter_files(paths, scan_type, progress_callback, walk_stats)
         scan_hashes: dict[str, str] = {}  # path → sha256（供上层云端复核复用）
 
         def _drain(done_futs):
-            nonlocal files_scanned, total_bytes
+            nonlocal files_scanned, total_bytes, scan_errors
             for f in done_futs:
                 fp = futures.pop(f, None)
                 if fp is None:
                     continue
                 try:
                     res = f.result(timeout=SINGLE_FILE_TIMEOUT)
-                except Exception:
-                    res = []
+                except Exception as exc:
+                    # ⚠️ 原先这里 `res = []` 后仍 files_scanned += 1 ——
+                    # 扫描抛异常的文件被**记成"已扫描、无威胁"**，
+                    # 于是用户看到"未发现威胁"，实际根本没扫。
+                    scan_errors += 1
+                    if len(error_samples) < 20:
+                        error_samples.append({
+                            "path": fp,
+                            "error": "%s: %s" % (type(exc).__name__, exc),
+                        })
+                    continue
                 threats.extend(res)
                 files_scanned += 1
                 if res:
@@ -209,6 +222,12 @@ class LocalScanner:
             "scan_type": scan_type,
             "files_scanned": files_scanned,
             "total_files": discovered,
+            # 失败/跳过如实上报：上层据此把"部分未扫描"显示出来，
+            # 不再把"没扫成"混进"扫过且干净"里。
+            "scan_errors": scan_errors,
+            "error_samples": error_samples,
+            "skipped": int(walk_stats.get("skipped", 0)),
+            "incomplete": bool(scan_errors > 0),
             "total_bytes": total_bytes,
             "threats_found": len(threats),
             "threats": threats,
@@ -219,8 +238,16 @@ class LocalScanner:
 
     # ── 流式文件遍历（迭代式 DFS，无递归深度限制）──────────
 
-    def _iter_files(self, paths: list[str], scan_type: str, progress_callback=None):
-        """迭代式遍历文件（生成器），内存有界"""
+    def _iter_files(self, paths: list[str], scan_type: str, progress_callback=None,
+                    stats: dict | None = None):
+        """迭代式遍历文件（生成器），内存有界。
+
+        ``stats``：可选计数字典，用于回传统计信息（当前统计 "skipped"：
+        因扩展名/黑名单/大小/权限而被跳过的文件数）。扫描结束后上层据此
+        区分"扫过且干净"与"根本没扫到"——否则用户看到的永远是"未发现威胁"。
+        """
+        if stats is None:
+            stats = {}
         stack = []
         for p in paths:
             if os.path.isfile(p):
@@ -250,7 +277,10 @@ class LocalScanner:
                                     collected += 1
                                     if progress_callback and collected % 100 == 0:
                                         progress_callback(0, f"正在收集文件... ({collected} 个)")
+                                else:
+                                    stats["skipped"] = stats.get("skipped", 0) + 1
                         except (OSError, PermissionError):
+                            stats["skipped"] = stats.get("skipped", 0) + 1
                             continue
             except (OSError, PermissionError):
                 continue

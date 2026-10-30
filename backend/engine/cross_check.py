@@ -59,6 +59,11 @@ DEFAULT_TIMEOUT = 12.0
 MAX_READ = 32 * 1024 * 1024
 HEADER_64K = 65536
 
+# 启发式作为闸门二「确认引擎」的最低分数。
+# 依据：analyze_generic 对纯随机/高熵数据会给出 25~40 分的"可疑"，
+# 不足以作为第三方确认；>=60 才说明多个特征同时命中。
+HEURISTIC_CONFIRM_SCORE = 60
+
 
 def _hit_hash(md5: str, sha1: str, sha256: str) -> dict:
     if not (md5 or sha1 or sha256):
@@ -74,6 +79,14 @@ def _hit_hash(md5: str, sha1: str, sha256: str) -> dict:
 
 
 def _hit_heuristic(data: bytes, path: str, md5: str, sha256: str, size: int) -> dict:
+    """启发式是否可作为闸门二的**确认**信号。
+
+    ⚠️ 门槛必须卡死：只要"有命中"就算确认的话，闸门二形同虚设 ——
+    实测一个 40KB 的纯随机文件就能让 analyze_generic 报出"高熵/可疑"，
+    于是 YARA 误报被启发式"确认"、进用户决定流程、超时自动隔离。
+    所以只有 **heuristic_score >= 60 或 action == "quarantine"** 才算确认；
+    其余命中仍记录 detail 供分析，但不计入 confirmed。
+    """
     try:
         from engine.heuristic_engine import get_heuristic_engine
     except Exception as exc:
@@ -91,10 +104,18 @@ def _hit_heuristic(data: bytes, path: str, md5: str, sha256: str, size: int) -> 
     if not r:
         return {"hit": False, "detail": "启发式未命中"}
     reasons = r.get("reasons") or r.get("warnings") or []
-    return {"hit": True,
-            "detail": "启发式命中（分数 %s）：%s"
-                      % (r.get("heuristic_score", "--"),
-                         "；".join(str(x) for x in reasons[:3]))}
+    try:
+        score = int(r.get("heuristic_score") or 0)
+    except (TypeError, ValueError):
+        score = 0
+    action = str(r.get("action") or "")
+    strong = score >= HEURISTIC_CONFIRM_SCORE or action == "quarantine"
+    detail = ("启发式%s（分数 %s%s）：%s"
+              % ("确认命中" if strong else "弱命中，不计入确认",
+                 r.get("heuristic_score", "--"),
+                 "，action=quarantine" if action == "quarantine" else "",
+                 "；".join(str(x) for x in reasons[:3])))
+    return {"hit": bool(strong), "detail": detail, "score": score}
 
 
 def _advice_ml(data: bytes, sha256: str) -> dict:

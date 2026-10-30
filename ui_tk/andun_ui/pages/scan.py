@@ -299,18 +299,41 @@ class ScanPage(Page):
         found = result.get("threats_found", len(threats))
         quarantined = result.get("quarantined", 0)
         cloud_hits = result.get("cloud_hits", 0)
+        # 失败/跳过的如实展示：扫描失败绝不能显示成"未发现威胁"
+        scan_errors = int(result.get("scan_errors") or 0)
+        skipped = int(result.get("skipped") or 0)
 
-        self._result_summary.configure(
-            text=f"扫描 {fmt_int(scanned)} · 检出 {fmt_int(found)} · "
-                 f"已隔离 {fmt_int(quarantined)} · 云命中 {fmt_int(cloud_hits)}")
+        summary = (f"扫描 {fmt_int(scanned)} · 检出 {fmt_int(found)} · "
+                   f"已隔离 {fmt_int(quarantined)} · 云命中 {fmt_int(cloud_hits)}")
+        if scan_errors:
+            summary += f" · 失败 {fmt_int(scan_errors)}"
+        if skipped:
+            summary += f" · 跳过 {fmt_int(skipped)}"
+        self._result_summary.configure(text=summary)
 
         if not threats:
+            if scan_errors:
+                # 有文件扫不了 —— 结论只能是"部分未扫描"，不能报"安全"
+                self._render_empty(
+                    "部分未扫描（不能判定为安全）",
+                    f"{fmt_int(scan_errors)} 个文件扫描失败，"
+                    f"另有 {fmt_int(skipped)} 个按规则跳过；"
+                    "建议对这些路径单独排查或查看日志")
+                self.ctx.say(
+                    f"扫描结束：{fmt_int(scan_errors)} 个文件未能扫描，结论不完整",
+                    "danger")
+                return
             self._render_empty("未发现威胁", "本次扫描未检出可疑文件")
             self.ctx.say("扫描完成，未发现威胁", "ok")
             return
 
         self._render_threats(threats)
-        self.ctx.say(f"扫描完成，检出 {len(threats)} 项威胁", "error")
+        if scan_errors:
+            self.ctx.say(
+                f"扫描完成，检出 {len(threats)} 项威胁；"
+                f"另有 {fmt_int(scan_errors)} 个文件未能扫描", "error")
+        else:
+            self.ctx.say(f"扫描完成，检出 {len(threats)} 项威胁", "error")
 
     def _render_threats(self, threats: list):
         for child in self._result_host.winfo_children():
