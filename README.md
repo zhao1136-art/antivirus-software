@@ -31,7 +31,7 @@ C++ 原生防护层（AMSI / ETW / 注入 / 无文件 / 持久化）、独立实
 |---|---|
 | **114 个 YARA 规则文件** | 分 APT / crimeware / generic / hacktools / ransomware 五类，带**有效鉴别力分级**：字面量不足 8 字节的规则自动降级为「仅告警」，不给它搬走文件的权力 |
 | **9 个 ETW provider** | Threat-Intelligence / Kernel-Process / Kernel-File / Kernel-Registry / DNS / PowerShell / WMI / DotNET / Sysmon，29 条行为规则，自带限流与背压 |
-| **C++ 原生层** | AMSI Provider、ETW 消费、注入检测、无文件执行、持久化监控。**没有内核驱动**（不要求签名证书，也不会蓝屏） |
+| **C++ 原生层** | AMSI Provider、ETW 消费、注入检测、无文件执行、持久化监控。**默认全部用户态**；内核驱动仅有实验性源码，未编译、未签名、不随发布包分发（见 [`backend/driver/README.md`](backend/driver/README.md)） |
 | **双层阻拦** | YARA 命中后，**必须至少一个其他引擎也命中**才允许隔离 —— 见下文 |
 | **沙箱** | Low 完整性 + 网络阻断 + 嵌套 Job Object + 内存镜像扫描，并且**如实申报能力边界**（绝对路径重定向不支持就是说不支持） |
 | **签名校验含目录签名** | WinVerifyTrust 验内嵌签名 → CatRoot 查 `.cat`。大量系统文件是目录签名，只查 PE 里那一段会漏 |
@@ -114,12 +114,18 @@ ISSUES.md                 已知问题与待办
 
 这些不是待办，是**架构性的边界**，写出来是为了不让人误以为它们被覆盖了：
 
-- **没有内核驱动** —— 全部用户态。绕过 ETW 的手法（直接系统调用等）看不到。加驱动要 EV 签名证书，成本与蓝屏风险都不划算。
+- **没有可用的内核驱动** —— 默认全用户态。绕过 ETW 的手法（直接系统调用等）看不到。
+  `backend/driver/` 里有一份 WDM 驱动**实验性源码**（17 个文件），但**从未成功编译、
+  未签名、不随发布包分发**，也没有任何默认启用路径；在实体机上加载未签名驱动会
+  直接蓝屏甚至无法开机。详见 [`backend/driver/README.md`](backend/driver/README.md)。
 - **ETW 限流是无差别的** —— `Kernel-File` 120 事件/秒、`Kernel-Process` 150/秒。超过就丢，**连已判定命中的事件也一起丢**。解压大压缩包、批量编译时必然触发。详见 [`docs/etw-coverage.md`](docs/etw-coverage.md)。
 - **Threat-Intelligence provider 只对签名杀软开放** —— 未签名构建里那 9 条注入类规则一条都不会触发。状态里 `enable_ok` 字段可查。
 - **`Kernel-File` 只听创建/重命名** —— 看不到写入内容，也看不到删除。
 - **沙箱不是真 CoW** —— `engine: copy` 只隔离样本自身及其同目录，样本对 `C:\Windows\...` 的绝对引用照旧打到真实系统。
-- **ML 误报 48%** —— 已撤处置权，仅作参考。阈值重校准缺恶意样本。
+- **ML 已按设计保留"仅参考"地位** —— 现在有自训练的 PE 模型（ONNX + LightGBM 两套产物，
+  在 4910 个本地样本上 holdout AUC 0.9997 / 误报率 0.13%），但**刻意不给处置权**：
+  数据来自本机、规模有限，泛化能力未经验证，ML 的 action 固定为 `alert`。
+  详见 `backend/engine/models/features.json` 里的实测指标与 `tools/train_pe_model.py`。
 - **WMI 创建进程（T1047）未覆盖** —— WMI provider 只听持久化三件套（事件 11/22/23）。
 
 ## 相关项目
@@ -129,7 +135,28 @@ ISSUES.md                 已知问题与待办
 
 ## 许可证
 
-[Apache-2.0](LICENSE)
+本项目自身代码：[Apache-2.0](LICENSE)
+
+### 第三方组件与数据
+
+发布包内含第三方二进制与情报数据，各自的许可与义务见
+[`backend/licenses/THIRD_PARTY_LICENSES.md`](backend/licenses/THIRD_PARTY_LICENSES.md)，
+许可全文在 [`backend/licenses/`](backend/licenses/) 目录：
+
+| 组件 | 许可 |
+|---|---|
+| ClamAV 1.5.3（`clamscan.exe` + `libclamav.dll`，以独立子进程调用） | **GPL-2.0**（附 `GPL-2.0.txt` + `SOURCE_OFFER.txt` 源码获取声明） |
+| OpenSSL 3.6.3 | Apache-2.0 |
+| MinGW-w64 运行时 | GPLv3 + GCC Runtime Library Exception |
+| YARA 4.5.5（自建 `libyara.dll`） | BSD-3-Clause |
+| PE-sieve 0.4.1.1 | MIT |
+| maltrail IOC（约 106 万域名 / 2.3 万 IP） | MIT |
+| IPsum（约 2 万高置信 IP） | The Unlicense（公有领域） |
+| abuse.ch Feodo（C2 IP） | CC0 1.0 |
+
+> 仅在开发期使用、**不随包分发**的组件里，有一项需要注意：
+> C2IntelFeeds 的许可是 **CC BY-NC-SA 4.0（NonCommercial）**，不得商用分发，
+> 已在 `.gitignore` 中排除。生产环境的 C2 情报只使用 IPsum + Feodo。
 
 ---
 

@@ -76,6 +76,10 @@ a = Analysis(
     datas=[('frontend', 'frontend'), ('engine', 'engine'), ('config.py', '.'),
            ('database', 'database'), ('御天图标.ico', '.'),
            ('persistence.py', '.'),
+           # 第三方许可与源码获取声明必须**随包分发**（GPL-2.0 的义务）：
+           # ClamAV 1.5.3 以独立子进程调用，但仍是分发 GPL 程序，
+           # 需附 GPL 全文 + 书面源码要约。见 licenses/THIRD_PARTY_LICENSES.md。
+           ('licenses', 'licenses'),
            ('engine_loader.py', '.'), ('amsi_manager.py', '.')]
           + _UI_TK_DATAS,
     # 原先是 ('f:\\Caelire\\bingduku', 'bingduku') —— 已移除，两个原因：

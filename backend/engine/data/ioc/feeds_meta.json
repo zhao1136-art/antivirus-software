@@ -1,13 +1,6 @@
 {
-  "built_at": "2026-10-25T12:46:20",
+  "built_at": "2026-10-30T21:55:51",
   "sources": [
-    {
-      "source": "ipsum",
-      "license": "Unlicense (public domain)",
-      "url": "https://raw.githubusercontent.com/stamparm/ipsum/master/ipsum.txt",
-      "ips": 19922,
-      "hosts": 0
-    },
     {
       "source": "feodo",
       "license": "CC0",
@@ -16,11 +9,10 @@
       "hosts": 0
     }
   ],
-  "ip_count": 19927,
+  "ip_count": 5,
   "host_count": 0,
   "hash": "crc32(b) | crc32(b, 0x9E3779B9) << 32",
   "files": {
-    "ips": "c2_ip.u64",
-    "hosts": "url_feed.u64"
+    "ips": "c2_ip.u64"
   }
 }

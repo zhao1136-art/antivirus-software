@@ -1,0 +1,63 @@
+御天 —— GPL 组件源码获取声明（SOURCE OFFER）
+=============================================
+
+一、适用组件
+------------
+本发布包内包含以下 GNU General Public License v2.0 授权的可执行文件：
+
+    组件        ClamAV 1.5.3（防病毒扫描引擎）
+    文件        engine/native/clamscan.exe       （命令行扫描器）
+                engine/native/libclamav.dll       （引擎主体）
+                以及其运行所需的第三方依赖 DLL：
+                libxml2.dll / pcre2-8.dll / libcurl.dll / libssh2.dll /
+                json-c.dll / nghttp2.dll / libclammspack.dll /
+                libclamunrar.dll / libclamunrar_iface.dll /
+                libbz2.dll / pdcurses.dll
+    许可        GNU General Public License, version 2.0
+
+二、二进制状态
+--------------
+上述二进制均为 ClamAV 官方 1.5.3 发行版**原样拷贝，未做任何修改**
+（未打补丁、未重新编译、未剥离/替换任何代码）。GPL-2.0 全文见同目录
+`GPL-2.0.txt`。
+
+三、源码获取方式（GPL-2.0 §3 书面要约）
+---------------------------------------
+ClamAV 1.5.3 的完整对应源码可从以下官方地址获取：
+
+    https://github.com/Cisco-Talos/clamav/releases/tag/clamav-1.5.3
+    https://www.clamav.net/downloads
+
+若因网络原因无法获取，可向本项目维护者书面索取：我们会提供与包内二进制
+**完全对应的** ClamAV 1.5.3 源码副本（可提供同版本的未修改源码树压缩包），
+仅收取复制与分发的实际成本（通常为免费）。该要约自本版本发布之日起
+三年内有效。
+
+联系方式：见项目仓库 README 中的维护者联系方式。
+
+四、调用方式说明
+----------------
+「御天」与 ClamAV 之间是**独立进程调用**关系：
+
+    子进程执行  clamscan.exe --no-summary <待扫描文件路径>
+
+不链接 libclamav.dll（无静态/动态链接，也不通过 ctypes 加载），
+仅解析其命令行标准输出。ClamAV 作为独立程序运行，两者的进程边界清晰，
+不构成同一程序作品的合并。
+
+五、其它非 GPL 组件
+------------------
+- OpenSSL 3.6.3：Apache-2.0，见 `Apache-2.0.txt`
+- MinGW-w64 运行时（libstdc++-6.dll 等）：GPLv3 + GCC Runtime Library
+  Exception 3.1，例外条款见
+  https://www.gnu.org/licenses/gcc-exception-3.1.html
+- YARA 4.5.5（libyara.dll）：BSD-3-Clause，见 `BSD-3-Clause.txt`
+- PE-sieve 0.4.1.1：MIT，见 `MIT.txt`
+- 数据类：maltrail（MIT）、IPsum（The Unlicense）、abuse.ch Feodo（CC0 1.0）
+
+完整清单见同目录 `THIRD_PARTY_LICENSES.md`。
+
+六、已移除组件
+--------------
+`freshclam.exe`、`libfreshclam.dll`、`sigtool.exe`（合计约 56 MB）
+经核查没有任何代码调用，已从发布包中删除，不在本次分发范围内。

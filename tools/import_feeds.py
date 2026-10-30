@@ -5,18 +5,26 @@
 每个源都标注许可；**NC/SA 类源直接拒绝导入**（例如 C2IntelFeeds 的
 CC BY-NC-SA 4.0 商业产品不可用），避免"能跑就不管许可"的隐患。
 
+当前采用范围（2026-10-30 维护者决定）
+------------------------------------
+生产只用 **IPsum + Feodo** 两个源：
+  · ipsum —— The Unlicense（公有领域），无需注册，约 2 万条高置信 IP
+  · feodo —— CC0，匿名可拉（abuse.ch 策略调整后列表很小，仅作补充）
+`urlhaus` / `threatfox` 代码保留，但它们自 2025 年起**必须 Auth-Key**
+（免费，需在 https://auth.abuse.ch/ 注册），默认不启用 —— 需要时显式
+`--source urlhaus` 并设置环境变量 `ABUSECH_AUTH_KEY`。
+
 源现状（2026-10 实测）
 ---------------------
 - abuse.ch Feodo：匿名可拉，但列表已很小（QakBot/Emotet 大部分下线）
-- abuse.ch URLhaus / ThreatFox：**必须带 Auth-Key**（免费，需在
-  https://auth.abuse.ch/ 注册）。用 --auth-key 或环境变量 ABUSECH_AUTH_KEY 传入。
+- abuse.ch URLhaus / ThreatFox：**必须带 Auth-Key**，旧无鉴权路径已 410 Gone
 - 这些源均为 **CC0**，可随商业产品发布。
 
 用法
 ----
-  python tools\\import_feeds.py --source feodo
+  python tools\\import_feeds.py --source ipsum --source feodo      # 生产默认
   set ABUSECH_AUTH_KEY=xxxx
-  python tools\\import_feeds.py --source urlhaus --source threatfox
+  python tools\\import_feeds.py --source urlhaus --source threatfox # 注册后可选
 """
 from __future__ import annotations
 
@@ -175,6 +183,8 @@ def main() -> int:
     ap.add_argument("--out", default=IOC_DIR)
     ap.add_argument("--merge", action="store_true",
                     help="把 IP 结果并入 c2_ip.u64（默认覆盖）")
+    ap.add_argument("--force", action="store_true",
+                    help="即使新索引比现有小也写入（默认拒绝，防止源失败覆盖好数据）")
     ap.add_argument("--ipsum-min-score", type=int, default=IPSUM_MIN_SCORE,
                     help=f"IPsum 最低置信分数（默认 {IPSUM_MIN_SCORE}）")
     args = ap.parse_args()
@@ -183,14 +193,17 @@ def main() -> int:
     all_ips: set[str] = set()
     all_hosts: set[str] = set()
     used = []
+    failed: list[tuple[str, str]] = []      # (源, 原因) —— 有失败就不允许写盘
 
     for src in args.source:
         url, lic, need_key, _kind = SOURCES[src]
         if any(d.lower() in lic.lower() for d in DENY_LICENSES):
             print(f"!! 拒绝导入 {src}：许可 {lic} 不允许商用/再分发")
+            failed.append((src, f"许可不允许: {lic}"))
             continue
         if need_key and not args.auth_key:
             print(f"!! 跳过 {src}：需要 Auth-Key（免费注册 https://auth.abuse.ch/）")
+            failed.append((src, "缺少 Auth-Key"))
             continue
         u = url.format(key=args.auth_key) if "{key}" in url else url
         headers = dict(UA)
@@ -209,6 +222,7 @@ def main() -> int:
                     raw = r.read()
         except Exception as exc:
             print(f"!! {src} 下载失败: {type(exc).__name__}: {exc}")
+            failed.append((src, f"下载失败: {type(exc).__name__}"))
             continue
         ips, hosts = COLLECTORS[src](raw)
         if src == "ipsum":
@@ -225,10 +239,56 @@ def main() -> int:
         print("没有成功导入的源")
         return 2
 
+    # ⚠️ 有任何一个**被请求的源**失败，就默认不写盘。
+    # 实测过一次：网络抖动让 ipsum 下载被重置，结果只把 feodo 的 5 条写进
+    # c2_ip.u64，把原有 19,927 条 IP 直接覆盖掉了（总数从 42,674 掉到 22,752）。
+    # 这类"部分成功"的写入比完全不写危险得多，所以默认拒绝，确认要写加 --force。
+    if failed and not args.force:
+        print("\n!! 检测到失败的源，拒绝覆盖现有索引：")
+        for src, why in failed:
+            print(f"     - {src}: {why}")
+        print("   现有索引保持不变。确认要用不完整数据覆盖，请加 --force。")
+        return 3
+
     ip_path = os.path.join(args.out, "c2_ip.u64")
     host_path = os.path.join(args.out, "url_feed.u64")
-    write_index(ip_path, all_ips)
-    write_index(host_path, all_hosts)
+
+    # ⚠️ 防"部分源失败把好索引覆盖成小索引"：
+    # 实测过一次网络抖动导致 ipsum 下载被重置，结果只剩 feodo 的 5 条写盘，
+    # 把原有 19,927 条 IP（IPsum 19,922 + Feodo 5）直接覆盖掉了。
+    # 阈值取 90%：正常的 feed 波动（几百条上下）不该被拦，而"某个源整个失败"
+    # 会让数量掉一个量级，必须拦住。确认要缩小再加 --force。
+    old_ip = (os.path.getsize(ip_path) // 8) if os.path.isfile(ip_path) else 0
+    if (all_ips and old_ip and len(all_ips) < old_ip * 0.9
+            and not args.force):
+        print(f"!! 拒绝写入：新 IP 索引 {len(all_ips):,} 条，"
+              f"不足现有 {old_ip:,} 条的 90%")
+        print("   很可能某个源下载失败或被抓取到不完整数据。")
+        print("   确认要缩小索引再加 --force 重跑。")
+        return 3
+
+    def _sync_index(path: str, values: set[str], label: str):
+        """空集合时**删除**旧索引文件，而不是写一个 0 字节文件。
+
+        原先无条件写：当前只用 IPsum+Feodo（都不含域名）时，
+        url_feed.u64 会被写成 0 字节并留在仓库里 —— 既误导统计
+        （"域名索引 0 条"看着像数据损坏），也让加载端多做一次无用 IO。
+        """
+        if values:
+            write_index(path, values)
+            print(f"{label} {len(values):,} -> {path}")
+        else:
+            try:
+                if os.path.isfile(path):
+                    os.unlink(path)
+                    print(f"{label} 0 条（无可写索引，已删除旧文件 {os.path.basename(path)}）")
+                else:
+                    print(f"{label} 0 条（无可写索引）")
+            except OSError as exc:
+                print(f"{label} 0 条，删除旧索引失败: {exc}")
+
+    _sync_index(ip_path, all_ips, "IP  ")
+    _sync_index(host_path, all_hosts, "域名")
 
     meta = {
         "built_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -236,16 +296,17 @@ def main() -> int:
         "ip_count": len(all_ips),
         "host_count": len(all_hosts),
         "hash": "crc32(b) | crc32(b, 0x9E3779B9) << 32",
-        "files": {"ips": "c2_ip.u64", "hosts": "url_feed.u64"},
+        "files": {k: v for k, v in
+                  (("ips", "c2_ip.u64"), ("hosts", "url_feed.u64"))
+                  if (k == "ips" and all_ips) or (k == "hosts" and all_hosts)},
     }
     with open(os.path.join(args.out, "feeds_meta.json"), "w",
               encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
 
-    print(f"\nIP   {len(all_ips):,} -> {ip_path}")
-    print(f"域名 {len(all_hosts):,} -> {host_path}")
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
