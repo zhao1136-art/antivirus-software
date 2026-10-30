@@ -63,6 +63,13 @@ DEFAULT_PWDS = (b"infected", b"Infected", b"virus")
 MAX_ENTRY = 512 * 1024 * 1024
 SFX_SCAN = 8 * 1024 * 1024
 
+# ML 特征提取的分析长度上限：与后端 config.ML_ANALYSIS_MAX_BYTES 保持一致。
+# 独立 exe 场景下后端 config 可能不可用，这里给出同样的兜底值 32MB。
+try:
+    from config import ML_ANALYSIS_MAX_BYTES as _ML_ANALYSIS_MAX
+except Exception:
+    _ML_ANALYSIS_MAX = 32 * 1024 * 1024
+
 
 # ══════════════════════════════════════════════════════════════════
 # 指纹
@@ -421,7 +428,9 @@ class Engines:
 
         if self.ml and head.startswith(b"MZ"):
             try:
-                out["ml"] = self.ml(data[:4 * 1024 * 1024], sha256)
+                # 与训练/后端用同一个分析长度上限（config.ML_ANALYSIS_MAX_BYTES）。
+                # 原先这里硬编码 4MB，而训练侧读整个文件 —— 同一文件两边特征不一致。
+                out["ml"] = self.ml(data[:_ML_ANALYSIS_MAX], sha256)
             except Exception:
                 pass
         return out

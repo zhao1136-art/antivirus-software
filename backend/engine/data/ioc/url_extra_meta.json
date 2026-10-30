@@ -1,12 +1,17 @@
 {
-  "built_at": "2026-10-25T12:20:52",
+  "built_at": "2026-10-30T22:03:12",
   "source": "maltrail (https://github.com/stamparm/maltrail)",
   "license": "MIT",
   "attribution": "Copyright (c) 2014-2026 Maltrail developers",
+  "categories": [
+    "static/malware",
+    "static/malicious"
+  ],
   "domain_count": 1061714,
   "ip_count": 22747,
   "skipped_wildcards": 5,
-  "hash": "crc32(b) | crc32(b, 0x9E3779B9)<<32",
+  "hash": "blake2b-64 (digest_size=8, little-endian)",
+  "hash_algo": "blake2b-64",
   "files": {
     "domains": "url_extra.u64",
     "ips": "ip_extra.u64"

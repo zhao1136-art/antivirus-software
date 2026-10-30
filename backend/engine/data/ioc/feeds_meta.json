@@ -1,6 +1,13 @@
 {
-  "built_at": "2026-10-30T21:55:51",
+  "built_at": "2026-10-30T22:11:50",
   "sources": [
+    {
+      "source": "ipsum",
+      "license": "Unlicense (public domain)",
+      "url": "https://ghproxy.net/https://raw.githubusercontent.com/stamparm/ipsum/master/ipsum.txt",
+      "ips": 18482,
+      "hosts": 0
+    },
     {
       "source": "feodo",
       "license": "CC0",
@@ -9,9 +16,10 @@
       "hosts": 0
     }
   ],
-  "ip_count": 5,
+  "ip_count": 18487,
   "host_count": 0,
-  "hash": "crc32(b) | crc32(b, 0x9E3779B9) << 32",
+  "hash": "blake2b-64 (digest_size=8, little-endian)",
+  "hash_algo": "blake2b-64",
   "files": {
     "ips": "c2_ip.u64"
   }

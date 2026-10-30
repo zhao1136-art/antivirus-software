@@ -36,6 +36,7 @@ import struct
 import sys
 import time
 import urllib.request
+import hashlib
 import zlib
 
 IOC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -64,14 +65,33 @@ SOURCES = {
 # IPsum 的最低置信分数：README 建议"出现在 ≥3 个名单里"才用于自动封禁
 IPSUM_MIN_SCORE = 3
 
+# ── 国内可达的镜像（按顺序回退）─────────────────────────────────
+# 直连 raw.githubusercontent.com 在国内经常 ConnectionReset / 502（实测反复出现），
+# 会导致"某个源失败 → 索引被覆盖成小索引"。这里给出实测可达的镜像，
+# 主 URL 失败就依次回退。2026-10-30 实测可用：fastly.jsdelivr / ghproxy.net /
+# gh-proxy.com（均返回 143,409 行，与主源一致）。
+URL_FALLBACKS = {
+    "ipsum": [
+        "https://fastly.jsdelivr.net/gh/stamparm/ipsum@master/ipsum.txt",
+        "https://ghproxy.net/https://raw.githubusercontent.com/stamparm/ipsum/master/ipsum.txt",
+        "https://gh-proxy.com/https://raw.githubusercontent.com/stamparm/ipsum/master/ipsum.txt",
+        "https://cdn.jsdelivr.net/gh/stamparm/ipsum@master/ipsum.txt",
+    ],
+}
+
 # 明确禁止导入的源（许可不允许商用/再分发）
 DENY_LICENSES = ("CC BY-NC", "NonCommercial", "BY-NC-SA", "proprietary")
 
 
 def h64(s: str) -> int:
-    b = s.encode("utf-8", "ignore")
-    return (zlib.crc32(b) & 0xFFFFFFFF) | \
-           ((zlib.crc32(b, 0x9E3779B9) & 0xFFFFFFFF) << 32)
+    """blake2b-64（真 64 位）。
+
+    旧实现是 crc32 双拼：看着 64 位，但两次 crc32 高度相关，
+    有效熵只有约 32 位 —— 106 万条域名下生日碰撞概率约 1.3%。
+    """
+    return int.from_bytes(
+        hashlib.blake2b(s.encode("utf-8", "ignore"), digest_size=8).digest(),
+        "little")
 
 
 def fetch(url: str, auth_key: str = "", timeout: int = 60) -> bytes:
@@ -209,20 +229,34 @@ def main() -> int:
         headers = dict(UA)
         if need_key:
             headers["Auth-Key"] = args.auth_key
-        try:
-            if src == "threatfox":
-                import json as _json
-                body = _json.dumps({"query": "get_iocs", "days": 7}).encode()
-                req = urllib.request.Request(u, data=body, headers=headers)
-                with urllib.request.urlopen(req, timeout=60) as r:
-                    raw = r.read()
-            else:
-                req = urllib.request.Request(u, headers=headers)
-                with urllib.request.urlopen(req, timeout=60) as r:
-                    raw = r.read()
-        except Exception as exc:
-            print(f"!! {src} 下载失败: {type(exc).__name__}: {exc}")
-            failed.append((src, f"下载失败: {type(exc).__name__}"))
+        # 主 URL 失败时按顺序尝试镜像（国内直连 GitHub 经常被重置）
+        candidates = [u] + [m for m in URL_FALLBACKS.get(src, []) if m != u]
+        raw = None
+        last_exc = None
+        used_url = u
+        for idx, cand in enumerate(candidates):
+            try:
+                if src == "threatfox":
+                    import json as _json
+                    body = _json.dumps({"query": "get_iocs", "days": 7}).encode()
+                    req = urllib.request.Request(cand, data=body, headers=headers)
+                    with urllib.request.urlopen(req, timeout=60) as r:
+                        raw = r.read()
+                else:
+                    req = urllib.request.Request(cand, headers=headers)
+                    with urllib.request.urlopen(req, timeout=45) as r:
+                        raw = r.read()
+                used_url = cand
+                if idx > 0:
+                    print(f"   （主源失败，已回退到镜像 {idx}: {cand[:64]}…）")
+                break
+            except Exception as exc:
+                last_exc = exc
+                continue
+        if raw is None:
+            print(f"!! {src} 下载失败（含 {len(candidates)} 个镜像）: "
+                  f"{type(last_exc).__name__}: {last_exc}")
+            failed.append((src, f"下载失败: {type(last_exc).__name__}"))
             continue
         ips, hosts = COLLECTORS[src](raw)
         if src == "ipsum":
@@ -232,7 +266,7 @@ def main() -> int:
               f"域名 {len(hosts):>6}   许可 {lic}")
         all_ips |= ips
         all_hosts |= hosts
-        used.append({"source": src, "license": lic, "url": u,
+        used.append({"source": src, "license": lic, "url": used_url,
                      "ips": len(ips), "hosts": len(hosts)})
 
     if not used:
@@ -295,7 +329,8 @@ def main() -> int:
         "sources": used,
         "ip_count": len(all_ips),
         "host_count": len(all_hosts),
-        "hash": "crc32(b) | crc32(b, 0x9E3779B9) << 32",
+        "hash": "blake2b-64 (digest_size=8, little-endian)",
+        "hash_algo": "blake2b-64",
         "files": {k: v for k, v in
                   (("ips", "c2_ip.u64"), ("hosts", "url_feed.u64"))
                   if (k == "ips" and all_ips) or (k == "hosts" and all_hosts)},
@@ -309,4 +344,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 

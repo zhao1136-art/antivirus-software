@@ -858,9 +858,16 @@ class LocalScanner:
 
     def _ml_scan_from_data(self, data: bytes, file_path: str,
                             md5: str, sha256: str, size: int) -> dict | None:
-        """使用 ML 引擎扫描 PE 文件 - 使用内存缓冲数据"""
+        """使用 ML 引擎扫描 PE 文件 - 使用内存缓冲数据
+
+        ⚠️ 必须按 ML_ANALYSIS_MAX_BYTES 截断后再提特征：训练侧用同一上限，
+        否则同一个文件在训练与线上得到不同特征向量（见 config.py 的说明）。
+        """
         try:
             from engine.ml_scanner import scan_pe as ml_scan_pe
+            from config import ML_ANALYSIS_MAX_BYTES as _ML_MAX
+            if len(data) > _ML_MAX:
+                data = data[:_ML_MAX]
             result = ml_scan_pe(data, sha256)
             verdict = result.get("verdict", "CLEAN")
             confidence = result.get("confidence", 0.0)

@@ -145,8 +145,40 @@ def collect_benign(limit: int, seed: int = 42) -> list[tuple[str, str]]:
     if len(picked) < limit:
         rng.shuffle(leftovers)
         picked.extend(leftovers[: limit - len(picked)])
-    rng.shuffle(picked)
-    return picked[:limit]
+
+    # ── 按 SHA256 去重（良性侧原先**完全没有去重**）──
+    # WinSxS / Program Files / G 盘安装包里同一个 DLL 常有多个副本，
+    # 不去重会让训练集里出现成对的近重复样本：不仅虚增样本量，
+    # 一旦它们被分到训练/测试两侧，评估指标就会明显虚高。
+    # （sha256_file 此前定义了却从未被调用 —— 是死代码，这里接上。）
+    uniq: list[tuple[str, str]] = []
+    seen_hash: set[str] = set()
+    dropped = 0
+    for p, g in picked:
+        d = sha256_file(p)
+        if not d:
+            continue
+        if d in seen_hash:
+            dropped += 1
+            continue
+        seen_hash.add(d)
+        uniq.append((p, g))
+    # 去重后不足 limit 时，从剩余候选里继续补（同样查重）
+    if len(uniq) < limit:
+        for p, g in leftovers:
+            if len(uniq) >= limit:
+                break
+            if (p, g) in picked:
+                continue
+            d = sha256_file(p)
+            if not d or d in seen_hash:
+                continue
+            seen_hash.add(d)
+            uniq.append((p, g))
+    if dropped:
+        print(f"  良性去重：剔除 {dropped} 个重复样本，剩余 {len(uniq)}")
+    rng.shuffle(uniq)
+    return uniq[:limit]
 
 
 def collect_malware(limit: int, workdir: str, reuse: bool = True,
@@ -314,6 +346,13 @@ def _worker_feat(args):
     try:
         with open(path, "rb") as f:
             data = f.read()
+        # ⚠️ 与线上推理用**同一个**分析长度上限（config.ML_ANALYSIS_MAX_BYTES）。
+        # 原先训练读整个文件、线上 sample_analyzer 只喂前 4MB —— 同一个文件
+        # 在两边得到不同的 2381 维向量，模型学的分布和线上喂的对不上。
+        import config as _cfg
+        _cap = int(getattr(_cfg, "ML_ANALYSIS_MAX_BYTES", 32 * 1024 * 1024))
+        if len(data) > _cap:
+            data = data[:_cap]
         return idx, _WORKER_EX.feature_vector(data), ""
     except Exception as exc:
         return idx, None, f"{type(exc).__name__}: {exc}"
@@ -496,6 +535,10 @@ def main():
         "extractor": "engine.ml_scanner.PEFeatureExtractor(feature_version=2)",
         "extractor_sha256": ext_hash,
         "extractor_probe": ext_probe,
+        # 训练时用的分析长度上限；线上若与 config.ML_ANALYSIS_MAX_BYTES 不一致，
+        # 同一个文件会被截成不同长度 → 特征分布偏移。加载端据此比对并告警。
+        "analysis_max_bytes": int(getattr(
+            __import__("config"), "ML_ANALYSIS_MAX_BYTES", 32 * 1024 * 1024)),
         "model_file": "pe_model.onnx",
         "lightgbm_file": "pe_model.txt",
         # 张量名写进契约，加载端不写死。LightGBM 转换出来的 ONNX 有

@@ -24,6 +24,7 @@ import re
 import struct
 import hashlib
 import math
+import threading
 from typing import Optional
 
 # ============================================================
@@ -1861,6 +1862,7 @@ class RuleBasedScorer:
 # ============================================================
 _EMBER_PREDICTOR_CACHE = None
 _EMBER_PREDICTOR_LOADED = False
+_EMBER_PREDICTOR_LOCK = threading.Lock()
 
 
 def _get_ember_predictor():
@@ -1870,28 +1872,52 @@ def _get_ember_predictor():
       ① ONNX（engine/models/*.onnx + features.json 契约）—— 原生内核推理，
          实测 0.046ms/次，且加载时校验"契约维数 == 模型输入维数"。
       ② LightGBM 文本模型（engine/ember_model.py 的纯 Python 评估器）——
-         没有 onnxruntime 时的退路。
+         没有 onnxruntime 时的退路（打包版就走这条）。
+
+    ⚠️ 并发：原先先置 _LOADED=True 再加载，多线程首扫时其余线程会看到
+    "已加载 + 缓存为 None" 而静默跳过 ML（4 线程实测 3 个拿到 None）。
+    现在整段加载在锁内完成，成功后再置 _LOADED。
     """
     global _EMBER_PREDICTOR_CACHE, _EMBER_PREDICTOR_LOADED
     if _EMBER_PREDICTOR_LOADED:
         return _EMBER_PREDICTOR_CACHE
-    _EMBER_PREDICTOR_LOADED = True
-
-    # ① ONNX 优先
-    try:
-        from engine.ember_onnx import load_onnx_model
-        pred = load_onnx_model()
-        if pred is not None:
-            _EMBER_PREDICTOR_CACHE = pred
-            return pred
-    except Exception:
-        pass
-
-    # ② 退回 LightGBM 文本模型
-    from engine.ember_model import find_ember_model, load_ember_model
-    path = find_ember_model()
-    _EMBER_PREDICTOR_CACHE = load_ember_model(path) if path else None
-    return _EMBER_PREDICTOR_CACHE
+    with _EMBER_PREDICTOR_LOCK:
+        if _EMBER_PREDICTOR_LOADED:
+            return _EMBER_PREDICTOR_CACHE
+        pred = None
+        # ⓪ 契约指纹闸门：特征提取器变过而模型没重训时，**两个后端都不可信**
+        #    （同一份 features.json 描述它们）。此时直接不跑 ML，而不是退回
+        #    LightGBM 文本模型 —— 否则 ONNX 被拒绝、回退却照样返回垃圾概率。
+        try:
+            from engine.ember_onnx import (
+                load_contract as _load_contract,
+                _allow_stale_ml as _allow_stale,
+            )
+            _c = _load_contract()
+            if (_c and not _c.get("_extractor_match", True)
+                    and not _allow_stale()):
+                _EMBER_PREDICTOR_CACHE = None
+                _EMBER_PREDICTOR_LOADED = True
+                return None
+        except Exception:
+            pass
+        # ① ONNX 优先
+        try:
+            from engine.ember_onnx import load_onnx_model
+            pred = load_onnx_model()
+        except Exception:
+            pred = None
+        # ② 退回 LightGBM 文本模型
+        if pred is None:
+            try:
+                from engine.ember_model import find_ember_model, load_ember_model
+                path = find_ember_model()
+                pred = load_ember_model(path) if path else None
+            except Exception:
+                pred = None
+        _EMBER_PREDICTOR_CACHE = pred
+        _EMBER_PREDICTOR_LOADED = True
+        return pred
 
 
 def scan_pe(data: bytes, sha256: str = "") -> dict:

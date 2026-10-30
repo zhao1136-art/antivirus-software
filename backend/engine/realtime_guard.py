@@ -611,6 +611,28 @@ class RealtimeGuard:
                 self._stats["files_scanned"] += 1
 
             if threats:
+                # ⚠️ 只处理「索取了处置权」的威胁。
+                # local_scanner / ml_scanner 给 ML、低置信内容特征串、启发式产出的
+                # 威胁统一标 action="alert"（设计上不给处置权）。此处原先**不看
+                # action**，只用 confidence 判断闸门零 —— 而 ML 的 MALICIOUS
+                # 置信度可达 0.92+，能穿过闸门零、走完闸门一/二，最后被
+                # "用户超时自动处理"隔离掉。即：ML 明明被设计成"仅参考"，
+                # 在实时路径上却拿到了搬走用户文件的能力。
+                _ACT_OK = ("quarantine", "prompt", "delete")
+                actionable = [
+                    t for t in threats
+                    if isinstance(t, dict)
+                    and str(t.get("action") or "quarantine").lower() in _ACT_OK
+                ]
+                alert_only = len(threats) - len(actionable)
+                if alert_only:
+                    self._add_event(
+                        "info",
+                        "仅告警（未索取处置权）%d 项: %s"
+                        % (alert_only, os.path.basename(path)))
+                threats = actionable
+                if not threats:
+                    continue
                 with self._lock:
                     self._stats["threats_found"] += 1
 

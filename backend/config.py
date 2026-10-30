@@ -225,6 +225,14 @@ SINGLE_FILE_TIMEOUT = 60
 # PE文件ML扫描大小上限（超过此大小只截取前N字节）
 ML_PE_MAX_READ = 32 * 1024 * 1024  # 32MB
 
+# ML 特征提取的**分析长度上限** —— 训练与推理必须用同一个值。
+# ⚠️ 原先是三套口径：训练读整个文件、local_scanner 传整个缓冲、
+# sample_analyzer 截到 4MB。同一个文件在训练与线上会得到不同的 2381 维向量，
+# 模型学到的分布和线上喂进去的分布对不上 —— 这是最容易被忽略的一类失真。
+# 现在统一取 32MB（与 ML_PE_MAX_READ 对齐），并写入 features.json 的
+# analysis_max_bytes 字段：加载时若与运行时口径不一致会告警。
+ML_ANALYSIS_MAX_BYTES = ML_PE_MAX_READ
+
 # ============ P0-3 缓存上限 ============
 # 扫描结果缓存（SHA256 → 威胁列表）
 SCAN_CACHE_MAX = 32768          # 32K 条

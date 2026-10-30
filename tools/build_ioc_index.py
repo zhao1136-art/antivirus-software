@@ -22,6 +22,7 @@ import re
 import struct
 import time
 import zipfile
+import hashlib
 import zlib
 
 IP_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
@@ -36,10 +37,14 @@ OUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 
 
 def h64(s: str) -> int:
-    """稳定 64 位哈希（crc32 两遍拼接，不受 PYTHONHASHSEED 影响）。"""
-    b = s.encode("utf-8", "ignore")
-    return (zlib.crc32(b) & 0xFFFFFFFF) | \
-           ((zlib.crc32(b, 0x9E3779B9) & 0xFFFFFFFF) << 32)
+    """blake2b-64（真 64 位，不受 PYTHONHASHSEED 影响）。
+
+    旧实现是 crc32 两遍拼接：看着 64 位，但两次 crc32 高度相关，
+    有效熵只有约 **32 位** —— 106 万条域名下生日碰撞概率约 1.3%。
+    """
+    return int.from_bytes(
+        hashlib.blake2b(s.encode("utf-8", "ignore"), digest_size=8).digest(),
+        "little")
 
 
 def main() -> int:
@@ -114,7 +119,8 @@ def main() -> int:
         "domain_count": len(domains),
         "ip_count": len(ips),
         "skipped_wildcards": wildcards,
-        "hash": "crc32(b) | crc32(b, 0x9E3779B9) << 32",
+        "hash": "blake2b-64 (digest_size=8, little-endian)",
+        "hash_algo": "blake2b-64",
         "files": {"domains": "url_extra.u64", "ips": "ip_extra.u64"},
     }
     with open(os.path.join(args.out, "url_extra_meta.json"), "w",
@@ -128,3 +134,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

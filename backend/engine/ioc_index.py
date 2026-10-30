@@ -23,33 +23,55 @@ from __future__ import annotations
 
 import bisect
 import array
+import hashlib
 import json
 import os
 import threading
 import zlib
 
-__all__ = ["match_domain", "match_ip", "get_ioc_stats", "reload"]
+__all__ = ["match_domain", "match_ip", "get_ioc_stats", "reload",
+           "hash64", "HASH_BLAKE2B", "HASH_LEGACY"]
 
 IOC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "ioc")
 # 每类可以有多个索引文件（来源分开存，便于各自更新与溯源）：
 #   url_extra.u64 —— maltrail 静态库（MIT）
 #   url_feed.u64  —— 动态拉取的 URL/域名情报（当前为 abuse.ch，CC0）
 #   ip_extra.u64  —— maltrail 静态库（MIT）
-#   c2_ip.u64     —— 动态拉取的 C2 IP（当前为 abuse.ch Feodo，CC0）
+#   c2_ip.u64     —— 动态拉取的 C2 IP（IPsum + Feodo，Unlicense/CC0）
 DOMAIN_FILES = ["url_extra.u64", "url_feed.u64"]
 IP_FILES = ["ip_extra.u64", "c2_ip.u64"]
 META_FILE = os.path.join(IOC_DIR, "url_extra_meta.json")
 FEEDS_META_FILE = os.path.join(IOC_DIR, "feeds_meta.json")
 
-_lock = threading.Lock()
-_state: dict | None = None
+# ── 哈希算法 ──────────────────────────────────────────────────────
+# v1（legacy）：crc32 两遍拼接 —— 直觉上 64 位，但两次 crc32 高度相关，
+#   实际有效熵只有约 **32 位**。106 万条域名下生日碰撞概率 ≈ 1.3%，
+#   意味着约一万多对无关域名会互相"命中"（拦截向，只多拦不放行，但仍应修）。
+# v2：blake2b-64 —— 真 64 位，106 万条下碰撞概率 ≈ 3e-8。
+# 索引文件用哪个算法记录在各自的 meta JSON 里；加载时按文件选择，
+# 因此新旧索引可以并存（重建过程中某个源失败时不会静默错配）。
+HASH_LEGACY = "crc32x2"
+HASH_BLAKE2B = "blake2b-64"
+
+
+def hash64(s: str, algo: str = HASH_BLAKE2B) -> int:
+    """把字符串映射成 64 位整数；algo 决定用哪套哈希。"""
+    b = s.encode("utf-8", "ignore")
+    if algo == HASH_LEGACY:
+        return (zlib.crc32(b) & 0xFFFFFFFF) | \
+               ((zlib.crc32(b, 0x9E3779B9) & 0xFFFFFFFF) << 32)
+    digest = hashlib.blake2b(b, digest_size=8).digest()
+    return int.from_bytes(digest, "little")
 
 
 def h64(s: str) -> int:
-    """稳定 64 位哈希：crc32 两遍拼接。"""
-    b = s.encode("utf-8", "ignore")
-    return (zlib.crc32(b) & 0xFFFFFFFF) | \
-           ((zlib.crc32(b, 0x9E3779B9) & 0xFFFFFFFF) << 32)
+    """向后兼容别名（旧代码调用；等价于 blake2b-64）。"""
+    return hash64(s, HASH_BLAKE2B)
+
+
+# 懒加载状态与锁（此前在重构哈希函数时被误删，导致 _ensure_loaded 抛 NameError）
+_lock = threading.Lock()
+_state: dict | None = None
 
 
 def _load_u64(path: str) -> array.array:
@@ -87,20 +109,31 @@ def _ensure_loaded() -> dict:
         except (OSError, ValueError):
             feeds = {}
         _state = {
-            # 每类保留一个数组列表：命中判定时逐个二分，等价于并集
-            "domains": [a for a in (_load_u64(os.path.join(IOC_DIR, n))
-                                    for n in DOMAIN_FILES) if a],
-            "ips": [a for a in (_load_u64(os.path.join(IOC_DIR, n))
-                                for n in IP_FILES) if a],
+            # 每项 = (哈希算法, 有序数组)。算法按文件记，新旧索引可并存：
+            # 重建过程中若某个源失败，旧文件仍按旧算法正确匹配，不会静默错配。
+            "domains": [
+                (meta.get("hash_algo") or HASH_LEGACY, arr)
+                for arr in (_load_u64(os.path.join(IOC_DIR, n)) for n in DOMAIN_FILES)
+                if arr
+            ],
+            "ips": [
+                (feeds.get("hash_algo") or HASH_LEGACY, arr)
+                for arr in (_load_u64(os.path.join(IOC_DIR, n)) for n in IP_FILES)
+                if arr
+            ],
             "meta": meta,
             "feeds": feeds,
         }
     return _state
 
 
-def _contains_any(arrays: list, h: int) -> bool:
-    """在多个有序数组中查找哈希（并集语义）。"""
-    for arr in arrays:
+def _contains_any(arrays: list, value: str) -> bool:
+    """在多个 (algo, 有序数组) 中查找 value 的哈希（并集语义）。
+
+    同一个候选串在两套算法下哈希不同 → 按每个索引文件自己的算法分别计算。
+    """
+    for algo, arr in arrays:
+        h = hash64(value, algo)
         i = bisect.bisect_left(arr, h)
         if i < len(arr) and arr[i] == h:
             return True
@@ -127,7 +160,7 @@ def match_domain(host: str) -> bool:
     start = 0 if len(labels) >= 2 else len(labels)
     for i in range(start, len(labels) - 1):
         cand = ".".join(labels[i:])
-        if _contains_any(arrs, h64(cand)):
+        if _contains_any(arrs, cand):
             return True
     return False
 
@@ -140,16 +173,20 @@ def match_ip(ip: str) -> bool:
     arrs = st["ips"]
     if not arrs:
         return False
-    return _contains_any(arrs, h64(ip.strip().lower()))
+    return _contains_any(arrs, ip.strip().lower())
 
 
 def get_ioc_stats() -> dict:
-    """索引统计（供界面/接口展示）。"""
+    """索引统计（供界面/接口展示）。
+
+    ⚠️ st["domains"] / st["ips"] 现在是 [(hash_algo, array), ...]，
+    统计必须取 `arr` 的长度而不是元组长度（否则会显示 domains=2、ips=4 这种假数）。
+    """
     st = _ensure_loaded()
     meta = st["meta"] or {}
     feeds = st["feeds"] or {}
-    n_dom = sum(len(a) for a in st["domains"])
-    n_ip = sum(len(a) for a in st["ips"])
+    n_dom = sum(len(arr) for _algo, arr in st["domains"])
+    n_ip = sum(len(arr) for _algo, arr in st["ips"])
     return {
         "domains": n_dom,
         "ips": n_ip,
@@ -157,6 +194,10 @@ def get_ioc_stats() -> dict:
         "license": meta.get("license", "MIT"),
         "built_at": meta.get("built_at", ""),
         "memory_mb": round((n_dom + n_ip) * 8 / 1048576, 2),
+        "hash_algo": {
+            "domains": [a for a, _arr in st["domains"]],
+            "ips": [a for a, _arr in st["ips"]],
+        },
         "feed_sources": [s.get("source") for s in (feeds.get("sources") or [])],
         "feed_built_at": feeds.get("built_at", ""),
     }

@@ -151,6 +151,17 @@ def load_contract(contract_path: str | None = None) -> dict | None:
     return c
 
 
+def _allow_stale_ml() -> bool:
+    """是否允许加载"特征器已变、模型未重训"的模型 —— **默认不允许**。
+
+    为什么默认拒绝：模型与特征器错配是这类 ML **最隐蔽的失效方式**。
+    ONNX 照常返回一个 0~1 的概率、日志照常写 `ml_status=ok`，但那个概率
+    与文件是否恶意已经无关 —— 比"没有 ML"更危险。
+    调试/回滚场景可临时放宽：环境变量 ANDUN_ALLOW_STALE_ML=1。
+    """
+    return os.environ.get("ANDUN_ALLOW_STALE_ML", "").strip().lower() in ("1", "true", "yes")
+
+
 class OnnxPredictor:
     """ONNX Runtime 推理器；`predict_proba(list) -> float`（恶意概率）。"""
 
@@ -191,6 +202,16 @@ class OnnxPredictor:
         if not contract.get("_extractor_match", True):
             _log("警告：特征提取器源码指纹与训练时不一致 —— 模型可能已过期，"
                  "输出不可信（请重训或回退旧提取器）")
+        # 分析长度口径校验：训练截断长度与运行时不同 → 特征分布偏移（同一文件
+        # 两边会被截成不同长度）。不致命，但必须让人看见。
+        try:
+            _train_cap = contract.get("analysis_max_bytes")
+            from config import ML_ANALYSIS_MAX_BYTES as _rt_cap
+            if _train_cap and int(_train_cap) != int(_rt_cap):
+                _log(f"警告：训练时分析上限 {int(_train_cap)} 字节 ≠ 运行时 "
+                     f"{int(_rt_cap)} 字节 —— 特征分布会偏移，建议重训或统一配置")
+        except Exception:
+            pass
         _log(f"已加载 ONNX 模型 {os.path.basename(onnx_path)} "
              f"dim={self.dim} 训练于 {contract.get('trained_at', '?')}")
 
@@ -227,7 +248,11 @@ class OnnxPredictor:
 
 
 def load_onnx_model(models_dir: str | None = None) -> OnnxPredictor | None:
-    """加载 ONNX 模型；任何异常都返回 None（调用方退回 LightGBM 或不跑 ML）。"""
+    """加载 ONNX 模型；任何异常都返回 None（调用方退回 LightGBM 或不跑 ML）。
+
+    特征器指纹不匹配时**拒绝加载**（除非 ANDUN_ALLOW_STALE_ML=1）：
+    宁可退回 LightGBM 文本模型或干脆不跑 ML，也不返回一个与文件无关的概率。
+    """
     got = find_model_files(models_dir)
     if not got:
         return None
@@ -236,6 +261,15 @@ def load_onnx_model(models_dir: str | None = None) -> OnnxPredictor | None:
     if contract is None:
         _log("features.json 无效，拒绝加载 ONNX 模型")
         return None
+    if not contract.get("_extractor_match", True):
+        if _allow_stale_ml():
+            _log("⚠️ 特征提取器指纹与训练时不一致，但仍按 ANDUN_ALLOW_STALE_ML=1 加载"
+                 "（输出概率不可信，仅供调试）")
+        else:
+            _log("拒绝加载 ONNX 模型：特征提取器指纹与训练时不一致。"
+                 "输出概率会与文件实际是否恶意无关 —— 请重训模型"
+                 "（tools/train_pe_model.py），或临时设 ANDUN_ALLOW_STALE_ML=1")
+            return None
     try:
         return OnnxPredictor(onnx_path, contract)
     except ImportError:
