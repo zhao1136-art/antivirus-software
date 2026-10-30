@@ -73,7 +73,10 @@ cd ui_tk && python run_ui.py
 
 > 界面自检：`cd ui_tk && python run_ui.py --self-test` —— 无窗口验证 14 个页面能否构建、定时器是否正确释放。
 
-**打包**：`backend/御天_onedir.spec`（PyInstaller onedir，当前发布方式）
+**打包**：`backend/御天.spec`（PyInstaller onedir，当前发布方式）
+
+> `backend/御天_onedir.spec` 是 2026-10-03 的旧版，**已失效**（引用了已删除的
+> bingduku 目录、且不含 ui_tk 界面检查），构建会失败。请一律使用 `御天.spec`。
 
 ## 目录结构
 

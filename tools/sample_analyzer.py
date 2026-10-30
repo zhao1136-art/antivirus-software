@@ -238,10 +238,114 @@ def sniff(head: bytes, name: str) -> str:
 # 引擎封装（后端有就用，没有就跳过）
 # ══════════════════════════════════════════════════════════════════
 
+# ══════════════════════════════════════════════════════════════════
+# 内置启发式（独立软件用 —— 不依赖产品后端的 heuristic_engine）
+#
+# 后端在的时候优先用后端的（规则更细、实测 0/300 误报）；
+# 后端不在的时候用这套，保证 exe 拷到任何机器上都有判定能力。
+# 规则刻意保守：宁可"无结论"，也不给正常文件乱扣分。
+# ══════════════════════════════════════════════════════════════════
+
+_SUSP_API = (
+    b"VirtualAllocEx", b"WriteProcessMemory", b"CreateRemoteThread",
+    b"NtUnmapViewOfSection", b"SetWindowsHookExA", b"SetWindowsHookExW",
+    b"GetAsyncKeyState", b"AdjustTokenPrivileges", b"URLDownloadToFileA",
+    b"URLDownloadToFileW", b"IsDebuggerPresent", b"CheckRemoteDebugger",
+)
+_SCRIPT_BAD = (
+    b"-enc ", b"-EncodedCommand", b"-w hidden", b"-windowstyle hidden",
+    b"FromBase64String", b"DownloadString", b"DownloadFile",
+    b"certutil -urlcache", b"bitsadmin /transfer", b"mshta ",
+    b"regsvr32 /s /u /i", b"rundll32 javascript",
+)
+
+# 与后端 heuristic_engine 一致的"可疑"门槛：**低于 40 分不算命中**。
+# 原先只要 score>0 就返回结果，导致内置启发式把"高熵的普通文件"
+# （图片、压缩包、安装器）一律判为可疑 —— 实测正常文件几乎 100% 报可疑，
+# 与后端的判定口径也不一致。这里对齐门槛。
+HEURISTIC_MIN_SCORE = 40
+
+
+def _entropy(buf: bytes) -> float:
+    if not buf:
+        return 0.0
+    cnt = [0] * 256
+    for b in buf:
+        cnt[b] += 1
+    import math
+    e = 0.0
+    n = len(buf)
+    for c in cnt:
+        if c:
+            p = c / n
+            e -= p * math.log2(p)
+    return e
+
+
+def builtin_heuristics(head: bytes, name: str, size: int) -> dict | None:
+    """返回与后端 heuristic_engine 兼容的结构：{heuristic_score, reasons}。
+
+    没有任何命中时返回 None（与后端一致：None = 未命中）。
+    """
+    score = 0
+    reasons: list[str] = []
+    ext = os.path.splitext(name)[1].lower()
+
+    # 1. 整体高熵（加壳/加密）
+    if size > 4096:
+        e = _entropy(head[: min(len(head), 1 << 20)])
+        if e > 7.4:
+            score += 25
+            reasons.append(f"高熵 {e:.2f}（可能加壳或加密）")
+    # 2. 可疑 API 字符串
+    hits = [a.decode() for a in _SUSP_API if a in head]
+    if len(hits) >= 6:
+        score += 20
+        reasons.append(f"{len(hits)} 个高危 API 字符串: " + ", ".join(hits[:4]))
+    elif len(hits) >= 3:
+        score += 10
+        reasons.append(f"{len(hits)} 个高危 API: " + ", ".join(hits[:3]))
+    # 3. 脚本里的下载/隐藏执行特征
+    if ext in (".ps1", ".bat", ".cmd", ".vbs", ".js", ".hta", ".wsf", ".wsc"):
+        # ⚠️ 必须**不区分大小写**：载荷里写成 `-encodedcommand`、
+        # `FROMBASE64STRING`、`DownloadString` 都很常见，原先直接拿
+        # 大小写混排的字面量在原始字节里做子串比较 → 小写写法全部漏报。
+        head_low = head.lower()
+        bad = [s.decode("latin1", "ignore").strip()
+               for s in _SCRIPT_BAD if s.lower() in head_low]
+        if bad:
+            # 40 分（而非 30）：脚本里同时出现"隐藏窗口 / -enc / 从 Base64 解码 /
+            # DownloadString"任意一项就已经是强信号，分值须能独立达到可疑门槛，
+            # 否则单靠这一条永远 < 40、永远不报。
+            score += 40
+            reasons.append("脚本含下载/隐藏执行特征: " + ", ".join(bad[:4]))
+    # 4. MZ 头但没有 PE 签名（伪装成 exe 的非 PE）
+    if head[:2] == b"MZ":
+        try:
+            off = int.from_bytes(head[0x3C:0x40], "little")
+            if head[off:off + 4] != b"PE\x00\x00":
+                score += 25
+                reasons.append("MZ 头但无 PE 签名（伪装）")
+        except Exception:
+            score += 15
+            reasons.append("MZ 头但 e_lfanew 损坏")
+
+    if score < HEURISTIC_MIN_SCORE:
+        # 低于门槛不算命中（None = 未命中，与后端 heuristic_engine 语义一致）
+        return None
+    if score > 100:
+        score = 100
+    return {"heuristic_score": score, "reasons": reasons}
+
+
 class Engines:
     def __init__(self, use_yara=True, use_ml=True, use_heur=True) -> None:
         self.yara = self.heur = self.sig = None
         self.ml = None
+        # 记住用户的开关：run() 里要靠它决定"后端启发式不可用"时
+        # 该不该退回内置启发式。原先没保存，导致 --no-heuristic 形同虚设
+        # （关掉后端启发式后，else 分支照样跑内置启发式）。
+        self.use_heur = bool(use_heur)
         self.notes: list[str] = []
         if use_yara:
             try:
@@ -297,7 +401,12 @@ class Engines:
             except Exception as exc:
                 out["yara_error"] = str(exc)
 
-        if self.heur:
+        if not self.use_heur:
+            # 用户显式 --no-heuristic：**完全不跑启发式**（含内置那套）。
+            # 原先前端启发式被关掉后，else 分支仍会调用内置启发式，
+            # 等于这个开关没生效。
+            out["heuristic"] = None
+        elif self.heur:
             try:
                 r = (self.heur.analyze_generic(head[:65536], name, md5, sha256,
                                                fp["size"])
@@ -305,7 +414,10 @@ class Engines:
                                              fp["size"]))
                 out["heuristic"] = r
             except Exception:
-                pass
+                out["heuristic"] = builtin_heuristics(head, name, fp["size"])
+        else:
+            # 后端不在（独立 exe 跑在别人机器上）—— 用内置规则，保证还有判定能力
+            out["heuristic"] = builtin_heuristics(head, name, fp["size"])
 
         if self.ml and head.startswith(b"MZ"):
             try:

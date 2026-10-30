@@ -76,11 +76,14 @@ def analyze_literals(literals, condition_type: str = "any", condition_n: int = 1
             lens.append(n)
 
     if not lens:
-        # 没有字面量的规则（纯 condition / filesize 之类）不参与置信度判定，
-        # 交给引擎原逻辑；这里按 medium 处理，避免误降级。
-        return {"tier": MEDIUM, "score": 0.5, "max_len": 0, "min_len": 0,
+        # 没有字面量的规则（纯 condition / filesize / 仅用 pe.* 模块之类）：
+        # 没有任何可用于判断"这条规则有多具体"的证据。
+        # ⚠️ 原先按 MEDIUM(0.5) 处理，导致这类最空洞的规则反而能通过处置层
+        # 的置信度闸门去搬用户文件 —— 方向反了。没有字面量 => 不可信 => LOW，
+        # 处置层据此降级为仅告警。这与文件头"宁可漏报，不可滥杀"的口径一致。
+        return {"tier": LOW, "score": 0.2, "max_len": 0, "min_len": 0,
                 "effective_len": 0, "count": 0, "avg_len": 0.0, "weak_count": 0,
-                "reason": "无字面量，不参与分级"}
+                "reason": "无字面量，无鉴别力证据 → 仅告警"}
 
     lens.sort()
     asc = lens[:]

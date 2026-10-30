@@ -8,7 +8,11 @@ venv/
 # ===== 构建产物 =====
 build/
 dist/
+# PyInstaller 的 .spec 是**构建配置源码**，必须入库 —— 否则 clone 下来无法复现
+# 发布包（而且本项目的 spec 里写满了踩坑注释和前置断言，是重要资料）。
+# 只有改动过时、已被取代的旧 spec 才继续忽略。
 *.spec
+!backend/御天.spec
 backend/build/
 backend/build_temp/
 backend/dist/

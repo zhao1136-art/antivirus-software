@@ -156,7 +156,13 @@ FILE_GUARD_LOG_FILE = os.path.join(LOGS_DIR, "file_guard.log")
 SCAN_EXTENSIONS = {
     "executables": {".exe", ".dll", ".sys", ".com", ".scr", ".pif", ".ocx", ".bin", ".drv"},
     "scripts": {".ps1", ".bat", ".cmd", ".vbs", ".js", ".vba", ".py", ".sh"},
-    "documents": {".doc", ".docx", ".xls", ".xlsx", ".pdf", ".rtf"},
+    # ⚠️ 必须包含**宏文档**：.docm/.xlsm/.pptm/.dotm/.xlam 才是 Office 恶意宏的
+    # 实际载体，而原先只有 .doc/.docx/.xls/.xlsx —— 宏样本在快速扫描里直接被
+    # 扩展名过滤掉（等于不扫）。.htm/.html/.mht 是钓鱼/挂马的常见落地格式，一并纳入。
+    "documents": {".doc", ".docx", ".docm", ".dotm",
+                  ".xls", ".xlsx", ".xlsm", ".xlam",
+                  ".ppt", ".pptx", ".pptm",
+                  ".pdf", ".rtf", ".htm", ".html", ".mht"},
     "archives": {".zip", ".rar", ".7z", ".tar", ".gz", ".bz2"},
     "all_scan": set()  # empty means all extensions in quick/full scan
 }

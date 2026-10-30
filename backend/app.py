@@ -3033,8 +3033,27 @@ def _rtguard_spawn(level):
         logf = open(os.path.join(root, "_run.log"), "ab", buffering=0)
     except Exception:
         logf = _sp.DEVNULL
+    # 规则目录：rtguard 自带 rules/ 优先，否则用主项目 backend/engine/yara_rules。
+    # 之前不传 --rules：rtguard 默认指向 rtguard/engine/yara_rules，而该目录已删除，
+    # 子进程每次都在启动阶段打印"规则目录不存在"并以 2 退出（2026-10-30 复查发现）。
+    def _has_yar(d):
+        try:
+            for _r, _d, _fs in os.walk(d):
+                if any(f.lower().endswith((".yar", ".yara")) for f in _fs):
+                    return True
+        except Exception:
+            pass
+        return False
+
+    # rtguard/rules 可能是空占位目录，只有真的含规则才用它
+    rules_dir = os.path.join(root, "rules")
+    if not _has_yar(rules_dir):
+        rules_dir = os.path.join(os.path.dirname(root), "backend", "engine", "yara_rules")
+    cmd = [_rtguard_pythonw(), entry, "--level", level, "--ui-port", str(_RTGUARD_PORT)]
+    if _has_yar(rules_dir):
+        cmd.extend(["--rules", rules_dir])
     try:
-        _sp.Popen([_rtguard_pythonw(), entry, "--level", level, "--ui-port", str(_RTGUARD_PORT)],
+        _sp.Popen(cmd,
                   cwd=root, env=env, stdin=_sp.DEVNULL, stdout=logf, stderr=_sp.STDOUT,
                   creationflags=flags, close_fds=True)
     except Exception as exc:
@@ -4407,8 +4426,10 @@ async def response_auto_toggle(data: dict = Body(...)):
 @app.post('/api/v1/response/kill-process')
 async def response_kill_process(data: dict = Body(...)):
     rc = response_center._get_real()
+    # ⚠️ 形参名是 pid（response_center.kill_process(self, pid, ...)）。
+    # 这里原先写 target_pid= 会抛 TypeError → 该接口**必然 500**。
     result = rc.kill_process(
-        target_pid=data.get("pid", 0),
+        pid=data.get("pid", 0),
         force=data.get("force", False),
         source=data.get("source", "api_manual"),
     )

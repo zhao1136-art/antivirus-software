@@ -285,11 +285,16 @@ class LocalScanner:
             return False
 
         if scan_type == "quick":
-            # 快速扫描只关注可疑扩展名
+            # 快速扫描关注可疑扩展名。
+            # ⚠️ 压缩包必须纳入：恶意样本最常见的投递方式就是压缩包
+            # （邮件附件/网盘分享），而 _scan_single_file 本来就支持递归解压
+            # 并返回包内威胁。此前 quick 不含 archives，等于对这类投递完全不设防
+            # —— 用户手动点"快速扫描"却扫不到一个装满木马的 zip。
             ext = os.path.splitext(file_path)[1].lower()
             all_sus = (SCAN_EXTENSIONS["executables"] |
                        SCAN_EXTENSIONS["scripts"] |
-                       SCAN_EXTENSIONS["documents"])
+                       SCAN_EXTENSIONS["documents"] |
+                       SCAN_EXTENSIONS["archives"])
             return ext in all_sus
         # 全盘/自定义扫描：所有文件
         return True

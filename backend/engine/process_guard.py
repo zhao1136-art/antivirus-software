@@ -4,6 +4,7 @@
 程序运行前校验是否恶意，拦截恶意进程启动。
 """
 import os
+import re
 import sys
 import time
 import json
@@ -28,12 +29,34 @@ DEFAULT_BLACKLIST = [
 ]
 
 # 高危进程路径特征
-HIGH_RISK_PATHS = [
-    r"\\temp",
-    r"\\tmp",
-    r"\\appdata\\local\\temp",
-    r"\\users\\*\\appdata\\roaming",
+#
+# ⚠️ 原先是 `[r"\\temp", r"\\tmp", r"\\appdata\\local\\temp",
+#    r"\\users\\*\\appdata\\roaming"]` + `if hp in path_lower` —— 两个致命问题：
+#   1) raw string 的 `r"\\temp"` 是**两个反斜杠**，而真实 Windows 路径
+#      （C:\Users\x\AppData\Local\Temp\a.exe）只有**单**反斜杠 → 永不命中；
+#   2) `\\users\\*\\appdata\\roaming` 里的 `*` 被当字面量比较，也永不命中。
+#   结果"高危路径检查"这段代码从来没起过作用（静默空转）。
+# 改成编译好的正则 + 规范化路径匹配。
+#
+# 范围刻意**保持原意**（temp / tmp / appdata），不加 ProgramData、Downloads ——
+# 命中后会直接 taskkill，范围一放宽就会误杀正常程序（安装器很多就在 Downloads）。
+HIGH_RISK_PATTERNS = [
+    re.compile(r"[\\/]temp[\\/]"),
+    re.compile(r"[\\/]tmp[\\/]"),
+    re.compile(r"[\\/]appdata[\\/]local[\\/]temp[\\/]"),
+    re.compile(r"[\\/]appdata[\\/]roaming[\\/]"),
 ]
+
+
+def match_high_risk_path(path: str) -> str:
+    """路径命中高危特征时返回命中的模式（便于留痕），否则返回空串。"""
+    if not path:
+        return ""
+    norm = os.path.normcase(path)     # Windows 上转小写并把 / 统一成 \
+    for pat in HIGH_RISK_PATTERNS:
+        if pat.search(norm):
+            return pat.pattern
+    return ""
 
 
 class ProcessGuard:
@@ -169,11 +192,11 @@ class ProcessGuard:
             )
             path = r.stdout.strip().split("\n")[-1].strip() if r.stdout else ""
             if path:
-                path_lower = path.lower()
-                for hp in HIGH_RISK_PATHS:
-                    if hp in path_lower:
-                        self._block_process(pid, name, f"高危路径: {path}")
-                        return
+                hit = match_high_risk_path(path)
+                if hit:
+                    self._block_process(pid, name,
+                                        f"高危路径: {path}（模式 {hit}）")
+                    return
         except Exception:
             pass
 
