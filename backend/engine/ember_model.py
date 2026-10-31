@@ -201,13 +201,38 @@ def load_ember_model(path: str) -> Optional[EMBERPredictor]:
 
 
 _MODEL_NAMES = (
+    # 自训练 PE 模型的文本产物（tools/train_pe_model.py 输出）。
+    # ⚠️ 原先漏了它：spec 不打包 onnxruntime，打包版靠这份文本模型回退，
+    #    找不到就等于 ML 在交付物里完全没跑（2026-10-30 复查发现）。
+    "pe_model.txt",
     "ember_model.txt", "ember.txt", "classifier.txt",
     "ember_2022.txt", "lightgbm_model.txt",
 )
 
 
+def _contract_lightgbm_file(base: str) -> Optional[str]:
+    """按 features.json 契约里的 lightgbm_file 找文本模型（名字不写死）。"""
+    try:
+        import json
+        cpath = os.path.join(base, "features.json")
+        if not os.path.isfile(cpath):
+            return None
+        with open(cpath, "r", encoding="utf-8") as f:
+            name = (json.load(f) or {}).get("lightgbm_file")
+        if name:
+            p = os.path.join(base, str(name))
+            if os.path.isfile(p):
+                return p
+    except Exception:
+        return None
+    return None
+
+
 def find_ember_model() -> Optional[str]:
-    """在常见路径下查找 EMBER 模型文件；找不到返回 None。"""
+    """在常见路径下查找模型文本文件；找不到返回 None。
+
+    顺序：先读 features.json 契约的 lightgbm_file，再按 _MODEL_NAMES 兜底。
+    """
     here = os.path.dirname(os.path.abspath(__file__))  # backend/engine
     roots = (
         os.path.join(here, "models"),
@@ -218,6 +243,9 @@ def find_ember_model() -> Optional[str]:
     )
     for root in roots:
         base = os.path.abspath(root)
+        p = _contract_lightgbm_file(base)
+        if p:
+            return p
         for name in _MODEL_NAMES:
             p = os.path.join(base, name)
             if os.path.isfile(p):

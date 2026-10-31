@@ -125,3 +125,37 @@ data/.token.tmp
 其他/微信图片_*.jpg
 *.bak2
 ui_tk/_ui.log
+
+# ===== 情报原始抓取 / 审查产物（体积大、非源码）=====
+_ti_raw/
+_review/
+cverc/
+tong/
+antiy_*.txt
+huorong_*.txt
+qianxin_*.txt
+cnsec_home.html
+_write_test.txt
+
+# ===== 临时导出/检查产物（tools 下以 _ 开头的一次性文件）=====
+tools/_export_check.txt
+tools/_export_check.txt.md
+tools/_test_export.py
+
+# ===== Android 端：只入源码，构建产物与第三方测试 APK 一律不入库 =====
+# 该目录 build 产物约 190MB、docs/phase2-yara/samples 下还有约 100MB
+# 第三方测试 APK（fdroid/newpipe/k9-mail）—— 都不该进 git。
+android/.gradle/
+android/.kotlin/
+android/**/build/
+android/.cxx/
+android/app/.cxx/
+android/local.properties
+android/docs/phase2-yara/samples/
+*.apk
+*.aab
+*.jks
+*.keystore
+
+# 根目录散落的情报导出（每批抓取都以 .txt 落地，非源码）
+/*.txt

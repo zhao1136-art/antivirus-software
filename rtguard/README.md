@@ -34,8 +34,12 @@ rtguard\
 │   ├── quarantine.py  隔离区（异或混淆 + 原子索引）
 │   ├── tray.py        托盘图标与通知
 │   └── __main__.py    入口
-└── engine\            从主项目复制的引擎源码（供参考/后续复用，本包不依赖它）
+└── （规则）           默认读 ..\backend\engine\yara_rules；也可放 rules/ 或 --rules 指定
 ```
+
+> 注：原先这里有一份从主项目复制的 `engine\`（含 `engine\yara_rules`），已于 2026-10-24 删除。
+> 现在规则默认从主项目 `backend\engine\yara_rules` 读取；如果要把 rtguard 单独拷走，请把规则
+> 放到 `rtguard\rules\` 或用 `--rules` 指定，否则启动会报“规则目录不存在”。
 
 ## 构建 matcher.dll
 

@@ -213,11 +213,43 @@ def _scan_path(scanner, target, recursive=True, throttle=None):
     return 0 if not worst else 1
 
 
+def _count_rule_files(d: str) -> int:
+    """数一个目录下有多少 .yar/.yara 文件（用于跳过空目录）。"""
+    n = 0
+    try:
+        for _root, _dirs, files in os.walk(d):
+            n += sum(1 for f in files if f.lower().endswith((".yar", ".yara")))
+    except Exception:
+        return 0
+    return n
+
+
+def _default_rules_dir() -> str:
+    """默认规则目录。
+
+    历史上规则在 rtguard/engine/yara_rules（已随死代码一起删除）。现在依次找：
+    自带 rules/ → 旧布局（兼容老部署）→ 主项目 backend/engine/yara_rules。
+    只接受**真的含 .yar 文件**的目录：rtguard/rules/ 可能只是个空占位。
+    """
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # <repo>/rtguard
+    candidates = [
+        os.path.join(here, "rules"),
+        os.path.join(here, "engine", "yara_rules"),
+        os.path.join(os.path.dirname(here), "backend", "engine", "yara_rules"),
+    ]
+    for c in candidates:
+        if _count_rule_files(c) > 0:
+            return c
+    for c in candidates:
+        if os.path.isdir(c):
+            return c
+    return candidates[0]
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="rtguard", description="御天实时防护（新版）")
-    ap.add_argument("--rules", default=os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine", "yara_rules"),
-        help="YARA 规则目录")
+    ap.add_argument("--rules", default=_default_rules_dir(),
+                    help="YARA 规则目录（默认自动定位主项目 backend/engine/yara_rules）")
     ap.add_argument("--dirs", nargs="*", default=None, help="要监控的目录")
     ap.add_argument("--quarantine", default=os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "quarantine"),
@@ -242,6 +274,7 @@ def main(argv=None):
 
     if not os.path.isdir(args.rules):
         print("规则目录不存在: %s" % args.rules)
+        print("可用 --rules 指定规则目录，或把规则放到 rtguard/rules/")
         return 2
 
     print("御天实时防护（新版）")
@@ -252,6 +285,9 @@ def main(argv=None):
     load = time.perf_counter() - t0
     print("  规则: %d 条 / %d 文件, 加载 %.2f s" % (
         len(scanner.ruleset.rules), scanner.ruleset.files, load))
+    if len(scanner.ruleset.rules) == 0:
+        print("  ⚠️ 规则数为 0 —— 规则目录里没有 .yar/.yara，检测只剩启发式！"
+              "请检查 %s 或用 --rules 指定" % args.rules)
     print("  字面量: 保留 %d 个, 因 < %d 字节丢弃 %d 个" % (
         len(scanner.ruleset.cs_patterns) + len(scanner.ruleset.ci_patterns),
         args.min_literal, scanner.ruleset.dropped))
