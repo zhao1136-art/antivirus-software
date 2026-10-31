@@ -23,13 +23,16 @@ import requests
 
 
 def make_session(base_url: str) -> requests.Session:
-    """先访问首页拿鉴权 Cookie，返回已就绪的会话"""
+    """确认首页可达并返回会话。
+
+    2026-10-31 起后端**不再需要令牌**：`_LocalOriginGuard` 只拦"带 Origin 且
+    不是本机"的请求，`requests` 不带 Origin → 直连放行。因此不再检查
+    `yt_token` Cookie（旧断言会让冒烟测试在正常状态下直接失败）。
+    """
     s = requests.Session()
     r = s.get(base_url + "/", timeout=10)
     if r.status_code != 200:
         raise RuntimeError(f"首页不可达: HTTP {r.status_code}")
-    if not any(c.name == "yt_token" for c in s.cookies):
-        raise RuntimeError("未从首页响应中获得 yt_token 令牌 Cookie")
     return s
 
 

@@ -1,4 +1,4 @@
-﻿"""后端 HTTP 客户端与异步桥 —— 只用标准库。
+"""后端 HTTP 客户端与异步桥 —— 只用标准库。
 
 后端契约来源：``backend/app.py``（uvicorn 监听 ``127.0.0.1:8899``）。
 本模块涉及的接口字段都按 app.py 里的真实返回结构写，不猜测。
@@ -50,87 +50,38 @@ class ApiResult(NamedTuple):
 
 
 class ApiClient:
-    """极简 HTTP 客户端。线程安全（令牌读取另有自己的锁）。
+    """极简 HTTP 客户端。线程安全（内部 CookieJar 自带锁）。
 
-    本地令牌鉴权（重要）
-    -------------------
-    ``backend/app.py`` 用 ``_LocalAuthMiddleware`` 保护所有 ``/api/*``：
-    令牌是**每次后端启动时随机生成**的（``_LOCAL_TOKEN = secrets.token_urlsafe(32)``），
-    并写入**当前用户私有目录**下的令牌文件：
-        %LOCALAPPDATA%\\Andun\\data\\.token     （开发模式：<repo>/data/.token）
-    客户端读出它，用 ``x-yutian-token`` 请求头携带；``/api/*`` 缺令牌一律 401。
-
-    为什么不再用 Cookie
-    -------------------
-    旧机制是"任何非 /api 页面都会 Set-Cookie: yt_token=..."，于是**本机任意进程
-    只要 GET / 就能拿到令牌**，再调用 shutdown / kill-process / 隔离文件 ——
-    鉴权等于只对浏览器跨站生效、对本地进程完全无效。
-    改成文件下发后，读得到令牌的前提是"你是同一用户"（该目录 ACL 按用户隔离）。
+    鉴权说明（2026-10-31 起**没有令牌**）
+    ------------------------------------
+    后端 `_LocalOriginGuard` 只拦「带 Origin 且不是本机」的请求：
+      · Tk 客户端发的是不带 Origin 的原生 HTTP 请求 → 直连放行
+      · 同源 HTML 页面（服务自己托管）→ 放行
+      · 任意外部网页的跨源请求 → 403
+    因此这里**不需要任何令牌文件、Cookie 或请求头**。
+    之前那套「令牌写文件 + x-yutian-token 头」已整体移除：它在冻结态曾因
+    目录解析问题导致令牌写不出来、所有 /api/* 直接 401，扫描不可用。
     """
-
-    TOKEN_FILE_NAME = ".token"
 
     def __init__(self, base: str = DEFAULT_BASE, timeout: float = DEFAULT_TIMEOUT):
         self.base = base.rstrip("/")
         self.timeout = timeout
-        self._token_lock = threading.Lock()
-        self._token: str | None = None
-        self._token_base: str | None = None
         self._jar = http.cookiejar.CookieJar()
         self._opener = urllib.request.build_opener(
             urllib.request.HTTPCookieProcessor(self._jar))
 
     # ── 内部 ──
 
-    @staticmethod
-    def _token_file_candidates() -> list[str]:
-        """令牌文件可能的路径：打包态在 LOCALAPPDATA，开发态在仓库 data/。"""
-        cands = []
-        lad = os.environ.get("LOCALAPPDATA")
-        if lad:
-            cands.append(os.path.join(lad, "Andun", "data", ".token"))
-        # 开发态：<repo>/data/.token（本文件在 <repo>/ui_tk/andun_ui/api.py）
-        here = os.path.dirname(os.path.abspath(__file__))
-        repo = os.path.dirname(os.path.dirname(here))
-        cands.append(os.path.join(repo, "data", ".token"))
-        return cands
-
-    def _load_token(self, force: bool = False) -> str | None:
-        """从令牌文件读取本次后端的令牌。
-
-        后端刚启动时文件可能还没写出来 → 短暂重试几次；仍读不到就返回 None，
-        由请求本身去报 401（而不是在这里抛异常，调用方还要处理）。
-        """
-        with self._token_lock:
-            if not force and self._token_base == self.base and self._token:
-                return self._token
-            for _attempt in range(6):
-                for path in self._token_file_candidates():
-                    try:
-                        with open(path, "r", encoding="utf-8") as f:
-                            tok = f.read().strip()
-                        if tok:
-                            self._token = tok
-                            self._token_base = self.base
-                            return tok
-                    except OSError:
-                        continue
-                time.sleep(0.15)
-            return None
-
     def _send(self, req: urllib.request.Request, timeout: float):
-        """走带 Cookie 的 opener（部分接口仍可能用 Cookie 传递其他状态）。"""
+        """走带 Cookie 的 opener（Cookie 仅用于可能存在的其他会话状态）。"""
         return self._opener.open(req, timeout=timeout)
 
     def _request(self, method: str, path: str, payload: dict | None = None,
                  _retry: bool = True, timeout: float | None = None) -> ApiResult:
-        token = self._load_token()
         effective_timeout = self.timeout if timeout is None else float(timeout)
         url = self.base + path
         body = None
         headers = {"Accept": "application/json"}
-        if token:
-            headers["x-yutian-token"] = token
 
         if payload is not None:
             try:
@@ -145,12 +96,6 @@ class ApiClient:
                 raw = resp.read()
                 status = getattr(resp, "status", 200)
         except urllib.error.HTTPError as exc:
-            # 401 常见于"后端重启过"——令牌换新了，重新取一次 Cookie 再试一遍。
-            # 只重试一次，避免和持续 401 死循环。
-            if exc.code == 401 and _retry:
-                self._load_token(force=True)
-                return self._request(method, path, payload, _retry=False,
-                                     timeout=timeout)
             # 4xx/5xx 也算"后端在跑"，把服务端的 error 字段透出来给用户看
             detail = ""
             try:
@@ -471,8 +416,6 @@ class ApiClient:
         import mimetypes
         import os
         import uuid
-
-        self._load_token()
 
         try:
             with open(file_path, "rb") as fh:

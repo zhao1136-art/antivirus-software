@@ -383,80 +383,51 @@ app.add_middleware(
 )
 
 
-# ── 本地控制面鉴权（安全产品自身安全加固） ──
-# 修复：后端 API 此前无任何鉴权 + CORS 全放行，用户在浏览器里打开任意恶意网页，
-# 其 JS 即可跨源调用 /api/v1/shutdown、/api/v1/response/kill-process、隔离文件等
-# 破坏性接口（无法读响应，但副作用照常执行）。现通过本地令牌对 /api/* 做鉴权。
+# ── 本地控制面防护：跨源请求拦截（**无令牌**，2026-10-31 按维护者决定）──
+# 决策：去掉令牌，前端（Tk）直连后端。
+# 原因：Tk 界面与后端同机（打包版甚至同进程），令牌只增加部署与调试负担，
+#   而且令牌文件在冻结态的目录解析上出过问题（打包版写不出 .token → 全部 401，
+#   扫描直接不可用）。
 #
-# 令牌下发方式（2026-10-30 加固）
-# --------------------------------
-# 原先的做法是：**任何非 /api 页面请求**都会 `Set-Cookie: yt_token=...`。
-# 问题在于本机任意进程都能 `GET /` 拿到这个 Cookie，再带着它调用任何
-# /api/*（含 shutdown / kill-process / 隔离文件）—— 等于鉴权对本地进程无效。
-# 现在改为：令牌只写入**当前用户私有目录**下的令牌文件
-#     %LOCALAPPDATA%\Andun\data\.token   （开发模式：<repo>/data/.token）
-# 只有同一用户下的进程才读得到（该目录 ACL 继承用户配置，其他用户无权访问）。
-# 客户端通过 `x-yutian-token` 请求头（或 ?token= 查询参数，供浏览器前端使用）
-# 携带令牌；**不再通过 Cookie 下发**。
+# 但没有令牌 ≠ 完全不设防。原先加鉴权是为了堵这个洞：
+#   浏览器里打开任意恶意网页，其 JS 可跨源调用 /api/v1/shutdown、
+#   /api/v1/response/kill-process、隔离文件等破坏性接口 —— 跨源**读**响应会被
+#   CORS 挡住，但**副作用照常执行**（发送简单请求即可）。
+#
+# 这里改用**零依赖、无状态的判据**：看 Origin 头。
+#   · Tk / 命令行 / 本机脚本（curl、测试）：不带 Origin  → 放行
+#   · 同源页面（HTML 前端由本服务托管）：Origin 是本机  → 放行
+#   · 任意外部网页（Origin: https://evil.com）          → 403
+# 恶意网页无法伪造 Origin 为本机（浏览器按真实来源填），所以这条足以挡住该洞，
+# 又不需要任何令牌/文件/握手。
 from starlette.middleware.base import BaseHTTPMiddleware
-import secrets as _secrets
+from urllib.parse import urlsplit as _urlsplit
 
-_LOCAL_TOKEN_COOKIE = "yt_token"          # 仅为兼容旧客户端保留读取
-_LOCAL_TOKEN = _secrets.token_urlsafe(32)
-# 令牌文件落在与持久化配置同一个数据目录（打包态 = %LOCALAPPDATA%\Andun\data，
-# 开发态 = <repo>/data），两者口径必须一致，否则客户端会读不到。
-try:
-    from persistence import DATA_DIR
-except Exception:                              # 理论上不会发生：上方已导入 persistence
-    DATA_DIR = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
-_LOCAL_TOKEN_FILE = os.path.join(DATA_DIR, ".token")
+_LOCAL_HOSTNAMES = {"127.0.0.1", "localhost", "::1"}
 
 
-def _write_local_token_file() -> str:
-    """把本次启动的令牌写到用户私有目录，供同用户下的客户端读取。
-
-    返回写入路径（失败返回 ""）。文件权限：尽力 os.chmod 0600；
-    Windows 上该目录本身已按用户隔离，chmod 主要影响 POSIX 语义。
-    """
+def _is_local_origin(origin: str) -> bool:
+    """Origin 是否属于本机（含任意端口）。"""
     try:
-        os.makedirs(DATA_DIR, exist_ok=True)
-        tmp = _LOCAL_TOKEN_FILE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write(_LOCAL_TOKEN)
-        try:
-            os.chmod(tmp, 0o600)
-        except OSError:
-            pass
-        os.replace(tmp, _LOCAL_TOKEN_FILE)
-        return _LOCAL_TOKEN_FILE
+        u = _urlsplit(origin)
     except Exception:
-        return ""
+        return False
+    if u.scheme not in ("http", "https"):
+        return False
+    return (u.hostname or "").lower() in _LOCAL_HOSTNAMES
 
 
-_LOCAL_TOKEN_PATH = _write_local_token_file()
+class _LocalOriginGuard(BaseHTTPMiddleware):
+    """拒绝来自外部网页的请求（不带 Origin 的本地客户端直连放行）。"""
 
-
-class _LocalAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
-        path = request.url.path
-        # 免鉴权：静态资源 / 健康检查 / WebSocket 进度推送
-        if path.startswith("/static/") or path == "/api/health" or path.startswith("/ws/"):
-            return await call_next(request)
-        # API 接口：校验本地令牌（Header / query / 旧 Cookie 三选一）
-        if path.startswith("/api/"):
-            token = (
-                request.headers.get("x-yutian-token")
-                or request.query_params.get("token")
-                or request.cookies.get(_LOCAL_TOKEN_COOKIE)
-            )
-            if not token or token != _LOCAL_TOKEN:
-                return JSONResponse({"error": "未授权访问：缺少或错误的本地令牌"}, status_code=401)
-            return await call_next(request)
-        # 页面访问：**不再下发令牌 Cookie**（见上方说明）。
+        origin = request.headers.get("origin")
+        if origin and not _is_local_origin(origin):
+            return JSONResponse({"error": "拒绝跨源请求"}, status_code=403)
         return await call_next(request)
 
-app.add_middleware(_LocalAuthMiddleware)
+
+app.add_middleware(_LocalOriginGuard)
 
 # 静态文件 - 前端页面
 def _get_frontend_dir():
