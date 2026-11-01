@@ -7,6 +7,7 @@ import uuid
 import time
 import atexit
 import hashlib
+import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -17,7 +18,7 @@ from engine.quarantine import QuarantineManager
 from engine.cross_check import cross_check
 from engine.threat_decision import (
     is_system_path, second_opinion, QUEUE as decision_queue,
-    ACTION_QUARANTINE, DECISION_TIMEOUT,
+    ACTION_QUARANTINE, ACTION_IGNORE, DECISION_TIMEOUT,
 )
 from engine.report_logger import ReportLogger
 from engine.signature_manager import get_signature_manager
@@ -281,9 +282,26 @@ class Scheduler:
                                          exclude=_excl)
                         threat["cross_check"] = cc
                         if not cc["confirmed"]:
+                            # 闸门二未通过：**通知用户，但默认不动手**。
+                            #
+                            # 2026-10-31 修正：原先是直接 continue（不通知任何人）。
+                            # 结果是"查得出来，但什么都不做" —— 用户既看不到这条命中，
+                            # 也没有任何入口去处理它。
+                            # 现在送进**同一个**决定队列（复用桌面置顶窗口 /
+                            # 界面待决列表两条现成通道），但 default_action=ignore：
+                            # 用户不答就不隔离，**安全保证不变**（仍然不绕过闸门）。
                             threat["action"] = "alert"
                             threat["suppressed"] = cc["note"]
                             decision_queue.note_suppressed()
+                            pd = decision_queue.ask(
+                                tpath, threat,
+                                default_action=ACTION_IGNORE,
+                                reason="仅单个引擎命中 → 已降级为待确认：%s"
+                                       % (cc.get("note") or ""))
+                            threat["pending_decision"] = pd.id
+                            threat["decision_timeout"] = DECISION_TIMEOUT
+                            threat["decision_default"] = ACTION_IGNORE
+                            pending.append((threat, pd))
                             continue
 
                         pd = decision_queue.ask(tpath, threat)
@@ -334,7 +352,13 @@ class Scheduler:
                 task.result = result
                 task.status = "completed"
                 task.progress = 100
-                self.logger.log_scan_complete(task_id, result)
+                # 静默失败审计 P0：日志是旁路功能，写失败**不能**把任务变成 failed
+                # （2026-10-25 那次"打包版无法启动扫描"就是日志异常冒成了 500）。
+                try:
+                    self.logger.log_scan_complete(task_id, result)
+                except Exception as _exc:          # noqa: BLE001
+                    logging.getLogger("yutian").warning(
+                        "扫描完成日志写入失败（task=%s）: %s", task_id, _exc)
 
                 # 5. 系统弹窗通知
                 if all_threats:

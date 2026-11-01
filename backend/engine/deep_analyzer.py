@@ -73,7 +73,15 @@ def engines_status() -> dict:
     result["capa_source"] = {"available": os.path.isdir(capa_src) if capa_src else False,
                              "type": "行为分析(源码)", "desc": "capa 本地源码",
                              "source": capa_src if os.path.isdir(capa_src) else None}
-    
+
+    # 天体引擎（沙箱行为分析）—— 子进程调用 tianti.exe，默认仅静态、不执行样本
+    try:
+        from engine.tianti_bridge import status as _tianti_status
+        result["tianti"] = _tianti_status()
+    except Exception as exc:                      # noqa: BLE001 - 状态查询不抛
+        result["tianti"] = {"available": False, "type": "沙箱行为分析",
+                            "desc": "天体引擎 TianTi", "error": str(exc)}
+
     return result
 
 
@@ -389,6 +397,12 @@ def deep_scan(file_path: str, engines: list = None) -> dict:
     
     if "yara" in engines:
         results["yara"] = yara_scan_file(file_path)
+
+    # 天体引擎（沙箱行为分析）。默认不执行样本，只做静态；
+    # 要跑沙箱须显式把 "tianti_sandbox" 放进 engines（仍受桥接层安全约束）。
+    if "tianti" in engines or "tianti_sandbox" in engines:
+        results["tianti"] = tianti_analyze(
+            file_path, allow_execute=("tianti_sandbox" in engines))
     
     # 汇总威胁
     threats = []
@@ -412,6 +426,19 @@ def deep_scan(file_path: str, engines: list = None) -> dict:
             "engine": "YARA",
             "match_count": len(yr.get("matches", [])),
             "matches": yr["matches"]
+        })
+
+    # 天体引擎：只有 suspicious/malicious 才计入威胁
+    ti = results.get("tianti") or {}
+    if ti.get("status") == "success" and ti.get("verdict") in ("suspicious", "malicious"):
+        threats.append({
+            "engine": "tianti",
+            "verdict": ti.get("verdict"),
+            "score": ti.get("score"),
+            "confidence": ti.get("confidence"),
+            "executed": ti.get("executed"),          # False = 仅静态，证据强度要相应打折
+            "detectors": [d.get("name") for d in (ti.get("detectors") or [])][:5],
+            "tactics": ti.get("tactics"),
         })
     
     _STATUS["scanning"] = False
@@ -439,6 +466,24 @@ def yara_scan_file(file_path: str) -> dict:
         return {"status": "unavailable", "error": "YARA 扫描模块不可用"}
     except Exception as e:
         return {"status": "error", "error": str(e)}
+
+
+def tianti_analyze(file_path: str, allow_execute: bool = False,
+                   policy: str = "deep") -> dict:
+    """天体引擎沙箱行为分析（走 tianti.exe 子进程）。
+
+    ⚠️ **安全边界**：`allow_execute=False`（默认）时只做静态分析、**不执行样本**。
+    置 True 才会进天体的 containment 沙箱实际运行 —— 那是「受限执行」
+    （受限令牌 + 低完整性 + Job + 防火墙 + 超时强杀），**不是 VM 隔离**，
+    只适合用户主动发起、自己可控的样本。
+
+    返回结构见 engine/tianti_bridge.py 的 analyze()。
+    """
+    try:
+        from engine.tianti_bridge import analyze
+        return analyze(file_path, allow_execute=allow_execute, policy=policy)
+    except Exception as e:                        # noqa: BLE001 - 桥接层不抛
+        return {"status": "error", "engine": "tianti", "error": str(e)}
 
 
 def deep_scan_async(file_path: str, engines: list = None):

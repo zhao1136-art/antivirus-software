@@ -91,6 +91,21 @@ class LocalScanner:
             "threats_found": 0,  # 累计检出威胁数（跨任务）
         }
         self._stats_lock = threading.Lock()
+        # 降级记账（静默失败审计 P0）
+        # ---------------------------------------------------------------
+        # 扫描链路上有若干"跳过 / 失败 / 降级"路径，原实现直接 pass / continue /
+        # return 空值 —— 于是"扫了没问题"和"根本没扫成"在结果里长得一模一样，
+        # 用户看到的永远是"未发现威胁"。
+        # 这里给它们一个统一记账点，并通过 get_perf_stats() 暴露出去。
+        self._degradations: dict[str, int] = {}
+
+    def _note_degradation(self, reason: str, times: int = 1) -> None:
+        """记录一次降级/跳过/失败（线程安全、不抛异常）。"""
+        try:
+            with self._stats_lock:
+                self._degradations[reason] = self._degradations.get(reason, 0) + times
+        except Exception:
+            pass
 
     def cancel(self):
         """取消当前活跃的扫描任务"""
@@ -283,6 +298,11 @@ class LocalScanner:
                             stats["skipped"] = stats.get("skipped", 0) + 1
                             continue
             except (OSError, PermissionError):
+                # 静默失败审计 P0：原来这里只 continue，**连 skipped 都不计** ——
+                # 受保护目录（如 System Volume Information）整个没扫，报告里却显示
+                # "扫描完成"。现在两样都记。
+                stats["skipped"] = stats.get("skipped", 0) + 1
+                self._note_degradation("dir_enum_failed")
                 continue
 
     def _is_excluded_dir(self, path: str, dir_name: str, scan_type: str) -> bool:
@@ -408,6 +428,9 @@ class LocalScanner:
         """返回扫描性能统计快照（线程安全）"""
         with self._stats_lock:
             s = dict(self.perf_stats)
+            # 降级记账快照（静默失败审计 P0）：让上层能区分
+            # 「扫了没问题」与「没扫成 / 跳过了」。
+            s["degradations"] = dict(self._degradations)
         # 计算衍生指标
         if s["total_scans"] > 0:
             s["avg_scan_time_ms"] = round(s["total_scan_time"] / s["total_scans"] * 1000, 2)
@@ -426,6 +449,8 @@ class LocalScanner:
         try:
             return self.cloud.lookup_hash(md5=md5, sha256=sha256)
         except Exception:
+            # 静默失败审计 P0：云查失败原来等同"云查无结果"，无法区分
+            self._note_degradation("cloud_lookup_failed")
             return None
 
     def _scan_single_file_impl(self, file_path: str, depth: int = 0,
@@ -777,6 +802,8 @@ class LocalScanner:
         try:
             zf = zipfile.ZipFile(file_path)
         except Exception:
+            # 静默失败审计 P0：打不开归档原来返回 [] —— 与"归档里没有东西"同值
+            self._note_degradation("archive_open_failed")
             return []
         tmp = tempfile.mkdtemp(prefix="andun_unpack_")
         found: list = []

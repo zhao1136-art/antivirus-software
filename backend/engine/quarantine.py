@@ -72,10 +72,14 @@ class QuarantineManager:
     """管理隔离区：隔离样本、还原、删除"""
 
     def __init__(self):
+        # 静默失败审计 P1：原来 makedirs 失败直接 pass —— 隔离区不可用却无人知晓，
+        # 直到真正要隔离样本时才炸。现在如实记录，并把状态暴露出去。
+        self._dir_ok = True
         try:
             os.makedirs(QUARANTINE_DIR, exist_ok=True)
-        except Exception:
-            pass
+        except Exception as e:
+            self._dir_ok = False
+            log.error("隔离目录不可用（%s）: %s —— 隔离功能将失败", QUARANTINE_DIR, e)
         self._db_ok = True
         self._init_db()
 
@@ -156,8 +160,9 @@ class QuarantineManager:
                 try:
                     if os.path.isfile(tmp_path):
                         os.remove(tmp_path)
-                except Exception:
-                    pass
+                except Exception as _ce:
+                    # 清理失败不影响主流程（下面会 raise 真正的错误），但要留痕
+                    log.debug("清理隔离半成品失败 %s: %s", tmp_path, _ce)
                 try:
                     shutil.move(quarantine_path, file_path)
                     moved = False
@@ -256,8 +261,9 @@ class QuarantineManager:
             if original_mtime:
                 try:
                     os.utime(dest, (time.time(), float(original_mtime)))
-                except Exception:
-                    pass
+                except Exception as _ue:
+                    # 恢复原修改时间失败只影响取证价值，不影响还原成功 —— 但留痕
+                    log.debug("还原后恢复 mtime 失败 %s: %s", dest, _ue)
 
             with self._connect() as conn:
                 conn.execute("DELETE FROM quarantine WHERE quarantine_name=?", (quarantine_name,))

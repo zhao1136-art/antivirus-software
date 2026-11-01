@@ -68,7 +68,13 @@ class ReportLogger:
         })
 
     def log_threat(self, task_id: str, threat: dict):
-        """记录威胁检出"""
+        """记录威胁检出。
+
+        ``suppressed`` / ``confidence`` 必须落盘（2026-10-31 补）：
+        闸门零/一/二把命中降级为"仅告警"时，原因只写过内存里那份 threat dict，
+        日志里只有 action="alert" 而**没有任何解释** —— 用户看到"查出来什么都不做"
+        时无从判断是设计如此还是出了故障。
+        """
         entry = {
             "task_id": task_id,
             "timestamp": datetime.now().isoformat(),
@@ -77,6 +83,10 @@ class ReportLogger:
             "engine": threat.get("engine", "unknown"),
             "signature": threat.get("signature", ""),
             "action": threat.get("action", "ignore"),
+            # 降级原因 + 置信度 + 超时默认动作（便于事后解释"为什么没隔离"）
+            "suppressed": threat.get("suppressed", ""),
+            "confidence": threat.get("confidence", ""),
+            "decision_default": threat.get("decision_default", ""),
             "details": threat.get("details", {})
         }
         self._write_threat_log(entry)

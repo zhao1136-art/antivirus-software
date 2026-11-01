@@ -293,41 +293,65 @@ class SelfProtect:
 
     @staticmethod
     def _harden_registry_key(key_path: str) -> bool:
-        """加固注册表键 ACL。"""
+        """加固注册表键 ACL。**未实际加固时如实返回 False。**
+
+        2026-11-01（静默失败审计 P2）
+        ----------------------------
+        原实现打开键之后**什么都没设置**就 `return True`，而且在
+        `FileNotFoundError`（"视为安全"）和 `PermissionError`（"可能已被保护"）
+        时也返回 True —— 等于**谎报"已加固"**，`get_status()` 随之显示"已保护"。
+
+        真正的 DACL 写入需要 pywin32 的 win32security 或 ctypes SetSecurityInfo。
+        **本机未安装 pywin32**，而盲写注册表 DACL 有把服务锁死的风险，
+        因此这里只做"可达性探测 + 如实报告"，不再声称已加固。
+        """
         try:
             import winreg
 
             subkey_path = key_path
-            if subkey_path.startswith(r"SYSTEM\\"):
-                hive = winreg.HKEY_LOCAL_MACHINE
-                subkey_path = subkey_path[len(r"SYSTEM\\"):]
-            else:
-                hive = winreg.HKEY_LOCAL_MACHINE
+            # 原代码写的是 r"SYSTEM\\"（两个反斜杠，raw 字符串里就是两个），
+            # 永远匹配不到 'SYSTEM\CurrentControlSet\...'，属死分支。改正为单反斜杠。
+            prefix = "SYSTEM\\"
+            if subkey_path.startswith(prefix):
+                subkey_path = subkey_path[len(prefix):]
+            hive = winreg.HKEY_LOCAL_MACHINE
 
             try:
-                key = winreg.OpenKey(hive, subkey_path, 0, winreg.KEY_READ | winreg.KEY_WRITE_DAC)
+                key = winreg.OpenKey(hive, subkey_path, 0,
+                                     winreg.KEY_READ | winreg.KEY_WRITE_DAC)
             except FileNotFoundError:
-                # 键不存在（服务可能未安装），视为安全
-                return True
+                logger.info("注册表加固跳过：键不存在（%s）—— 服务可能未安装", key_path)
+                return False
             except PermissionError:
-                # 无权限修改 DACL，键可能已被保护
-                return True
+                logger.info("注册表加固跳过：无 WRITE_DAC 权限（%s）", key_path)
+                return False
 
-            # 通过 icacls 的注册表版本：subinacl 或直接返回 True（键存在即视为已保护）
             winreg.CloseKey(key)
-            return True
+            logger.warning("注册表 ACL 未实际加固（%s）：本机缺少 DACL 写入实现"
+                           "（需 pywin32 / ctypes SetSecurityInfo）", key_path)
+            return False
         except Exception as e:
             logger.debug("注册表 ACL 加固失败: %s", e)
             return False
 
     @staticmethod
     def _harden_service_acl(service_name: str) -> bool:
-        """加固服务 ACL：限制删除/改配置。"""
+        """加固服务 ACL：限制删除/改配置。**未实际加固时如实返回 False。**
+
+        2026-11-01（静默失败审计 P2）：原实现是 `return True` 一行，
+        什么都没做却报告成功。服务 ACL 需要 `sc.exe sdset` 或 pywin32，
+        本机均不具备；这里改为先探测服务是否存在，再**如实返回 False**。
+        """
         try:
-            # 服务 ACL 修改需 secedit/sc.exe，这里采用 sc.exe 设置服务描述作为
-            # 存在性校验；真正的 ACL 加固依赖管理员权限与服务安装配置。
-            # 直接返回 True，避免过度依赖外部工具。
-            return True
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            r = subprocess.run(["sc.exe", "query", service_name],
+                               capture_output=True, text=True, timeout=10,
+                               creationflags=flags)
+            if r.returncode != 0:
+                logger.info("服务加固跳过：服务不存在（%s）", service_name)
+                return False
+            logger.warning("服务 ACL 未实际加固（%s）：缺少 sdset 实现", service_name)
+            return False
         except Exception as e:
             logger.debug("服务 ACL 加固失败: %s", e)
             return False

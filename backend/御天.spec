@@ -174,14 +174,20 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    # ⚠️ 不要排除 pythoncom / pywintypes / win32com / win32api：
-    #   engine/usb_scanner.py(:117,:130)    用 win32com.client + WMI 事件监听
-    #   engine/startup_scanner.py(:157-159) 用 pythoncom + win32com.client
-    #   排除后打包版这两处 import 抛 ImportError（被各自的 try/except 吞掉），
-    #   表现为"USB 监控 / 启动项扫描在打包版里静默失效"。
-    #   而且 pywintypes 是 win32com 的底层依赖，只留 win32com 同样跑不起来。
-    #   其余 win32* 子模块已 grep 确认无人使用，继续排除以控制体积。
-    excludes=['win32ui',
+    # ===== pywin32 相关：**必须排除**（2026-10-31 更正）=====
+    # 审查曾建议"别排除 pythoncom/win32com，否则 USB 监控/启动项扫描会静默失效"。
+    # 实测核查后该判断不成立：
+    #   1) 本机**根本没装 pywin32**（site-packages 只有 pywin32_ctypes 存根），
+    #      import pythoncom / win32com 在开发模式和打包版里**都**失败；
+    #   2) 两条使用路径都有无依赖回退，实测可用：
+    #        engine/usb_scanner.py:_monitor_loop   → import 失败则走 _poll_monitor() 轮询
+    #        engine/startup_scanner.py:_resolve_shortcut → 失败则手工解析 .lnk 二进制
+    #   3) 反过来，把它们从 excludes 去掉会让 PyInstaller 的 pywin32 钩子在隔离子进程里
+    #      `get_module_attribute('pythoncom','__file__')` 直接崩，构建 1.6 分钟就失败：
+    #        ModuleNotFoundError: No module named 'pywintypes'
+    #        AttributeError: Failed to retrieve attribute __file__ from module pythoncom
+    # 所以这里继续排除，并保留注释说明原因，避免以后又被人"修复"一遍。
+    excludes=['pythoncom', 'pywintypes', 'win32api', 'win32com', 'win32ui',
               'win32event', 'win32file', 'win32pipe', 'win32process',
               'win32security', 'win32service', 'win32clipboard',
               'scipy', 'sklearn', 'pandas', 'matplotlib',

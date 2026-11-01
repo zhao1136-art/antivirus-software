@@ -66,16 +66,22 @@ HEURISTIC_CONFIRM_SCORE = 60
 
 
 def _hit_hash(md5: str, sha1: str, sha256: str) -> dict:
+    """三态返回：state ∈ hit / miss / unavailable。
+
+    `miss` = 引擎正常跑完，说"没有"；`unavailable` = 引擎**没跑成**。
+    这两者以前都只是 hit=False，下游只看布尔就分不清 —— 静默失败审计 P0。
+    """
     if not (md5 or sha1 or sha256):
-        return {"hit": False, "detail": "没有可查的哈希"}
+        return {"hit": False, "state": "miss", "detail": "没有可查的哈希"}
     try:
         from engine.signature_manager import get_signature_manager
         sig = get_signature_manager().lookup(md5=md5, sha1=sha1, sha256=sha256)
     except Exception as exc:
-        return {"hit": False, "detail": "不可用: %s" % exc}
+        return {"hit": False, "state": "unavailable", "detail": "不可用: %s" % exc}
     if sig:
-        return {"hit": True, "detail": "特征库命中 %s" % (sig.get("threat_name") or sig)}
-    return {"hit": False, "detail": "特征库无此哈希"}
+        return {"hit": True, "state": "hit",
+                "detail": "特征库命中 %s" % (sig.get("threat_name") or sig)}
+    return {"hit": False, "state": "miss", "detail": "特征库无此哈希"}
 
 
 def _hit_heuristic(data: bytes, path: str, md5: str, sha256: str, size: int) -> dict:
@@ -90,7 +96,7 @@ def _hit_heuristic(data: bytes, path: str, md5: str, sha256: str, size: int) -> 
     try:
         from engine.heuristic_engine import get_heuristic_engine
     except Exception as exc:
-        return {"hit": False, "detail": "不可用: %s" % exc}
+        return {"hit": False, "state": "unavailable", "detail": "不可用: %s" % exc}
     eng = get_heuristic_engine()
     try:
         # 与 local_scanner 同一套分派：PE 走 analyze_pe，其余走 analyze_generic。
@@ -100,9 +106,9 @@ def _hit_heuristic(data: bytes, path: str, md5: str, sha256: str, size: int) -> 
         else:
             r = eng.analyze_generic(data[:HEADER_64K], path, md5, sha256, size)
     except Exception as exc:
-        return {"hit": False, "detail": "异常: %s" % exc}
+        return {"hit": False, "state": "unavailable", "detail": "异常: %s" % exc}
     if not r:
-        return {"hit": False, "detail": "启发式未命中"}
+        return {"hit": False, "state": "miss", "detail": "启发式未命中"}
     reasons = r.get("reasons") or r.get("warnings") or []
     try:
         score = int(r.get("heuristic_score") or 0)
@@ -115,7 +121,8 @@ def _hit_heuristic(data: bytes, path: str, md5: str, sha256: str, size: int) -> 
                  r.get("heuristic_score", "--"),
                  "，action=quarantine" if action == "quarantine" else "",
                  "；".join(str(x) for x in reasons[:3])))
-    return {"hit": bool(strong), "detail": detail, "score": score}
+    return {"hit": bool(strong), "state": ("hit" if strong else "miss"),
+            "detail": detail, "score": score}
 
 
 def _advice_ml(data: bytes, sha256: str) -> dict:
@@ -164,10 +171,29 @@ def cross_check(path: str, *, data: bytes | None = None,
         return out
     excluded = {str(x).strip().lower() for x in (exclude or ()) if x}
 
+    # ⚠️ 2026-10-31 修复：**哈希（特征库精确命中）不允许被排除**。
+    #
+    # 原实现把"提出威胁的引擎"一律排除，本意是防"YARA 自己确认自己"。
+    # 但 scheduler / realtime_guard 在特征库命中时传的是 exclude=("hash",)，
+    # 于是出现逻辑反转：
+    #     样本的哈希**正好在特征库里**（23.8 万条，精确匹配、零误判风险）
+    #       -> engine="signature" -> exclude=("hash",) -> 只能靠 heuristic 确认
+    #       -> P E 启发式上限 70、需三项全中才到 60 -> 几乎必然不够
+    #       -> confirmed=False -> **降级为仅告警**
+    #     同一个文件如果被 YARA 命中、再借同一份哈希确认 -> 反而放行。
+    #
+    # 哈希是精确匹配，不存在"自己确认自己"的语义问题；把它排掉等于
+    # **惩罚最强的那种证据**。这里无条件允许哈希参与确认。
+    if excluded:
+        excluded.discard("hash")
+
     payload: dict = {}
+    shared: dict = {}            # 线程间共享缓冲（不参与返回值）
+    ml_box: dict = {}            # ML 结果单独存放，不参与 confirmed
     done = threading.Event()
 
     def work():
+        """只跑**参与判定**的引擎（hash / heuristic）—— 它们决定 confirmed。"""
         try:
             payload["hash"] = _hit_hash(md5, sha1, sha256)
             try:
@@ -179,29 +205,79 @@ def cross_check(path: str, *, data: bytes | None = None,
             except OSError as exc:
                 payload["_error"] = "读取失败: %s" % exc
                 return
+            shared["buf"] = buf
             payload["heuristic"] = _hit_heuristic(buf, path, md5, sha256,
                                                   size or len(buf))
-            if with_ml:
-                payload["ml"] = _advice_ml(buf, sha256)
         except Exception as exc:
             payload["_error"] = "%s: %s" % (type(exc).__name__, exc)
         finally:
             done.set()
 
+    def work_ml():
+        """ML 只是**参考信息**，走独立线程，**绝不占用确认预算**。
+
+        2026-10-31：原实现把 _advice_ml 放在同一个 work() 里串行执行。
+        实测（notepad.exe，冷启动）：hash 13.09s + heuristic 0.08s + ML 3.59s
+        = 16.76s，直接撞破 12s 预算 -> fail-closed -> **即使哈希在库里也判未确认**。
+        ML 对 confirmed 没有任何影响，却能把整条链拖到超时，属于纯副作用。
+        """
+        try:
+            while "buf" not in shared and not done.is_set():
+                done.wait(0.05)
+            buf = shared.get("buf")
+            if buf is None:
+                return
+            ml_box["ml"] = _advice_ml(buf, sha256)
+        except Exception as exc:
+            ml_box["ml"] = {"hit": False, "advisory": True,
+                            "detail": "异常: %s" % exc}
+
     th = threading.Thread(target=work, daemon=True, name="yutian-crosscheck")
     th.start()
+    ml_thread = None
+    if with_ml:
+        ml_thread = threading.Thread(target=work_ml, daemon=True,
+                                     name="yutian-crosscheck-ml")
+        ml_thread.start()
+
     if not done.wait(max(0.1, float(timeout))):
         out["timed_out"] = True
         out["note"] = ("跨引擎确认超时（%.1fs）—— 按未确认处理，只告警不隔离"
                        % timeout)
+        # 超时也要如实带上已经拿到的信息，便于排查"为什么没动"
+        engines_timeout = {k: v for k, v in payload.items() if not k.startswith("_")}
+        for name in CONFIRMING_ENGINES + ADVISORY_ENGINES:
+            engines_timeout.setdefault(name, {"hit": False, "detail": "未完成（超时）"})
+        out["engines"] = engines_timeout
+        out["excluded"] = sorted(excluded)
         return out
 
+    # ML 只再多等一小会儿；拿不到就标"未完成"，**不影响 confirmed**
+    if ml_thread is not None:
+        ml_thread.join(0.5)
+
     engines = {k: v for k, v in payload.items() if not k.startswith("_")}
+    # ML 结果只放进展示字段，**不参与 confirmed**（见 _advice_ml 文档）
+    if ml_box.get("ml"):
+        engines["ml"] = ml_box["ml"]
     for name in CONFIRMING_ENGINES + ADVISORY_ENGINES:
-        engines.setdefault(name, {"hit": False, "detail": "未执行"})
+        engines.setdefault(name, {"hit": False, "state": "unavailable",
+                                  "detail": "未完成（超出参考预算，不影响判定）"})
     out["engines"] = engines
+    shared.pop("buf", None)      # 及早释放最多 32MB 的缓冲
+
+    # 三态汇总（静默失败审计 P0）：明确区分「跑了说没有」与「根本没跑成」。
+    # 只有疑似未命中的才是 miss；state 缺失按 miss 处理（兼容旧字段）。
+    def _state_of(name: str) -> str:
+        e = engines.get(name) or {}
+        return str(e.get("state") or ("hit" if e.get("hit") else "miss"))
+
+    out["unavailable"] = sorted(k for k in CONFIRMING_ENGINES if _state_of(k) == "unavailable")
+    out["states"] = {k: _state_of(k) for k in CONFIRMING_ENGINES + ADVISORY_ENGINES}
+
     # 只有确认引擎算数；advisory 的 hit 不参与。
     # 并且**排除提出该威胁的那个引擎** —— 否则是自己确认自己。
+    # （"hash" 已在入口处被无条件移出 excluded，见上方注释）
     out["agreeing"] = sorted(k for k in CONFIRMING_ENGINES
                              if k not in excluded and engines.get(k, {}).get("hit"))
     out["confirmed"] = bool(out["agreeing"])
@@ -215,7 +291,13 @@ def cross_check(path: str, *, data: bytes | None = None,
                            for k in CONFIRMING_ENGINES if k not in excluded)
         if excluded:
             detail = "（已排除提出威胁的引擎 %s）%s" % ("、".join(sorted(excluded)), detail)
-        out["note"] = "**YARA 之外没有其他引擎命中** —— 降级为仅告警（%s）" % detail
+        if out["unavailable"]:
+            # 关键区分：不是"确认没通过"，而是"根本没确认成" —— 必须让上层看见
+            out["note"] = ("**跨引擎确认未能完成**（%s 不可用）—— 按未确认处理，"
+                           "降级为仅告警（%s）"
+                           % ("、".join(out["unavailable"]), detail))
+        else:
+            out["note"] = "**YARA 之外没有其他引擎命中** —— 降级为仅告警（%s）" % detail
     if payload.get("_error"):
         out["note"] += "｜内部错误: %s" % payload["_error"]
     return out

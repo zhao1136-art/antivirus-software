@@ -80,34 +80,56 @@ class DesktopDecisionWindow:
         self._thread = None
         self._lock = threading.Lock()
         self._started = False
+        # 显式 close() 之后永久停止；与"窗口意外退出"区分开（后者要能重启）
+        self._closed = False
         self.available = True
         self.last_error = ""
 
     # ── 对外 ──
     def show(self, pd, decide_cb):
-        """把一个待决项摆到桌面上（不阻塞）"""
-        if not self.available:
+        """把一个待决项摆到桌面上（不阻塞）。返回是否已投递。
+
+        2026-11-01 修正：不再用 `available` 做投递前的硬门禁。
+        原实现里 mainloop 一退出就 `available = False`，而 `_ensure_thread`
+        只认 `_started` 不会重启线程 —— 等于**这个进程余生所有通知都被静默丢弃**。
+        现在只有显式 close() 才拒绝投递；窗口异常/正常退出后，下一次 show()
+        会重新拉起（见 _run 的 finally 与 _reset_for_retry）。
+        """
+        if self._closed:
             return False
         self._q.put(("add", _Item(pd, decide_cb)))
-        self._ensure_thread()
-        return True
+        return self._ensure_thread()
 
     def dismiss(self, pending_id):
         """后端已处理（含超时自动处理）——把这一行从窗口上撤掉"""
         self._q.put(("remove", pending_id))
 
     def close(self):
+        """永久关闭通知窗口（进程退出时调用）。之后 show() 一律返回 False。"""
+        self._closed = True
         self._q.put(("quit", None))
 
     # ── 内部 ──
-    def _ensure_thread(self):
+    def _reset_for_retry(self):
+        """工作线程结束后复位，让下一次 show() 能重新拉起窗口。"""
+        with self._lock:
+            self._started = False
+
+    def _ensure_thread(self) -> bool:
+        """确保工作线程在跑；返回「是否可投递」。"""
         with self._lock:
             if self._started:
-                return
+                return True
             self._started = True
         self._thread = threading.Thread(target=self._run, daemon=True,
                                         name="yutian-desktop-prompt")
-        self._thread.start()
+        try:
+            self._thread.start()
+        except Exception as exc:
+            self._reset_for_retry()
+            self.last_error = "通知线程启动失败: %s" % exc
+            return False
+        return True
 
     def _run(self):
         try:
@@ -115,12 +137,14 @@ class DesktopDecisionWindow:
         except Exception as exc:
             self.available = False
             self.last_error = "tkinter 不可用: %s" % exc
+            self._reset_for_retry()      # 允许下次 show() 重试
             return
         try:
             root = tk.Tk()
         except Exception as exc:
             self.available = False
             self.last_error = "Tk 初始化失败: %s" % exc
+            self._reset_for_retry()
             return
 
         root.withdraw()
@@ -273,7 +297,10 @@ class DesktopDecisionWindow:
         except Exception as exc:
             self.last_error = str(exc)
         finally:
-            self.available = False
+            # 2026-11-01：原来是 available=False 且不复位 _started —— 窗口一旦退出，
+            # 此后所有通知永久失效。现在恢复可用并允许下一次 show() 重新拉起。
+            self.available = True
+            self._reset_for_retry()
 
 
 _win = None

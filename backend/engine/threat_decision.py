@@ -24,11 +24,15 @@
 from __future__ import annotations
 
 import ctypes
+import logging
 import os
 import threading
 import time
 import uuid
 from ctypes import wintypes
+
+# 与项目其它模块一致用 "yutian" 这个 logger
+logger = logging.getLogger("yutian")
 
 __all__ = ["is_system_path", "verify_signature", "second_opinion",
            "DecisionQueue", "PendingDecision", "DECISION_TIMEOUT",
@@ -557,9 +561,10 @@ def second_opinion(path: str) -> dict:
 # ── 待决项与 15 秒超时 ──
 class PendingDecision:
     __slots__ = ("id", "path", "threat_name", "threat_level", "rule", "created_at",
-                 "deadline", "action", "decided", "auto", "_event")
+                 "deadline", "action", "decided", "auto", "default_action",
+                 "reason", "_event")
 
-    def __init__(self, path, threat):
+    def __init__(self, path, threat, default_action=ACTION_QUARANTINE, reason=""):
         self.id = uuid.uuid4().hex[:12]
         self.path = path
         self.threat_name = threat.get("signature") or threat.get("threat_name") or "Unknown"
@@ -570,6 +575,15 @@ class PendingDecision:
         self.action = None
         self.decided = False
         self.auto = False          # True = 超时自动处理，非用户决定
+        # ⚠️ 每项自己的**超时默认动作**（2026-10-31 新增）。
+        #
+        # 原来是写死的 ACTION_QUARANTINE（见 finalize）：只要进了队列，15 秒不答
+        # 就自动隔离。这正是 scheduler 不敢把「闸门未确认」的命中送进来的原因
+        # —— 送进来就会绕过全部闸门。
+        # 现在允许调用方指定：两引擎确认的可隔离；只被 YARA 一个引擎命中的，
+        # 送进来**只为通知用户**，超时默认 ignore（不答就不动手）。
+        self.default_action = default_action
+        self.reason = reason
         self._event = threading.Event()
 
     def to_dict(self):
@@ -580,6 +594,9 @@ class PendingDecision:
             "seconds_left": max(0.0, round(self.deadline - time.time(), 1)),
             "timeout": DECISION_TIMEOUT, "decided": self.decided,
             "action": self.action,
+            # 让通知能解释「为什么只告警不隔离」
+            "default_action": self.default_action,
+            "reason": self.reason,
         }
 
 
@@ -593,8 +610,14 @@ class DecisionQueue:
         self.stats = {"asked": 0, "user_quarantine": 0, "user_ignore": 0,
                       "auto": 0, "suppressed": 0}
 
-    def ask(self, path: str, threat: dict) -> PendingDecision:
+    def ask(self, path: str, threat: dict,
+            default_action: str = ACTION_QUARANTINE, reason: str = "") -> PendingDecision:
         """登记一个待决项（不阻塞），并推给两条**可点**通道。
+
+        ``default_action``：**超时后的默认动作**。
+          - ``quarantine``（默认，保持原行为）：两引擎确认的命中
+          - ``ignore``：只有单个引擎命中的可疑项 —— 送进来**只为通知用户**，
+            不答就不动手，避免绕过闸门
 
         只保留"带按钮、用户能真正做决定"的通道：
           1) 桌面原生窗口（tkinter，置顶，屏幕右下角）—— 不依赖浏览器，主通道
@@ -603,7 +626,7 @@ class DecisionQueue:
         系统托盘气泡只有提示、没有按钮，用户只能眼看着 15 秒过去，
         按用户要求已移除（"只留有按钮的弹窗"）。
         """
-        pd = PendingDecision(path, threat)
+        pd = PendingDecision(path, threat, default_action=default_action, reason=reason)
         pd.deadline = pd.created_at + self.timeout
         with self._lock:
             self._pending[pd.id] = pd
@@ -611,11 +634,23 @@ class DecisionQueue:
         # 桌面决策窗口：用户不在浏览器前时的**唯一可点通道**。
         # 网页弹窗和托盘气泡都只是"通知"——点不到、也没按钮；
         # 少了这个，桌面用户只能眼看着 15 秒后文件被自动隔离。
+        #
+        # 2026-11-01：原来这里 `try/except: pass` 且**丢弃 show() 的返回值**。
+        # 桌面窗口不可用（返回 False）时既不弹窗、也不写日志、也不回退 ——
+        # 用户完全不知道有事发生，只能在界面里自己翻「待决威胁」列表。
+        # 现在如实统计并记 warning，至少可诊断。
+        delivered = False
         try:
             from engine.desktop_prompt import show as _desktop_show
-            _desktop_show(pd, self.decide)
-        except Exception:
-            pass
+            delivered = bool(_desktop_show(pd, self.decide))
+        except Exception as exc:                  # noqa: BLE001 - 通知失败不能影响处置
+            logger.warning("桌面通知异常（pending=%s path=%s）: %s",
+                           pd.id, pd.path, exc)
+        if not delivered:
+            self.stats["notify_failed"] = self.stats.get("notify_failed", 0) + 1
+            logger.warning(
+                "桌面通知未投递（pending=%s path=%s）—— 用户仍可在界面「待决威胁」"
+                "看到该项，但没有弹窗提醒", pd.id, pd.path)
         return pd
 
     def decide(self, pending_id: str, action: str) -> bool:
@@ -653,12 +688,17 @@ class DecisionQueue:
                 pd._event.wait(timeout=remaining)
 
     def finalize(self, pd: PendingDecision) -> str:
-        """结算一个待决项：已决定则用用户的选择，否则超时按默认动作自动处理。"""
+        """结算一个待决项：已决定则用用户的选择，否则超时按**该项自己的**默认动作处理。"""
         if not pd.decided:
-            pd.action = ACTION_QUARANTINE
+            # 2026-10-31：原来这里写死 ACTION_QUARANTINE。改成读每项自己的
+            # default_action —— 只被单个引擎命中的可疑项超时应当 ignore，
+            # 否则一旦通知给用户就等于绕过闸门。
+            pd.action = pd.default_action or ACTION_QUARANTINE
             pd.decided = True
             pd.auto = True
             self.stats["auto"] += 1
+            if pd.action == ACTION_IGNORE:
+                self.stats["auto_ignored"] = self.stats.get("auto_ignored", 0) + 1
         with self._lock:
             self._pending.pop(pd.id, None)
         # 从桌面决策窗口上撤掉这一行（无论用户点了还是超时自动处理）

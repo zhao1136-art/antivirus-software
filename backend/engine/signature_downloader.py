@@ -1,6 +1,11 @@
 """
-病毒库下载器 - 从多个免费威胁情报平台下载恶意软件特征
-支持: ESET IOC, URLhaus, PhishTank, Blocklist.de
+病毒库下载器 - 从免费威胁情报平台下载恶意软件特征
+
+**实际已实现的数据源（见下方 SOURCES）**：只支持 `eset`（SHA256）与 `blocklist`（IP）两个。
+
+2026-11-01 修正（静默失败审计 P3）：此前注释声称还支持 URLhaus / PhishTank，
+但 `SOURCES` 里根本没有这两项 —— 传 `urlhaus` 会走到 "未知数据源" 分支。
+注释已按实际实现收敛，避免调用方误以为能力存在。
 """
 import os
 import time
@@ -43,7 +48,9 @@ class SignatureDownloader:
     def download_and_import(self, source: str = "all", limit: int = 5000) -> dict:
         """
         下载并导入病毒特征库
-        source: "all" | "eset" | "urlhaus" | "phishtank" | "blocklist"
+
+        source: "all" | "eset" | "blocklist"（以 SOURCES 的实际键为准；
+                传入其余值会返回 "未知数据源"）
         """
         self._status = {"downloading": True, "progress": 0, "total": 0,
                         "imported": 0, "errors": [], "current_source": ""}
