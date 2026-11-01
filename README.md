@@ -133,33 +133,18 @@ ISSUES.md                 已知问题与待办
 - [**yutian-guardian-ai**](https://github.com/zhao1136-art/yutian-guardian-ai) —— 二进制转灰度图 + 轻量 CNN + OOD 四态融合的 AI 检测分支
 - [**memory-optimizer**](https://github.com/zhao1136-art/memory-optimizer) —— 同作者的 C 语言内存优化工具
 
-## 许可证
+## 许可
 
-本项目自身代码：[Apache-2.0](LICENSE)
+**禁止商业使用。**
 
-### 第三方组件与数据
+本项目采用 [PolyForm Noncommercial License 1.0.0](LICENSE)。
 
-发布包内含第三方二进制与情报数据，各自的许可与义务见
-[`backend/licenses/THIRD_PARTY_LICENSES.md`](backend/licenses/THIRD_PARTY_LICENSES.md)，
-许可全文在 [`backend/licenses/`](backend/licenses/) 目录：
+- **允许**：个人学习、研究、实验、业余项目；教学、公益、公共研究、政府部门等非商业组织使用。
+- **不允许**：任何商业用途 —— 包括但不限于集成进商业产品、做成 SaaS 或收费服务、
+  为企业内部商业运营提供支持。
 
-| 组件 | 许可 |
-|---|---|
-| ClamAV 1.5.3（`clamscan.exe` + `libclamav.dll`，以独立子进程调用） | **GPL-2.0**（附 `GPL-2.0.txt` + `SOURCE_OFFER.txt` 源码获取声明） |
-| OpenSSL 3.6.3 | Apache-2.0 |
-| MinGW-w64 运行时 | GPLv3 + GCC Runtime Library Exception |
-| YARA 4.5.5（自建 `libyara.dll`） | BSD-3-Clause |
-| PE-sieve 0.4.1.1 | MIT |
-| maltrail IOC（约 106 万域名 / 2.3 万 IP） | MIT |
-| IPsum（约 2 万高置信 IP） | The Unlicense（公有领域） |
-| abuse.ch Feodo（C2 IP） | CC0 1.0 |
+本仓库另外包含第三方组件，各自保留原有许可：capa 规则（Apache-2.0）、ClamAV（GPLv2）、maltrail 与 YARA 规则包等。这些部分**不受本许可约束**，以各自原始许可为准。
 
-> 仅在开发期使用、**不随包分发**的组件里，有一项需要注意：
-> C2IntelFeeds 的许可是 **CC BY-NC-SA 4.0（NonCommercial）**，不得商用分发，
-> 已在 `.gitignore` 中排除。生产环境的 C2 情报只使用 IPsum + Feodo。
 
----
+> 本项目为个人项目，按「现状」提供，不附带任何担保。
 
-<div align="center">
-<sub>检测逻辑、规则取舍、误报压制都是自己一条条趟出来的。发现问题欢迎开 issue。</sub>
-</div>
